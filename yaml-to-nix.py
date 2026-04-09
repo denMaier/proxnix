@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""yaml-to-nix.py — Convert proxmox.yaml and user.yaml to NixOS .nix files.
+
+Uses only Python 3 stdlib so it runs on a stock Proxmox host (Debian-based).
+Is idempotent: files are only written when their content changes, so the
+systemd path-watcher inside the container is not triggered spuriously.
+
+Usage:
+    python3 yaml-to-nix.py [--proxmox-yaml PATH] [--user-yaml PATH]
+                            [--out-dir DIR]
+
+Defaults to reading from / writing to /etc/nixos-lxc/containers/<auto> and
+/etc/nixos inside the target container when called from the hookscript.
+Override all paths via flags.
+"""
+
+import sys
+import os
+import argparse
+import textwrap
+
+# ── Minimal YAML parser (stdlib only) ────────────────────────────────────────
+# Handles the subset we need: mappings, sequences, scalars, quoted strings.
+# No anchors, no multi-line strings, no flow style.
+
+class _YAMLParser:
+    def __init__(self, text):
+        self._lines = []
+        for raw in text.splitlines():
+            stripped = raw.rstrip()
+            if stripped and not stripped.lstrip().startswith('#'):
+                indent = len(raw) - len(raw.lstrip(' '))
+                self._lines.append((indent, stripped.lstrip()))
+        self._pos = 0
+
+    # ── internal helpers ──────────────────────────────────────────────────────
+
+    def _peek(self):
+        return self._lines[self._pos] if self._pos < len(self._lines) else None
+
+    def _done(self):
+        return self._pos >= len(self._lines)
+
+    def _parse_block(self, indent):
+        """Dispatch to mapping or sequence parser at *indent*."""
+        line = self._peek()
+        if line is None or line[0] != indent:
+            return None
+        if line[1].startswith('- '):
+            return self._parse_sequence(indent)
+        return self._parse_mapping(indent)
+
+    def _parse_mapping(self, indent):
+        result = {}
+        while not self._done():
+            line_indent, content = self._peek()
+            if line_indent < indent:
+                break
+            if line_indent > indent:
+                break
+            if content.startswith('- '):
+                break
+            if ': ' not in content and not content.endswith(':'):
+                break  # not a mapping line
+
+            self._pos += 1
+
+            if ': ' in content:
+                key, _, rest = content.partition(': ')
+                key = key.strip()
+                if rest:
+                    result[key] = self._parse_scalar(rest)
+                else:
+                    # value is a block on the next line(s)
+                    nxt = self._peek()
+                    if nxt and nxt[0] > indent:
+                        result[key] = self._parse_block(nxt[0])
+                    else:
+                        result[key] = None
+            else:
+                # "key:" with block value
+                key = content[:-1].strip()
+                nxt = self._peek()
+                if nxt and nxt[0] > indent:
+                    result[key] = self._parse_block(nxt[0])
+                else:
+                    result[key] = None
+        return result
+
+    def _parse_sequence(self, indent):
+        result = []
+        while not self._done():
+            line_indent, content = self._peek()
+            if line_indent != indent or not content.startswith('- '):
+                break
+            self._pos += 1
+            item_text = content[2:]  # strip leading "- "
+
+            if not item_text:
+                # block item on next lines
+                nxt = self._peek()
+                if nxt and nxt[0] > indent:
+                    result.append(self._parse_block(nxt[0]))
+                else:
+                    result.append(None)
+            elif ': ' in item_text or item_text.endswith(':'):
+                # first key-value of an inline mapping
+                item = {}
+                if ': ' in item_text:
+                    k, _, v = item_text.partition(': ')
+                    item[k.strip()] = self._parse_scalar(v)
+                else:
+                    k = item_text[:-1].strip()
+                    nxt = self._peek()
+                    if nxt and nxt[0] > indent:
+                        item[k] = self._parse_block(nxt[0])
+                    else:
+                        item[k] = None
+                # continue the mapping at whatever indent follows
+                nxt = self._peek()
+                if nxt and nxt[0] > indent:
+                    rest = self._parse_mapping(nxt[0])
+                    if isinstance(rest, dict):
+                        item.update(rest)
+                result.append(item)
+            else:
+                result.append(self._parse_scalar(item_text))
+        return result
+
+    @staticmethod
+    def _parse_scalar(s):
+        s = s.strip()
+        if s in ('true', 'True', 'yes'):
+            return True
+        if s in ('false', 'False', 'no'):
+            return False
+        if s in ('null', '~'):
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        try:
+            return float(s)
+        except ValueError:
+            pass
+        if len(s) >= 2 and s[0] in ('"', "'") and s[-1] == s[0]:
+            return s[1:-1]
+        return s
+
+    def parse(self):
+        if not self._lines:
+            return {}
+        return self._parse_block(self._lines[0][0])
+
+
+def load_yaml(path):
+    with open(path) as fh:
+        return _YAMLParser(fh.read()).parse()
+
+
+# ── Nix quoting helpers ───────────────────────────────────────────────────────
+
+def nix_str(s):
+    """Return a Nix string literal for *s*, escaping the minimum needed."""
+    return '"' + str(s).replace('\\', '\\\\').replace('"', '\\"').replace('${', '\\${') + '"'
+
+def nix_str_list(items):
+    """Return a Nix list of string literals on one line."""
+    return '[ ' + ' '.join(nix_str(i) for i in items) + ' ]'
+
+def nix_val(v):
+    """Convert a Python scalar to its Nix literal representation."""
+    if isinstance(v, bool):
+        return 'true' if v else 'false'
+    if isinstance(v, int):
+        return str(v)
+    if v is None:
+        return 'null'
+    return nix_str(str(v))
+
+def nix_indent(text, spaces=2):
+    return textwrap.indent(text, ' ' * spaces)
+
+
+# ── proxmox.nix generator ─────────────────────────────────────────────────────
+
+def generate_proxmox_nix(data):
+    hostname = data['hostname']
+    ip       = data['ip']
+    prefix   = int(data['prefix'])
+    gateway  = data['gateway']
+    dns      = data.get('dns', [])
+
+    dns_list = nix_str_list(dns)
+
+    return textwrap.dedent(f"""\
+        # Generated by yaml-to-nix.py from proxmox.yaml — do not edit by hand.
+        {{ ... }}: {{
+          networking.hostName = {nix_str(hostname)};
+          networking.interfaces.eth0.ipv4.addresses = [{{
+            address = {nix_str(ip)};
+            prefixLength = {prefix};
+          }}];
+          networking.defaultGateway = {nix_str(gateway)};
+          networking.nameservers = {dns_list};
+        }}
+    """)
+
+
+# ── user.nix generators ───────────────────────────────────────────────────────
+
+# ── secret helpers ────────────────────────────────────────────────────────────
+
+def normalize_secret(s):
+    """Convert a secret spec to a Quadlet Secret= string.
+
+    Accepts either:
+      - a raw string: "db_password,type=env,target=DB_PASSWORD"
+      - a structured dict: {name: db_password, target: DB_PASSWORD, type: env}
+
+    type defaults to "env". target is required for structured form.
+    """
+    if isinstance(s, str):
+        return s
+    name   = s['name']
+    stype  = s.get('type', 'env')
+    parts  = [name, f'type={stype}']
+    if 'target' in s:
+        parts.append(f'target={s["target"]}')
+    return ','.join(parts)
+
+
+def secret_name(s):
+    """Extract the secret name from a raw or structured spec."""
+    return s if isinstance(s, str) else s['name']
+
+
+def age_decrypt_line(name, outpath):
+    """Return a NixOS ExecStartPre string that decrypts one age secret.
+
+    The leading '+' makes systemd run it as root regardless of the service's
+    User= setting, so it can read /etc/age/identity.txt (mode 600, root only).
+    The output file is written to the service's RuntimeDirectory.
+    """
+    return (
+        f'"+${{pkgs.age}}/bin/age --decrypt --identity /etc/age/identity.txt'
+        f' --output {outpath} /etc/secrets/{name}.age"'
+    )
+
+
+# ── user.nix generators ───────────────────────────────────────────────────────
+
+def generate_user_nix_podman(data):
+    """Generate user.nix using quadlet-nix (virtualisation.quadlet.containers).
+
+    YAML field → quadlet-nix containerConfig attribute:
+      ports    → publishPorts  (list of "host:container" strings)
+      volumes  → volumes       (list of "host:container[:opts]" strings)
+      env      → environments  (attrsOf str)
+      secrets  → secrets       (Quadlet Secret= strings, raw or structured)
+      restart  → serviceConfig.Restart
+
+    Secrets are delivered by Podman using the age shell driver registered
+    by the hookscript. No plaintext secret file is ever written.
+    """
+    containers = data.get('containers', [])
+
+    lines = []
+    lines.append("# Generated by yaml-to-nix.py from user.yaml — do not edit by hand.")
+    lines.append("{ ... }: {")
+    lines.append("  virtualisation.quadlet.containers = {")
+
+    for ctr in containers:
+        name    = ctr['name']
+        image   = ctr['image']
+        ports   = ctr.get('ports', [])
+        vols    = ctr.get('volumes', [])
+        env     = ctr.get('env', {}) or {}
+        secrets = [normalize_secret(s) for s in ctr.get('secrets', [])]
+        restart = ctr.get('restart', None)
+
+        lines.append(f"    {name} = {{")
+        lines.append(f"      containerConfig = {{")
+        lines.append(f"        image = {nix_str(image)};")
+
+        if ports:
+            lines.append(f"        publishPorts = {nix_str_list(ports)};")
+        if vols:
+            lines.append(f"        volumes = {nix_str_list(vols)};")
+        if env:
+            lines.append("        environments = {")
+            for k, v in env.items():
+                lines.append(f"          {k} = {nix_str(v)};")
+            lines.append("        };")
+        if secrets:
+            lines.append(f"        secrets = {nix_str_list(secrets)};")
+
+        lines.append("      };")
+
+        if restart:
+            lines.append("      serviceConfig = {")
+            lines.append(f"        Restart = {nix_str(restart)};")
+            lines.append("      };")
+
+        lines.append("    };")
+
+    lines.append("  };")
+    lines.append("}")
+    return '\n'.join(lines) + '\n'
+
+
+def emit_service_secrets(lines, svcname, secrets):
+    """Emit tmpfiles + ExecStartPre for native-service age secrets.
+
+    Each secret is decrypted from /etc/secrets/<name>.age into the service's
+    RuntimeDirectory (/run/<svcname>-secrets/<name>) at service-start time.
+    The '+' prefix on ExecStartPre runs the command as root so it can read
+    /etc/age/identity.txt (mode 600).  The output file lands in a tmpfs path
+    that is removed when the service stops.
+
+    The service is responsible for pointing its config at these paths (e.g.
+    services.immich.database.passwordFile). Do that in a dropin .nix file or
+    directly in user.yaml if the option is supported.
+    """
+    if not secrets:
+        return
+    rtdir = f"/run/{svcname}-secrets"
+    lines.append(f"  # Age-encrypted secrets for {svcname}")
+    lines.append(f'  systemd.tmpfiles.rules = [ "d {rtdir} 0700 root root -" ];')
+    lines.append(f"  systemd.services.{svcname}.serviceConfig.ExecStartPre = [")
+    for s in secrets:
+        name    = secret_name(s)
+        outpath = s.get('path', f'{rtdir}/{name}') if isinstance(s, dict) else f'{rtdir}/{name}'
+        lines.append(f"    {age_decrypt_line(name, outpath)}")
+    lines.append("  ];")
+    lines.append("")
+
+
+def generate_user_nix_native(data):
+    """Generate user.nix for native NixOS services — fully generic.
+
+    Each entry under services: in user.yaml maps to services.<name>.enable = true
+    plus optional modifiers:
+
+      hardware_acceleration: true
+        → users.users.<name>.extraGroups = ["render" "video"]
+        → systemd.services.<name>.serviceConfig.PrivateDevices = lib.mkForce false
+
+      unstable_package: true
+        → injects nixpkgs.config.packageOverrides overlay
+        → services.<name>.package = pkgs.unstable.<name>
+
+      options:
+        <nixOptionName>: <value>
+        → passed through as services.<name>.<nixOptionName> = <value>
+        Use this for any service-specific NixOS option (e.g. mediaLocation,
+        port, openFirewall, …).
+
+      secrets:
+        - name: <secret-name>
+          path: /run/<name>-secrets/<secret-name>   # optional, default shown
+        → systemd.tmpfiles + ExecStartPre age decrypt
+    """
+    services = data.get('services', {}) or {}
+
+    need_unstable = any(
+        (cfg or {}).get('unstable_package', False)
+        for cfg in services.values()
+    )
+
+    lines = []
+    lines.append("# Generated by yaml-to-nix.py from user.yaml — do not edit by hand.")
+
+    if need_unstable:
+        lines.append("{ config, lib, pkgs, ... }:")
+        lines.append("")
+        lines.append("let")
+        lines.append("  unstableTarball = fetchTarball")
+        lines.append('    "https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz";')
+        lines.append("in {")
+        lines.append("  nixpkgs.config.packageOverrides = pkgs: {")
+        lines.append("    unstable = import unstableTarball {")
+        lines.append("      config = config.nixpkgs.config;")
+        lines.append("    };")
+        lines.append("  };")
+        lines.append("")
+    else:
+        lines.append("{ config, lib, pkgs, ... }: {")
+        lines.append("")
+
+    for svcname, cfg in services.items():
+        cfg = cfg or {}
+        if not cfg.get('enable', False):
+            continue
+
+        options     = cfg.get('options', {}) or {}
+        use_unstable = cfg.get('unstable_package', False)
+        hw_accel    = cfg.get('hardware_acceleration', False)
+        secrets     = cfg.get('secrets', [])
+
+        # services.<name> block
+        if options or use_unstable:
+            lines.append(f"  services.{svcname} = {{")
+            lines.append(f"    enable = true;")
+            for opt, val in options.items():
+                lines.append(f"    {opt} = {nix_val(val)};")
+            if use_unstable:
+                lines.append(f"    package = pkgs.unstable.{svcname};")
+            lines.append("  };")
+        else:
+            lines.append(f"  services.{svcname}.enable = true;")
+
+        if hw_accel:
+            lines.append(f'  users.users.{svcname}.extraGroups = [ "render" "video" ];')
+            lines.append(f"  systemd.services.{svcname}.serviceConfig.PrivateDevices = lib.mkForce false;")
+
+        emit_service_secrets(lines, svcname, secrets)
+
+        if not secrets:
+            lines.append("")
+
+    lines.append("}")
+    return '\n'.join(lines) + '\n'
+
+
+def generate_user_nix(data):
+    if data.get('podman', True):
+        return generate_user_nix_podman(data)
+    return generate_user_nix_native(data)
+
+
+# ── file writing (idempotent) ─────────────────────────────────────────────────
+
+def write_if_changed(path, content):
+    if os.path.exists(path):
+        with open(path) as fh:
+            if fh.read() == content:
+                print(f"  unchanged: {path}", flush=True)
+                return
+    with open(path, 'w') as fh:
+        fh.write(content)
+    print(f"  written:   {path}", flush=True)
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Convert proxmox.yaml / user.yaml to NixOS .nix files."
+    )
+    ap.add_argument('--proxmox-yaml', default=None,
+                    help="Path to proxmox.yaml (skipped if not given)")
+    ap.add_argument('--user-yaml', default=None,
+                    help="Path to user.yaml (skipped if not given)")
+    ap.add_argument('--out-dir', default='/etc/nixos',
+                    help="Directory to write .nix files into (default: /etc/nixos)")
+    args = ap.parse_args()
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    errors = 0
+
+    if args.proxmox_yaml:
+        if not os.path.exists(args.proxmox_yaml):
+            print(f"ERROR: {args.proxmox_yaml} not found", file=sys.stderr)
+            errors += 1
+        else:
+            try:
+                data = load_yaml(args.proxmox_yaml)
+                nix  = generate_proxmox_nix(data)
+                write_if_changed(os.path.join(args.out_dir, 'proxmox.nix'), nix)
+            except Exception as e:
+                print(f"ERROR generating proxmox.nix: {e}", file=sys.stderr)
+                errors += 1
+
+    if args.user_yaml:
+        if not os.path.exists(args.user_yaml):
+            print(f"ERROR: {args.user_yaml} not found", file=sys.stderr)
+            errors += 1
+        else:
+            try:
+                data = load_yaml(args.user_yaml)
+                nix  = generate_user_nix(data)
+                write_if_changed(os.path.join(args.out_dir, 'user.nix'), nix)
+            except Exception as e:
+                print(f"ERROR generating user.nix: {e}", file=sys.stderr)
+                errors += 1
+
+    if errors:
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,14 @@
+podman: false
+services:
+  jellyfin:
+    enable: true
+    hardware_acceleration: true
+  immich:
+    enable: true
+    hardware_acceleration: true
+    unstable_package: true
+    options:
+      mediaLocation: /var/lib/immich
+    secrets:
+      - name: db_password
+        path: /run/immich-secrets/db_password

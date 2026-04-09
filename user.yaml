@@ -1,0 +1,13 @@
+podman: true
+containers:
+  - name: myservice
+    image: ghcr.io/example/myservice:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - "/var/lib/myservice:/data"
+    env:
+      TZ: Europe/Berlin
+    secrets:
+      - "db_password,type=env,target=DB_PASSWORD"
+    restart: always
