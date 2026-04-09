@@ -1,6 +1,11 @@
-hostname: example-container
-ip: 192.0.2.10
-prefix: 24
-gateway: 192.0.2.1
-dns:
-  - 192.0.2.1
+# proxmox.yaml — optional additions to the PVE container config.
+#
+# Hostname, IP, gateway, and DNS are taken from the Proxmox WebUI and
+# cannot be changed here — the PVE conf is always authoritative for fields
+# it defines.  This file can only ADD fields that PVE has no concept of.
+#
+# Currently useful additions:
+#   search_domain: set networking.search (no equivalent in PVE WebUI)
+#
+# Example:
+# search_domain: example.internal

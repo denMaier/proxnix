@@ -13,14 +13,14 @@
 #
 # After running, encrypt secrets with:
 #   printf 'mysecretvalue' | age \
-#     -r "$(cat /etc/nixos-lxc/containers/<vmid>/age_pubkey)" \
-#     -r "$(cat /etc/nixos-lxc/master_age_pubkey)" \
-#     -o /etc/nixos-lxc/containers/<vmid>/secrets/mysecret.age
+#     -r "$(cat /etc/pve/proxnix/containers/<vmid>/age_pubkey)" \
+#     -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
+#     -o /etc/pve/proxnix/containers/<vmid>/secrets/mysecret.age
 
 set -euo pipefail
 
 VMID="${1:?Usage: $0 <vmid>}"
-NIXLXC_DIR="/etc/nixos-lxc"
+NIXLXC_DIR="/etc/pve/proxnix"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 MASTER_PUBKEY_FILE="${NIXLXC_DIR}/master_age_pubkey"
 
@@ -80,5 +80,5 @@ done
 echo "  printf 'mysecretvalue' | age${RECIP_FLAGS} \\"
 echo "    -o ${CONTAINER_DIR}/secrets/mysecret.age"
 echo ""
-echo "Then restart the container (or run the hookscript manually) to push"
-echo "the encrypted file and register the Podman shell-driver secret."
+echo "Then restart the container to push the encrypted file and register"
+echo "the Podman shell-driver secret (the pre-start hook runs automatically)."

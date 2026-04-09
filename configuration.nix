@@ -8,7 +8,7 @@ let
   };
 
   # Dynamically import every *.nix file dropped into /etc/nixos/dropins/.
-  # Files are pushed there by the hookscript from the host-side dropins/ folder.
+  # Files are pushed there by the pre-start hook from the host-side dropins/ folder.
   # The directory may not exist on a brand-new container — that's fine.
   dropinDir = /etc/nixos/dropins;
   dropins =

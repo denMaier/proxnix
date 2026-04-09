@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Update the hostname in the cloned container's scripts
+
+# Note that /etc/hostname is updated by lxc itself
+for file in \
+    $LXC_ROOTFS_MOUNT/etc/sysconfig/network \
+    $LXC_ROOTFS_MOUNT/etc/sysconfig/network-scripts/ifcfg-* \
+    $LXC_ROOTFS_MOUNT/etc/hosts ;
+do
+    if [ -f $file ]; then
+        sed -i "s|$LXC_SRC_NAME|$LXC_NAME|" $file
+    fi
+done
+
+exit 0

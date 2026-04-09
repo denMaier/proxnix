@@ -59,7 +59,7 @@
 
   # Ensure secret directories exist and generate an age keypair on first boot.
   # /etc/age/identity.txt — private key; never leaves the container
-  # /etc/secrets/         — encrypted .age files pushed by the hookscript
+  # /etc/secrets/         — encrypted .age files pushed by the pre-start hook
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
   system.activationScripts.age-setup = ''
     mkdir -p /etc/age /etc/secrets /etc/secrets/.ids
@@ -75,10 +75,10 @@
   # All four mandatory commands route through this single script:
   #   list   — scan /etc/secrets/.ids/ and return JSON [{id,name},...}]
   #   lookup — decrypt /etc/secrets/<name>.age using the container's private key
-  #   store  — write the UUID→name mapping (name is passed as stdin by hookscript)
+  #   store  — write the UUID→name mapping (name is passed as stdin by pre-start hook)
   #   delete — remove the UUID→name mapping
   #
-  # Registration convention (hookscript):
+  # Registration convention (pre-start hook):
   #   printf '%s' "$secret_name" | podman secret create "$secret_name" -
   # Passing the name as stdin lets store() write the mapping without any
   # extra pct exec round-trips or flag-quoting concerns.
@@ -118,7 +118,10 @@
             "$SECRETS_DIR/${name}.age"
           ;;
         store)
-          # Read name from stdin (our hookscript convention).
+          # Pre-start hook pre-populates .ids/ for all proxnix-managed secrets.
+          # This branch is only reached for secrets created manually inside the
+          # container via `podman secret create`; in that case the name is
+          # passed as stdin.
           mkdir -p "$IDS_DIR"
           name="$(cat)"
           [ -n "$name" ] && printf '%s' "$name" > "$IDS_DIR/$SECRET_ID"
@@ -135,8 +138,9 @@
   };
 
   # Wire the age shell driver as the system-wide Podman secret backend.
-  # Any `podman secret create` call will use this driver by default so the
-  # hookscript needs no per-secret --driver or --driver-opt flags.
+  # The pre-start hook pre-registers all proxnix-managed secrets in Podman's
+  # metadata (secrets.json) so `podman run --secret name` works immediately
+  # after container start without any manual `podman secret create` step.
   environment.etc."containers/containers.conf.d/age-secrets.conf" = {
     mode = "0644";
     text = ''
@@ -159,7 +163,7 @@
   };
 
   # Watch proxmox.nix and user.nix for changes; trigger nixos-rebuild switch
-  # when either file is modified (e.g. after hookscript pushes new config).
+  # when either file is modified (e.g. after the pre-start hook pushes new config).
   systemd.paths.nixos-config-watcher = {
     description = "Watch NixOS config files for changes";
     wantedBy = [ "multi-user.target" ];
@@ -181,4 +185,48 @@
       StandardError = "journal";
     };
   };
+
+  # ── Bootstrap reminder ────────────────────────────────────────────────────
+  # Shown at every login until bootstrap.sh has been run on the Proxmox host.
+  # The pre-start hook writes /etc/secrets/.bootstrap_done once age_pubkey
+  # exists for this container, at which point this block is silent.
+  environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
+    mode = "0644";
+    text = ''
+      if [ ! -f /etc/secrets/.bootstrap_done ]; then
+        printf '\n  Bootstrap pending — run on the Proxmox host:\n'
+        printf '    ./bootstrap.sh %s\n' "$(hostname)"
+        printf '  Then restart the container to enable secrets.\n\n'
+      fi
+    '';
+  };
+
+  # ── Message of the day ────────────────────────────────────────────────────
+  users.motd = ''
+
+    ── proxnix ───────────────────────────────────────────────────────────────
+     Config files   /etc/nixos/{proxmox,user,base,chezmoi}.nix
+                    /etc/nixos/dropins/*.nix
+
+     Rebuild        nixos-rebuild switch
+                    (automatic — watcher fires when proxmox.nix or user.nix
+                     changes on container start)
+     Rebuild log    journalctl -fu nixos-config-watcher
+
+     Secrets        podman secret ls
+                    podman run --secret NAME …
+                    (managed on host via proxnix-secrets; auto-registered here)
+
+     App config     cfg diff            review drift vs /srv/config/
+                    cfg apply           apply source state to /srv/config/
+                    cfg apply --dry-run preview without writing
+
+     Containers     podman ps -a
+                    podman logs -f NAME
+                    systemctl status NAME.service   (Quadlet-managed)
+
+     Nix            nix-collect-garbage -d          remove old generations
+                    nixos-rebuild list-generations
+    ──────────────────────────────────────────────────────────────────────────
+  '';
 }

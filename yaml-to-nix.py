@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""yaml-to-nix.py — Convert proxmox.yaml and user.yaml to NixOS .nix files.
+"""yaml-to-nix.py — Convert PVE conf + optional proxmox.yaml to NixOS .nix files.
 
 Uses only Python 3 stdlib so it runs on a stock Proxmox host (Debian-based).
 Is idempotent: files are only written when their content changes, so the
 systemd path-watcher inside the container is not triggered spuriously.
 
 Usage:
-    python3 yaml-to-nix.py [--proxmox-yaml PATH] [--user-yaml PATH]
+    python3 yaml-to-nix.py --pve-conf PATH
+                            [--proxmox-yaml PATH] [--user-yaml PATH]
                             [--out-dir DIR]
 
-Defaults to reading from / writing to /etc/nixos-lxc/containers/<auto> and
-/etc/nixos inside the target container when called from the hookscript.
-Override all paths via flags.
+--pve-conf is required for generating proxmox.nix.  It provides hostname,
+IP, gateway, and DNS from the Proxmox WebUI — the authoritative source.
+
+--proxmox-yaml is optional.  It can only ADD fields that PVE conf does not
+define (e.g. search_domain).  It cannot override PVE values.
+
+Merge order (last wins): proxmox.yaml → PVE conf
 """
 
 import sys
@@ -183,29 +188,160 @@ def nix_indent(text, spaces=2):
     return textwrap.indent(text, ' ' * spaces)
 
 
+# ── PVE conf parser ───────────────────────────────────────────────────────────
+
+def parse_pve_conf(path):
+    """Extract networking config from /etc/pve/lxc/<vmid>.conf.
+
+    Translates the same fields that PVE::LXC::Setup applies to Debian
+    containers, covering all netN options.  Returns a dict that can be
+    merged directly with proxmox.yaml data.
+
+    PVE conf format:
+      hostname: example-container
+      net0: name=eth0,bridge=vmbr0,ip=192.0.2.10/24,gw=192.0.2.1,
+            ip6=2001:db8::1/64,gw6=2001:db8::1,type=veth,...
+      net1: name=eth1,bridge=vmbr1,ip=dhcp,ip6=auto,...
+      nameserver: 8.8.8.8 1.1.1.1
+      searchdomain: example.internal
+
+    IPv6 modes (ip6= field):
+      <addr>/<prefix>  static address
+      auto             SLAAC  (kernel accept_ra + autoconf)
+      dhcp             DHCPv6 (kernel accept_ra with managed flag)
+      (absent)         IPv6 not configured on this interface
+    """
+    raw = {}
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('['):
+                continue
+            if ': ' in line:
+                key, _, val = line.partition(': ')
+                raw[key.strip()] = val.strip()
+
+    data = {}
+
+    if 'hostname' in raw:
+        data['hostname'] = raw['hostname']
+
+    # Parse every netN interface in declaration order.
+    interfaces = []
+    for key in sorted(raw):
+        if not (key.startswith('net') and key[3:].isdigit()):
+            continue
+        params = dict(
+            part.split('=', 1) for part in raw[key].split(',') if '=' in part
+        )
+
+        iface = {'name': params.get('name', 'eth' + key[3:])}
+
+        # IPv4 — static or DHCP
+        ip_cidr = params.get('ip', '')
+        if ip_cidr == 'dhcp':
+            iface['dhcp4'] = True
+        elif ip_cidr and '/' in ip_cidr:
+            addr, prefix = ip_cidr.rsplit('/', 1)
+            iface['ip']     = addr
+            iface['prefix'] = int(prefix)
+
+        # IPv4 default gateway — first interface that declares one wins
+        gw = params.get('gw')
+        if gw and 'gateway' not in data:
+            data['gateway'] = gw
+
+        # IPv6 — static, SLAAC, or DHCPv6
+        ip6 = params.get('ip6', '')
+        if ip6 == 'auto':
+            iface['slaac'] = True
+        elif ip6 == 'dhcp':
+            iface['dhcp6'] = True
+        elif ip6 and '/' in ip6:
+            addr6, prefix6 = ip6.rsplit('/', 1)
+            iface['ip6']     = addr6
+            iface['prefix6'] = int(prefix6)
+
+        # IPv6 default gateway — first interface that declares one wins
+        gw6 = params.get('gw6')
+        if gw6 and 'gateway6' not in data:
+            data['gateway6'] = gw6
+
+        interfaces.append(iface)
+
+    if interfaces:
+        data['interfaces'] = interfaces
+
+    if 'nameserver' in raw:
+        servers = raw['nameserver'].split()
+        if servers:
+            data['dns'] = servers
+
+    if 'searchdomain' in raw:
+        data['search_domain'] = raw['searchdomain']
+
+    return data
+
+
 # ── proxmox.nix generator ─────────────────────────────────────────────────────
 
 def generate_proxmox_nix(data):
-    hostname = data['hostname']
-    ip       = data['ip']
-    prefix   = int(data['prefix'])
-    gateway  = data['gateway']
-    dns      = data.get('dns', [])
+    """Generate proxmox.nix from merged PVE conf + proxmox.yaml data."""
+    hostname      = data.get('hostname')
+    dns           = data.get('dns', [])
+    search_domain = data.get('search_domain')
+    gateway       = data.get('gateway')
+    gateway6      = data.get('gateway6')
 
-    dns_list = nix_str_list(dns)
+    lines = [
+        "# Generated by yaml-to-nix.py — do not edit by hand.",
+        "{ ... }: {",
+    ]
 
-    return textwrap.dedent(f"""\
-        # Generated by yaml-to-nix.py from proxmox.yaml — do not edit by hand.
-        {{ ... }}: {{
-          networking.hostName = {nix_str(hostname)};
-          networking.interfaces.eth0.ipv4.addresses = [{{
-            address = {nix_str(ip)};
-            prefixLength = {prefix};
-          }}];
-          networking.defaultGateway = {nix_str(gateway)};
-          networking.nameservers = {dns_list};
-        }}
-    """)
+    if hostname:
+        lines.append(f"  networking.hostName = {nix_str(hostname)};")
+
+    if 'interfaces' in data:
+        lines.append("  networking.useDHCP = false;")
+
+        for iface in data['interfaces']:
+            name = iface['name']
+            lines.append("")
+
+            if iface.get('dhcp4'):
+                lines.append(f"  networking.interfaces.{name}.useDHCP = true;")
+            elif 'ip' in iface:
+                lines.append(f"  networking.interfaces.{name}.ipv4.addresses = [{{")
+                lines.append(f"    address = {nix_str(iface['ip'])};")
+                lines.append(f"    prefixLength = {iface['prefix']};")
+                lines.append("  }];")
+
+            if 'ip6' in iface:
+                lines.append(f"  networking.interfaces.{name}.ipv6.addresses = [{{")
+                lines.append(f"    address = {nix_str(iface['ip6'])};")
+                lines.append(f"    prefixLength = {iface['prefix6']};")
+                lines.append("  }];")
+            elif iface.get('slaac'):
+                # SLAAC: enable RA reception and stateless autoconf via sysctl
+                lines.append(f'  boot.kernel.sysctl."net.ipv6.conf.{name}.accept_ra" = 1;')
+                lines.append(f'  boot.kernel.sysctl."net.ipv6.conf.{name}.autoconf" = 1;')
+            elif iface.get('dhcp6'):
+                # DHCPv6: accept RA with managed flag so dhclient picks up address
+                lines.append(f'  boot.kernel.sysctl."net.ipv6.conf.{name}.accept_ra" = 2;')
+
+        if gateway:
+            lines.append("")
+            lines.append(f"  networking.defaultGateway = {nix_str(gateway)};")
+        if gateway6:
+            lines.append(f"  networking.defaultGateway6 = {nix_str(gateway6)};")
+
+    if dns:
+        lines.append(f"  networking.nameservers = {nix_str_list(dns)};")
+    if search_domain:
+        lines.append(f"  networking.search = [ {nix_str(search_domain)} ];")
+
+    lines.append("}")
+    return '\n'.join(lines) + '\n'
 
 
 # ── user.nix generators ───────────────────────────────────────────────────────
@@ -262,7 +398,7 @@ def generate_user_nix_podman(data):
       restart  → serviceConfig.Restart
 
     Secrets are delivered by Podman using the age shell driver registered
-    by the hookscript. No plaintext secret file is ever written.
+    by the pre-start hook. No plaintext secret file is ever written.
     """
     containers = data.get('containers', [])
 
@@ -447,10 +583,13 @@ def write_if_changed(path, content):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Convert proxmox.yaml / user.yaml to NixOS .nix files."
+        description="Convert PVE conf / proxmox.yaml / user.yaml to NixOS .nix files."
     )
+    ap.add_argument('--pve-conf', default=None,
+                    help="Path to /etc/pve/lxc/<vmid>.conf (required for proxmox.nix)")
     ap.add_argument('--proxmox-yaml', default=None,
-                    help="Path to proxmox.yaml (skipped if not given)")
+                    help="Path to proxmox.yaml — optional; adds fields absent "
+                         "from PVE conf (e.g. search_domain)")
     ap.add_argument('--user-yaml', default=None,
                     help="Path to user.yaml (skipped if not given)")
     ap.add_argument('--out-dir', default='/etc/nixos',
@@ -460,19 +599,44 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     errors = 0
 
-    if args.proxmox_yaml:
-        if not os.path.exists(args.proxmox_yaml):
-            print(f"ERROR: {args.proxmox_yaml} not found", file=sys.stderr)
+    # ── proxmox.nix ───────────────────────────────────────────────────────────
+    # PVE conf is the authoritative source for networking.  proxmox.yaml is
+    # optional and can only add fields absent from PVE conf (e.g. search_domain).
+    if args.pve_conf:
+        pve_data  = {}
+        yaml_data = {}
+
+        if not os.path.exists(args.pve_conf):
+            print(f"ERROR: --pve-conf {args.pve_conf} not found", file=sys.stderr)
             errors += 1
         else:
             try:
-                data = load_yaml(args.proxmox_yaml)
-                nix  = generate_proxmox_nix(data)
+                pve_data = parse_pve_conf(args.pve_conf)
+            except Exception as e:
+                print(f"ERROR parsing PVE conf: {e}", file=sys.stderr)
+                errors += 1
+
+        if args.proxmox_yaml:
+            if not os.path.exists(args.proxmox_yaml):
+                print(f"WARNING: {args.proxmox_yaml} not found, skipping",
+                      file=sys.stderr)
+            else:
+                try:
+                    yaml_data = load_yaml(args.proxmox_yaml)
+                except Exception as e:
+                    print(f"ERROR parsing proxmox.yaml: {e}", file=sys.stderr)
+                    errors += 1
+
+        if not errors:
+            merged = {**yaml_data, **pve_data}
+            try:
+                nix = generate_proxmox_nix(merged)
                 write_if_changed(os.path.join(args.out_dir, 'proxmox.nix'), nix)
             except Exception as e:
                 print(f"ERROR generating proxmox.nix: {e}", file=sys.stderr)
                 errors += 1
 
+    # ── user.nix ──────────────────────────────────────────────────────────────
     if args.user_yaml:
         if not os.path.exists(args.user_yaml):
             print(f"ERROR: {args.user_yaml} not found", file=sys.stderr)
