@@ -36,7 +36,6 @@ MANAGED_DIR="${RENDERED_DIR}/managed"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
 META_DIR="${STAGE_DIR}/meta"
-APPLY_UNIT_STAGE="${META_DIR}/proxnix-apply-config.service"
 DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${META_DIR}/current-config-hash" 2>/dev/null || true)"
 CURRENT_CONFIG_HASH=""
 needs_managed_sync=0
@@ -63,14 +62,19 @@ if [[ ! -f "${RENDERED_DIR}/configuration.nix" || ! -d "$MANAGED_DIR" || -z "$DE
     exit 1
 fi
 
+# Clean up any real /etc/systemd/system/ directory left by an older proxnix
+# version — NixOS setup-etc.pl requires it to be a symlink, not a directory.
+if [[ -d "${ROOTFS}/etc/systemd/system" && ! -L "${ROOTFS}/etc/systemd/system" ]]; then
+    rm -rf "${ROOTFS}/etc/systemd/system"
+fi
+
 mkdir -p \
     "${ROOTFS}/etc/nixos" \
     "${ROOTFS}/etc/nixos/managed" \
     "${ROOTFS}/etc/nixos/managed/dropins" \
     "${ROOTFS}/etc/proxnix" \
     "${ROOTFS}/etc/secrets" \
-    "${ROOTFS}/etc/containers/systemd" \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+    "${ROOTFS}/etc/containers/systemd"
 chmod 700 "${ROOTFS}/etc/secrets"
 
 CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
@@ -130,16 +134,6 @@ fi
 proxnix_remove_missing_matching_files "$SECRETS_STAGE_DIR" "${ROOTFS}/etc/secrets" \
     \( -name '*.age' \) || true
 
-if [[ -f "$APPLY_UNIT_STAGE" ]]; then
-    if proxnix_write_if_changed "$APPLY_UNIT_STAGE" "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service" "644"; then
-        log "Updated proxnix-apply-config.service"
-    fi
-fi
-ln -snf ../proxnix-apply-config.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
-rm -f \
-    "${ROOTFS}/etc/systemd/system/proxnix-first-boot-rebuild.service" \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-first-boot-rebuild.service"
 
 python3 - "$ROOTFS" "$VMID" "$SECRETS_STAGE_DIR" <<'PYEOF'
 import json

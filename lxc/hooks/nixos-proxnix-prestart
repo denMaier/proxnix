@@ -148,26 +148,6 @@ chmod 0644 "${META_DIR}/current-config-hash"
 printf '%s' "$VMID" > "${META_DIR}/vmid"
 chmod 0644 "${META_DIR}/vmid"
 
-cat > "${META_DIR}/proxnix-apply-config.service" <<'EOF'
-[Unit]
-Description=Apply proxnix-managed NixOS configuration when the managed config hash changes
-ConditionPathExists=/etc/nixos/configuration.nix
-ConditionPathExists=/etc/proxnix/current-config-hash
-After=local-fs.target network-online.target
-Wants=network-online.target
-Before=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -eu -c "current=\$(cat /etc/proxnix/current-config-hash); applied=\$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true); if [ \"\$current\" = \"\$applied\" ]; then echo \"proxnix-apply-config: config hash unchanged (\$current)\"; exit 0; fi; /run/current-system/sw/bin/nixos-rebuild switch; tmp=\$(mktemp /etc/proxnix/applied-config-hash.XXXXXX); printf \"%s\" \"\$current\" > \"\$tmp\"; chmod 644 \"\$tmp\"; mv \"\$tmp\" /etc/proxnix/applied-config-hash"
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-chmod 0644 "${META_DIR}/proxnix-apply-config.service"
-
 if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
     : > "${META_DIR}/bootstrap_done"
 fi

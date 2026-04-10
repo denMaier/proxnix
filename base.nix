@@ -54,6 +54,43 @@
     '';
   };
 
+  # Run nixos-rebuild switch on boot whenever the managed config hash changes.
+  # The prestart hook writes /etc/proxnix/current-config-hash before boot;
+  # this service compares it to the last applied hash and rebuilds only on diff.
+  systemd.services.proxnix-apply-config = {
+    description = "Apply proxnix-managed NixOS configuration on hash change";
+    after = [ "local-fs.target" "network-online.target" ];
+    wants = [ "network-online.target" ];
+    before = [ "multi-user.target" ];
+    wantedBy = [ "multi-user.target" ];
+    unitConfig = {
+      ConditionPathExists = "/etc/nixos/configuration.nix";
+    };
+    serviceConfig = {
+      Type = "oneshot";
+      StandardOutput = "journal";
+      StandardError = "journal";
+    };
+    script = ''
+      if [ ! -f /etc/proxnix/current-config-hash ]; then
+        echo "proxnix-apply-config: no current-config-hash, skipping"
+        exit 0
+      fi
+      current=$(cat /etc/proxnix/current-config-hash)
+      applied=$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true)
+      if [ "$current" = "$applied" ]; then
+        echo "proxnix-apply-config: config hash unchanged ($current)"
+        exit 0
+      fi
+      echo "proxnix-apply-config: hash changed ($applied -> $current), rebuilding..."
+      /run/current-system/sw/bin/nixos-rebuild switch
+      tmp=$(mktemp /etc/proxnix/applied-config-hash.XXXXXX)
+      printf "%s" "$current" > "$tmp"
+      chmod 644 "$tmp"
+      mv "$tmp" /etc/proxnix/applied-config-hash
+    '';
+  };
+
   # Weekly Nix store GC: remove generations older than 7 days
   nix.gc = {
     automatic = true;
