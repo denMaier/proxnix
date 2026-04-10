@@ -17,7 +17,8 @@
 #     user.yaml    → <rootfs>/etc/nixos/user.nix
 #
 #   Encrypted secrets — deployed AND registered with Podman automatically:
-#     containers/<vmid>/secrets/<name>.age → <rootfs>/etc/secrets/<name>.age
+#     /etc/pve/priv/proxnix/containers/<vmid>/secrets/<name>.age
+#                                      → <rootfs>/etc/secrets/<name>.age
 #     + writes /etc/secrets/.ids/<uuid>    (age shell driver lookup index)
 #     + reconciles Podman's secrets.json   (so `podman run --secret name` works)
 #     Secrets removed from the host are unregistered from Podman on next start.
@@ -36,7 +37,7 @@
 #   cp lxc/config/nixos.userns.conf  /usr/share/lxc/config/
 #   cp lxc/hooks/nixos-proxnix-prestart /usr/share/lxc/hooks/
 #   chmod +x /usr/share/lxc/hooks/nixos-proxnix-prestart
-#   install -d /usr/local/lib/proxnix /etc/pve/proxnix
+#   install -d /usr/local/lib/proxnix /etc/pve/proxnix /etc/pve/priv/proxnix
 #   install -m 755 yaml-to-nix.py /usr/local/lib/proxnix/yaml-to-nix.py
 #   cp base.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
 
@@ -46,8 +47,10 @@ VMID="${LXC_NAME:-}"
 ROOTFS="${LXC_ROOTFS_MOUNT:-${LXC_ROOTFS_PATH:-}}"
 
 NIXLXC_DIR="/etc/pve/proxnix"
+NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
+CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
 YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
 
 log() { echo "[proxnix-prestart][${VMID}] $*" >&2; }
@@ -143,7 +146,7 @@ done
 
 # ── Deploy secrets and auto-register with Podman ──────────────────────────────
 # Collect the current set of secret names (age files on host).
-SECRETS_DIR="${CONTAINER_DIR}/secrets"
+SECRETS_DIR="${CONTAINER_PRIV_DIR}/secrets"
 SECRET_NAMES=()
 
 if [[ -d "$SECRETS_DIR" ]]; then

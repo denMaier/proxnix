@@ -3,12 +3,13 @@
 #
 # Must be run as root on the Proxmox host from this repository directory.
 # Safe to re-run on additional cluster nodes — the shared /etc/pve/proxnix
-# directory is only written on the first node; subsequent nodes skip it.
+# tree and the private /etc/pve/priv/proxnix tree are only written on the
+# first node; subsequent nodes skip them.
 #
 # Usage:
 #   ./install.sh [--dry-run] [--force-shared]
 #
-# --force-shared  overwrite /etc/pve/proxnix/ even if it already exists
+# --force-shared  overwrite shared pmxcfs content even if it already exists
 #                 (use after upgrading proxnix to push new base.nix etc.)
 #
 # Per-node (every cluster node, not replicated):
@@ -21,7 +22,8 @@
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /etc/pve/proxnix/chezmoi.nix                — chezmoi module
-#   /etc/pve/proxnix/containers/                — per-container config + secrets
+#   /etc/pve/proxnix/containers/                — per-container config + pubkeys
+#   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
 #
 # proxnix-secrets (local workstation tool) has its own install instructions:
 #   cp proxnix-secrets ~/.local/bin/
@@ -33,6 +35,7 @@ LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 NIXLXC_DIR="/etc/pve/proxnix"
+NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 
 DRY_RUN=0
 FORCE_SHARED=0
@@ -60,6 +63,10 @@ do_install() {
     fi
     mkdir -p "$(dirname "$dest")"
     cp "$src" "$dest"
+    if [[ "$dest" == /etc/pve/* ]]; then
+        log "$dest (mode managed by pmxcfs path policy)"
+        return
+    fi
     chmod "$mode" "$dest"
     log "$dest"
 }
@@ -108,21 +115,24 @@ do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
 
-# ── Shared proxnix files → /etc/pve/proxnix/ ─────────────────────────────────
-# Written on the first node only. pmxcfs replicates this directory to every
+# ── Shared proxnix files → /etc/pve/{proxnix,priv/proxnix}/ ──────────────────
+# Written on the first node only. pmxcfs replicates these directories to every
 # other cluster node automatically, so subsequent installs skip this section.
-# Keep only shared data here, not runnable scripts.
+# Keep only shared data here, not runnable scripts, and place encrypted secrets
+# under /etc/pve/priv so pmxcfs keeps them root-only.
 
 if [[ -d "$NIXLXC_DIR" && $FORCE_SHARED -eq 0 ]]; then
-    action "Shared files → $NIXLXC_DIR/ (skipped — already exists, replicated via pmxcfs)"
+    action "Shared files → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/ (skipped — already exists, replicated via pmxcfs)"
     echo "  (run with --force-shared to overwrite)"
 else
-    action "Shared files → $NIXLXC_DIR/  (first node)"
+    action "Shared files → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/  (first node)"
     do_mkdir "$NIXLXC_DIR"
+    do_mkdir "$NIXLXC_PRIV_DIR"
     do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
     do_install "$SCRIPT_DIR/chezmoi.nix"       "$NIXLXC_DIR/chezmoi.nix"
     do_mkdir "$NIXLXC_DIR/containers"
+    do_mkdir "$NIXLXC_PRIV_DIR/containers"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

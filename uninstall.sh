@@ -2,8 +2,9 @@
 # uninstall.sh — Remove proxnix from a Proxmox node.
 #
 # Removes the per-node files installed by install.sh.
-# /etc/pve/proxnix/ is intentionally left untouched — it holds container
-# configs and secrets that are shared across the cluster via pmxcfs.
+# /etc/pve/proxnix/ and /etc/pve/priv/proxnix/ are intentionally left
+# untouched — they hold shared container config, pubkeys, and encrypted
+# secrets replicated across the cluster via pmxcfs.
 #
 # Must be run as root on the Proxmox host.
 #
@@ -71,9 +72,10 @@ do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 echo ""
 echo "Done."
 echo ""
-echo "  /etc/pve/proxnix/ was not touched."
-echo "  Container configs, secrets, and age keys are still intact."
+echo "  /etc/pve/proxnix/ and /etc/pve/priv/proxnix/ were not touched."
+echo "  Container configs, public keys, and encrypted secrets are still intact."
 echo ""
-echo "  To fully remove proxnix from the cluster, delete that directory"
+echo "  To fully remove proxnix from the cluster, delete those directories"
 echo "  manually on one node (pmxcfs will replicate the deletion):"
 echo "    rm -rf /etc/pve/proxnix"
+echo "    rm -rf /etc/pve/priv/proxnix"

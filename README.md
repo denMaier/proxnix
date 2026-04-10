@@ -26,7 +26,7 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Deploys config, secrets, and drop-ins into the container rootfs on every start |
 | `/usr/local/lib/proxnix/yaml-to-nix.py` | Local YAML→Nix converter runtime |
 
-### Shared across the cluster (`/etc/pve/proxnix/`)
+### Shared across the cluster (`pmxcfs`)
 
 | Path | Purpose |
 |------|---------|
@@ -37,8 +37,8 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` | Optional per-container networking overrides |
 | `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Per-container services config |
 | `/etc/pve/proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
-| `/etc/pve/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files |
 | `/etc/pve/proxnix/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
+| `/etc/pve/priv/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files stored in root-only `pmxcfs` |
 
 ---
 
@@ -50,9 +50,9 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 ./install.sh
 ```
 
-Run `install.sh` once on the first cluster node to seed `/etc/pve/proxnix`, then run it on every other Proxmox node that may start managed containers. The installer always refreshes the per-node runtime files and only creates the shared `pmxcfs` content on the first node unless you pass `--force-shared`.
+Run `install.sh` once on the first cluster node to seed `/etc/pve/proxnix` and `/etc/pve/priv/proxnix`, then run it on every other Proxmox node that may start managed containers. The installer always refreshes the per-node runtime files and only creates the shared `pmxcfs` content on the first node unless you pass `--force-shared`.
 
-`yaml-to-nix.py` is installed to `/usr/local/lib/proxnix` on purpose: `/etc/pve` is backed by `pmxcfs`, which is fine for shared config data but a bad place for runnable scripts because executable metadata is not preserved there.
+`yaml-to-nix.py` is installed to `/usr/local/lib/proxnix` on purpose: `/etc/pve` is backed by `pmxcfs`, which is fine for shared config data but a bad place for runnable scripts because executable metadata is not preserved there. Likewise, encrypted secrets live under `/etc/pve/priv`, because `pmxcfs` treats that subtree as root-only while the regular `/etc/pve` tree is readable by the Proxmox daemons in group `www-data`.
 
 ### 2 — Create a NixOS LXC container
 
@@ -111,7 +111,7 @@ echo "age1..." > /etc/pve/proxnix/master_age_pubkey
 printf 'mysecretvalue' | age \
   -r "$(cat /etc/pve/proxnix/containers/100/age_pubkey)" \
   -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
-  -o /etc/pve/proxnix/containers/100/secrets/db_password.age
+  -o /etc/pve/priv/proxnix/containers/100/secrets/db_password.age
 ```
 
 The `.age` files are pushed to `/etc/secrets/` inside the container on every `pct start`. Either recipient's private key can decrypt them — the container uses its own key, you use your master key for recovery or rotation.
@@ -174,8 +174,10 @@ Your workstation          Proxmox host              NixOS LXC container
 master private key        master_age_pubkey          /etc/age/identity.txt (600)
                           containers/100/            /etc/secrets/*.age    (400)
                             age_pubkey               /etc/secrets/.ids/    (UUID→name
-                            secrets/                  mappings for shell driver)
-                              db_password.age        /run/<svc>-secrets/   (native
+                          /etc/pve/priv/proxnix/     mappings for shell driver)
+                            containers/100/
+                              secrets/
+                                db_password.age      /run/<svc>-secrets/   (native
                                                       services — tmpfs, service
                                                       lifetime only)
 ```
@@ -199,7 +201,7 @@ echo "age1..." > /etc/pve/proxnix/master_age_pubkey   # age public key
 printf 'hunter2' | age \
   -r "$(cat /etc/pve/proxnix/containers/100/age_pubkey)" \
   -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
-  -o /etc/pve/proxnix/containers/100/secrets/db_password.age
+  -o /etc/pve/priv/proxnix/containers/100/secrets/db_password.age
 ```
 
 The encrypted file is pushed to `/etc/secrets/db_password.age` inside the container on every `pct start`.
@@ -252,6 +254,7 @@ Wire the path to the service option in a dropin `.nix` file:
 PROXNIX_HOST=root@proxmox
 PROXNIX_IDENTITY=~/.age/identity.txt   # or ~/.ssh/id_ed25519
 PROXNIX_DIR=/etc/pve/proxnix           # default
+PROXNIX_PRIV_DIR=/etc/pve/priv/proxnix # default secret store
 ```
 
 **Commands**:
