@@ -154,7 +154,7 @@ Run `proxnix-doctor <vmid>` on the Proxmox host. Use `proxnix-doctor --all` to s
 
 **Switch a container to native services** (Jellyfin, Immich):
 Set `runtime: native` in `user.yaml` and declare the services under the `services:` key.
-See `user-native.yaml` for the Jellyfin + Immich example.
+See `user.yaml` for the Jellyfin + Immich example.
 
 **Auto-rebuild on config push**:
 The `nixos-config-watcher.path` systemd unit inside every container watches  
@@ -200,7 +200,7 @@ Use this for services that need `/dev/dri` hardware acceleration passthrough (Je
 virtualisation.podman.enable = lib.mkForce false;
 ```
 
-Hardware acceleration is enabled by adding the service user to the `render` and `video` groups and lifting `PrivateDevices`. Example: `user-native.yaml`.
+Hardware acceleration is enabled by adding the service user to the `render` and `video` groups and lifting `PrivateDevices`. Example: `user.yaml`.
 
 ---
 
