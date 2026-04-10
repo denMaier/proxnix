@@ -21,8 +21,17 @@
     wheelNeedsPassword = true;
   };
 
-  # Let Proxmox inject network config; we declare it explicitly in proxmox.nix
+  # Networking: let Proxmox own it.  manageNetwork=false enables
+  # systemd-networkd, which picks up the IP/gateway/DNS that Proxmox injects
+  # at container start.  IP changes in the Proxmox UI take effect on a plain
+  # container restart — no NixOS rebuild required.
   proxmoxLXC.manageNetwork = false;
+
+  # Hostname: NixOS owns it (set via proxmox.nix from the PVE conf hostname).
+  # manageHostName=true prevents the proxmox-lxc module from doing
+  # mkForce "" on networking.hostName, which would blank it if Proxmox
+  # doesn't write /etc/hostname for NixOS containers (per the NixOS wiki).
+  proxmoxLXC.manageHostName = true;
 
   # Nix daemon — no sandbox inside LXC (kernel namespacing not available)
   nix.settings.sandbox = false;
@@ -54,48 +63,6 @@
     '';
   };
 
-  # Run nixos-rebuild switch on boot whenever the managed config hash changes.
-  # The prestart hook writes /etc/proxnix/current-config-hash before boot;
-  # this service compares it to the last applied hash and rebuilds only on diff.
-  systemd.services.proxnix-apply-config = {
-    description = "Apply proxnix-managed NixOS configuration on hash change";
-    after = [ "local-fs.target" "network-online.target" ];
-    wants = [ "network-online.target" ];
-    before = [ "multi-user.target" ];
-    wantedBy = [ "multi-user.target" ];
-    unitConfig = {
-      ConditionPathExists = "/etc/nixos/configuration.nix";
-    };
-    environment = {
-      # nixos-rebuild needs to find nixpkgs; point at root's channel tree which
-      # the bootstrap script populates with nix-channel --add / --update.
-      NIX_PATH = "nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels";
-    };
-    serviceConfig = {
-      Type = "oneshot";
-      StandardOutput = "journal";
-      StandardError = "journal";
-    };
-    script = ''
-      if [ ! -f /etc/proxnix/current-config-hash ]; then
-        echo "proxnix-apply-config: no current-config-hash, skipping"
-        exit 0
-      fi
-      current=$(cat /etc/proxnix/current-config-hash)
-      applied=$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true)
-      if [ "$current" = "$applied" ]; then
-        echo "proxnix-apply-config: config hash unchanged ($current)"
-        exit 0
-      fi
-      echo "proxnix-apply-config: hash changed ($applied -> $current), rebuilding..."
-      /run/current-system/sw/bin/nixos-rebuild switch
-      tmp=$(mktemp /etc/proxnix/applied-config-hash.XXXXXX)
-      printf "%s" "$current" > "$tmp"
-      chmod 644 "$tmp"
-      mv "$tmp" /etc/proxnix/applied-config-hash
-    '';
-  };
-
   # ping defaults to cap_net_raw file capability, which requires CAP_SETFCAP to
   # set on the wrapper binary.  CAP_SETFCAP is not available in unprivileged LXC
   # containers, causing suid-sgid-wrappers.service to fail.  Use setuid instead.
@@ -122,6 +89,15 @@
   # /etc/age/identity.txt — private key; never leaves the container
   # /etc/secrets/         — encrypted .age files pushed by the pre-start hook
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
+  # After every successful nixos-rebuild switch/boot, record the currently
+  # desired config hash as applied so the login hint stays silent until the
+  # next host-side config push changes the hash again.
+  system.activationScripts.proxnix-mark-applied = ''
+    if [ -f /etc/proxnix/current-config-hash ]; then
+      install -m 0644 /etc/proxnix/current-config-hash /etc/proxnix/applied-config-hash
+    fi
+  '';
+
   system.activationScripts.age-setup = ''
     mkdir -p /etc/age /etc/secrets /etc/secrets/.ids
     chmod 700 /etc/age /etc/secrets /etc/secrets/.ids
@@ -227,18 +203,34 @@
   # Shown at every login until bootstrap.sh has been run on the Proxmox host.
   # The pre-start hook writes /etc/secrets/.bootstrap_done once age_pubkey
   # exists for this container, at which point this block is silent.
-    environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
-      mode = "0644";
-      text = ''
-        if [ ! -f /etc/secrets/.bootstrap_done ]; then
-          vmid="$(cat /etc/proxnix/vmid 2>/dev/null || true)"
-          [ -n "$vmid" ] || vmid="$(hostname)"
-          printf '\n  Bootstrap pending — run on the Proxmox host:\n'
-          printf '    ./bootstrap.sh %s\n' "$vmid"
-          printf '  Then restart the container to enable secrets.\n\n'
-        fi
-      '';
-    };
+  environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
+    mode = "0644";
+    text = ''
+      if [ ! -f /etc/secrets/.bootstrap_done ]; then
+        vmid="$(cat /etc/proxnix/vmid 2>/dev/null || true)"
+        [ -n "$vmid" ] || vmid="$(hostname)"
+        printf '\n  Bootstrap pending — run on the Proxmox host:\n'
+        printf '    ./bootstrap.sh %s\n' "$vmid"
+        printf '  Then restart the container to enable secrets.\n\n'
+      fi
+    '';
+  };
+
+  # ── Config-drift reminder ─────────────────────────────────────────────────
+  # Shown at every login when the managed config pushed by the pre-start hook
+  # differs from the last applied generation, so the operator knows to rebuild.
+  environment.etc."profile.d/proxnix-rebuild-hint.sh" = {
+    mode = "0644";
+    text = ''
+      _current="$(cat /etc/proxnix/current-config-hash 2>/dev/null || true)"
+      _applied="$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true)"
+      if [ -n "$_current" ] && [ "$_current" != "$_applied" ]; then
+        printf '\n  proxnix: managed config has changed — run to apply:\n'
+        printf '    nixos-rebuild switch\n\n'
+      fi
+      unset _current _applied
+    '';
+  };
 
   # ── Message of the day ────────────────────────────────────────────────────
   users.motd = ''
@@ -249,9 +241,8 @@
                      /etc/nixos/managed/dropins/*.nix
                      /etc/nixos/local.nix        optional local override
 
-      Rebuild        automatic when managed config hash changes
+      Rebuild        run manually when managed config hash changes:
                      nixos-rebuild switch
-      Rebuild log    journalctl -u proxnix-apply-config -b
 
      Secrets        podman secret ls
                     podman run --secret NAME …
