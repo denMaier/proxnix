@@ -156,9 +156,13 @@ if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
 fi
 
 # Stage the shared age identity if one exists — every container gets it.
+# chmod 644 explicitly: the source is mode 600 and chmod -R a+rX below uses
+# capital X which only sets execute on directories, leaving 600 files unreadable
+# by the mount hook (which runs as the container's subuid, not root).
 SHARED_IDENTITY_PATH="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
 if [[ -f "$SHARED_IDENTITY_PATH" ]]; then
     cp "$SHARED_IDENTITY_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"
+    chmod 644 "${KEYS_STAGE_DIR}/shared_identity.txt"
 fi
 
 trap - EXIT
