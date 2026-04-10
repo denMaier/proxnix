@@ -17,6 +17,7 @@ LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
+SYSTEMD_UNIT_DIR="/etc/systemd/system"
 
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
@@ -74,6 +75,16 @@ do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 action "Local admin helper"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
+
+action "GC timer"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl disable --now proxnix-gc.timer 2>/dev/null || true
+fi
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-gc.timer"
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-gc.service"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+fi
 
 echo ""
 echo "Done."

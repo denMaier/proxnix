@@ -245,6 +245,5 @@ else
     rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
 fi
 
-rm -rf "$STAGE_DIR"
 log "Mount-time sync complete."
 exit 0

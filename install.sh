@@ -40,6 +40,7 @@ LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
+SYSTEMD_UNIT_DIR="/etc/systemd/system"
 NIXLXC_DIR="/etc/pve/proxnix"
 NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 
@@ -75,6 +76,19 @@ do_install() {
     fi
     chmod "$mode" "$dest"
     log "$dest"
+}
+
+do_systemd_timer() {
+    local name="$1"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] install + enable $name.{service,timer}"
+        return
+    fi
+    do_install "$SCRIPT_DIR/systemd/${name}.service" "$SYSTEMD_UNIT_DIR/${name}.service" "644"
+    do_install "$SCRIPT_DIR/systemd/${name}.timer"   "$SYSTEMD_UNIT_DIR/${name}.timer"   "644"
+    systemctl daemon-reload
+    systemctl enable --now "${name}.timer"
+    log "${name}.timer enabled"
 }
 
 do_mkdir() {
@@ -128,6 +142,14 @@ do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-common.sh" \
 
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
+
+# ── GC timer ──────────────────────────────────────────────────────────────────
+# Cleans up stale /run/proxnix/<vmid>/ dirs every 15 min for stopped/deleted
+# containers.  Stage dirs live on tmpfs and the mount hook can't remove them
+# (runs as subuid, not root).
+
+action "GC timer → $SYSTEMD_UNIT_DIR/"
+do_systemd_timer "proxnix-gc"
 
 # ── Shared proxnix files → /etc/pve/{proxnix,priv/proxnix}/ ──────────────────
 # Written on the first node only. pmxcfs replicates these directories to every
