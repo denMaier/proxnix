@@ -14,6 +14,7 @@ set -euo pipefail
 
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
@@ -36,6 +37,18 @@ do_rm() {
     log "removed: $path"
 }
 
+do_rmdir_if_empty() {
+    local dir="$1"
+    if [[ ! -d "$dir" ]]; then
+        return
+    fi
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] rmdir $dir (if empty)"
+        return
+    fi
+    rmdir "$dir" 2>/dev/null || true
+}
+
 [[ "$(id -u)" -eq 0 ]] || die "Must be run as root."
 command -v pveversion >/dev/null 2>&1 || die "pveversion not found — is this a Proxmox host?"
 
@@ -50,6 +63,10 @@ do_rm "$LXC_CONFIG_DIR/nixos.userns.conf"
 
 action "Pre-start hook"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
+
+action "Local runtime helper"
+do_rm "$PROXNIX_LIB_DIR/yaml-to-nix.py"
+do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 echo ""
 echo "Done."

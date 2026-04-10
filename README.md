@@ -7,27 +7,38 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 
 ## File Map
 
-### Inside every NixOS LXC container (`/etc/nixos/`)
+### Inside every managed NixOS LXC (`/etc/nixos/`)
 
-| File | Who touches it | Purpose |
+| File | Who writes it | Purpose |
 |------|---------------|---------|
-| `base.nix` | You (once, at template creation) | Identical groundstate for all containers |
-| `configuration.nix` | You (once, at template creation) | Top-level imports + `stateVersion` |
-| `proxmox.nix` | Hookscript (auto-generated) | Networking: hostname, IP, gateway, DNS |
-| `user.nix` | Hookscript (auto-generated) | Services: Podman containers or native NixOS services |
+| `base.nix` | proxnix pre-start hook | Shared baseline for all managed containers |
+| `configuration.nix` | proxnix pre-start hook | Entrypoint that imports the shared modules and drop-ins |
+| `chezmoi.nix` | proxnix pre-start hook | Optional app-config management module |
+| `proxmox.nix` | proxnix pre-start hook | Generated networking config from PVE config + optional `proxmox.yaml` |
+| `user.nix` | proxnix pre-start hook | Generated services config from `user.yaml` |
 
-### On the Proxmox host
+### On each Proxmox node (local filesystem)
 
 | Path | Purpose |
 |------|---------|
-| `/etc/nixos-lxc/master_age_pubkey` | Your age (or SSH) public key — used in multi-recipient encryption |
-| `/etc/nixos-lxc/yaml-to-nix.py` | Converts YAML → Nix; stdlib Python 3, no pip deps |
-| `/etc/nixos-lxc/containers/<vmid>/proxmox.yaml` | Network config you edit per container |
-| `/etc/nixos-lxc/containers/<vmid>/user.yaml` | Service config you edit per container |
-| `/etc/nixos-lxc/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
-| `/etc/nixos-lxc/containers/<vmid>/secrets/*.age` | Age-encrypted secret files |
-| `/etc/nixos-lxc/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
-| `/var/lib/vz/snippets/nixos-hookscript.sh` | Proxmox hookscript (auto-pushes config on start) |
+| `/usr/share/lxc/config/nixos.common.conf` | Auto-enables the proxnix pre-start hook for `ostype=nixos` containers |
+| `/usr/share/lxc/config/nixos.userns.conf` | User namespace overrides for unprivileged NixOS LXCs |
+| `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Deploys config, secrets, and drop-ins into the container rootfs on every start |
+| `/usr/local/lib/proxnix/yaml-to-nix.py` | Local YAML→Nix converter runtime |
+
+### Shared across the cluster (`/etc/pve/proxnix/`)
+
+| Path | Purpose |
+|------|---------|
+| `/etc/pve/proxnix/master_age_pubkey` | Your age or SSH public key for recovery / multi-recipient encryption |
+| `/etc/pve/proxnix/base.nix` | Shared NixOS base config replicated via `pmxcfs` |
+| `/etc/pve/proxnix/configuration.nix` | Shared NixOS entrypoint replicated via `pmxcfs` |
+| `/etc/pve/proxnix/chezmoi.nix` | Shared chezmoi module replicated via `pmxcfs` |
+| `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` | Optional per-container networking overrides |
+| `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Per-container services config |
+| `/etc/pve/proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
+| `/etc/pve/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files |
+| `/etc/pve/proxnix/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
 
 ---
 
@@ -36,13 +47,12 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 ### 1 — Install tooling
 
 ```bash
-mkdir -p /etc/nixos-lxc
-cp yaml-to-nix.py /etc/nixos-lxc/
-cp hookscript.sh  /var/lib/vz/snippets/nixos-hookscript.sh
-chmod +x /var/lib/vz/snippets/nixos-hookscript.sh
+./install.sh
 ```
 
-No Python packages to install — `yaml-to-nix.py` uses only stdlib.
+Run `install.sh` once on the first cluster node to seed `/etc/pve/proxnix`, then run it on every other Proxmox node that may start managed containers. The installer always refreshes the per-node runtime files and only creates the shared `pmxcfs` content on the first node unless you pass `--force-shared`.
+
+`yaml-to-nix.py` is installed to `/usr/local/lib/proxnix` on purpose: `/etc/pve` is backed by `pmxcfs`, which is fine for shared config data but a bad place for runnable scripts because executable metadata is not preserved there.
 
 ### 2 — Create a NixOS LXC container
 
@@ -55,36 +65,33 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/Proxmo
 
 Or import an existing NixOS rootfs tarball manually.
 
-### 3 — Install base config inside the new container
+Make sure the container's `ostype` is `nixos` so Proxmox includes `nixos.common.conf` automatically.
 
-SSH in (or use `pct enter <vmid>`) and place the NixOS config files:
-
-```bash
-# From the repo root, push the base files into the container (replace 100 with your VMID)
-pct push 100 base.nix          /etc/nixos/base.nix          --perms 0644
-pct push 100 configuration.nix /etc/nixos/configuration.nix --perms 0644
-```
-
-Then do a first rebuild inside the container:
-
-```bash
-pct exec 100 -- nixos-rebuild switch
-```
-
-### 4 — Add per-container YAML config on the host
+### 3 — Add per-container YAML config on the host
 
 ```bash
 VMID=100
-mkdir -p /etc/nixos-lxc/containers/$VMID
+mkdir -p /etc/pve/proxnix/containers/$VMID
 
 # Copy and edit the examples from this repo
-cp proxmox.yaml /etc/nixos-lxc/containers/$VMID/proxmox.yaml
-cp user.yaml    /etc/nixos-lxc/containers/$VMID/user.yaml
+cp proxmox.yaml /etc/pve/proxnix/containers/$VMID/proxmox.yaml
+cp user.yaml    /etc/pve/proxnix/containers/$VMID/user.yaml
 
 # Edit to match your network and desired services
-$EDITOR /etc/nixos-lxc/containers/$VMID/proxmox.yaml
-$EDITOR /etc/nixos-lxc/containers/$VMID/user.yaml
+$EDITOR /etc/pve/proxnix/containers/$VMID/proxmox.yaml
+$EDITOR /etc/pve/proxnix/containers/$VMID/user.yaml
 ```
+
+`proxmox.yaml` is optional if the PVE container config already has the right hostname, IP, gateway, and DNS.
+
+### 4 — First boot and first rebuild
+
+```bash
+pct start 100
+pct exec 100 -- nixos-rebuild switch
+```
+
+On the first boot, the pre-start hook writes `base.nix`, `configuration.nix`, `chezmoi.nix`, `proxmox.nix`, and `user.nix` into the container before PID 1 starts. The one-time manual `nixos-rebuild switch` activates that managed config and installs the watcher that will rebuild automatically on later config changes.
 
 ### 5 — Bootstrap secrets for the container
 
@@ -92,7 +99,7 @@ The age keypair is generated automatically by the `base.nix` activation script t
 
 ```bash
 # Store your age (or SSH ed25519) public key once on the host
-echo "age1..." > /etc/nixos-lxc/master_age_pubkey
+echo "age1..." > /etc/pve/proxnix/master_age_pubkey
 
 # Extract the container's public key and store it on the host
 ./bootstrap.sh 100
@@ -102,32 +109,30 @@ echo "age1..." > /etc/nixos-lxc/master_age_pubkey
 
 ```bash
 printf 'mysecretvalue' | age \
-  -r "$(cat /etc/nixos-lxc/containers/100/age_pubkey)" \
-  -r "$(cat /etc/nixos-lxc/master_age_pubkey)" \
-  -o /etc/nixos-lxc/containers/100/secrets/db_password.age
+  -r "$(cat /etc/pve/proxnix/containers/100/age_pubkey)" \
+  -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
+  -o /etc/pve/proxnix/containers/100/secrets/db_password.age
 ```
 
 The `.age` files are pushed to `/etc/secrets/` inside the container on every `pct start`. Either recipient's private key can decrypt them — the container uses its own key, you use your master key for recovery or rotation.
 
-### 6 — Attach the hookscript to the container
+Restart the container after adding the first secrets so the pre-start hook can push them and register them with Podman:
 
 ```bash
-pct set 100 -hookscript local:snippets/nixos-hookscript.sh
+pct restart 100
 ```
 
-From now on, every `pct start 100` will:
-1. **pre-start** — generate `.nix` files from YAML; push them and `.age` secret files into the container
-2. **post-start** — push drop-ins; register Podman shell-driver secrets; run `nixos-rebuild switch`
+From then on, every `pct start 100` will run the proxnix pre-start hook automatically and refresh generated config, secrets, and drop-ins from the host.
 
 ---
 
 ## Day-to-Day Workflow
 
 **Change networking** (IP, hostname, DNS):  
-Edit `/etc/nixos-lxc/containers/<vmid>/proxmox.yaml` on the host, then restart the container or run `nixos-rebuild switch` manually inside.
+Edit `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` on the host, then restart the container or run `nixos-rebuild switch` manually inside.
 
 **Add/remove a Podman container**:  
-Edit `user.yaml` on the host, restart the container (or `pct exec <vmid> -- nixos-rebuild switch`).
+Edit `/etc/pve/proxnix/containers/<vmid>/user.yaml` on the host, then restart the container or run `pct exec <vmid> -- nixos-rebuild switch`.
 
 **Switch a container to native services** (Jellyfin, Immich):  
 Set `podman: false` in `user.yaml` and declare the services under the `services:` key.  
@@ -137,7 +142,7 @@ See `user-native.yaml` for the Jellyfin + Immich example.
 The `nixos-config-watcher.path` systemd unit inside every container watches  
 `/etc/nixos/proxmox.nix` and `/etc/nixos/user.nix` for modifications.  
 Any write to either file triggers `nixos-rebuild switch` automatically —  
-even if you push files manually with `pct push`.
+after the initial manual rebuild has enabled the watcher.
 
 ---
 
@@ -183,18 +188,18 @@ The `/etc/age-secret-driver` script in `base.nix` implements all four mandatory 
 
 ```bash
 # 1. Store your master public key on the Proxmox host (once)
-echo "age1..." > /etc/nixos-lxc/master_age_pubkey   # age public key
+echo "age1..." > /etc/pve/proxnix/master_age_pubkey   # age public key
 # or an SSH ed25519 key works too:
-# ssh-keyscan <your-host> | grep ed25519 > /etc/nixos-lxc/master_age_pubkey
+# ssh-keyscan <your-host> | grep ed25519 > /etc/pve/proxnix/master_age_pubkey
 
 # 2. Generate a keypair inside the new container (private key never leaves)
 ./bootstrap.sh 100
 
 # 3. Encrypt a secret with multi-recipient
 printf 'hunter2' | age \
-  -r "$(cat /etc/nixos-lxc/containers/100/age_pubkey)" \
-  -r "$(cat /etc/nixos-lxc/master_age_pubkey)" \
-  -o /etc/nixos-lxc/containers/100/secrets/db_password.age
+  -r "$(cat /etc/pve/proxnix/containers/100/age_pubkey)" \
+  -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
+  -o /etc/pve/proxnix/containers/100/secrets/db_password.age
 ```
 
 The encrypted file is pushed to `/etc/secrets/db_password.age` inside the container on every `pct start`.
@@ -213,7 +218,7 @@ secrets:
     target: /run/secrets/tls.crt
 ```
 
-The hookscript registers a Podman shell-driver secret for each `.age` file. The global driver is configured in `base.nix` via `/etc/containers/containers.conf.d/age-secrets.conf` — no per-secret flags needed. When Podman needs a secret value, it calls `/etc/age-secret-driver lookup`, which decrypts the `.age` file on demand. **No plaintext file is ever written.**
+The pre-start hook registers a Podman shell-driver secret for each `.age` file. The global driver is configured in `base.nix` via `/etc/containers/containers.conf.d/age-secrets.conf` — no per-secret flags needed. When Podman needs a secret value, it calls `/etc/age-secret-driver lookup`, which decrypts the `.age` file on demand. **No plaintext file is ever written.**
 
 ### Native services (Immich, Jellyfin)
 
@@ -246,7 +251,7 @@ Wire the path to the service option in a dropin `.nix` file:
 ```bash
 PROXNIX_HOST=root@proxmox
 PROXNIX_IDENTITY=~/.age/identity.txt   # or ~/.ssh/id_ed25519
-PROXNIX_DIR=/etc/nixos-lxc             # default
+PROXNIX_DIR=/etc/pve/proxnix           # default
 ```
 
 **Commands**:
@@ -268,9 +273,9 @@ proxnix-secrets rm 100 db_password     # delete
 
 `set` and `rotate` both encrypt to two recipients — the container's `age_pubkey` and the host's `master_age_pubkey` — so either private key can decrypt.
 
-After pushing new secrets, restart the container or trigger the hookscript to register them with Podman:
+After pushing new secrets, restart the container so the pre-start hook can register them with Podman:
 ```bash
-pct start 100   # hookscript runs automatically on start
+pct restart 100
 ```
 
 ---
@@ -280,7 +285,7 @@ pct start 100   # hookscript runs automatically on start
 For containers or config that doesn't fit the `user.yaml` schema, place files in the `dropins/` subdirectory of the container's config folder on the host:
 
 ```
-/etc/nixos-lxc/containers/<vmid>/
+/etc/pve/proxnix/containers/<vmid>/
 ├── proxmox.yaml
 ├── user.yaml
 └── dropins/

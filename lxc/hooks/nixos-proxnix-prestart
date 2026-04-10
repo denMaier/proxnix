@@ -36,8 +36,9 @@
 #   cp lxc/config/nixos.userns.conf  /usr/share/lxc/config/
 #   cp lxc/hooks/nixos-proxnix-prestart /usr/share/lxc/hooks/
 #   chmod +x /usr/share/lxc/hooks/nixos-proxnix-prestart
-#   mkdir -p /etc/pve/proxnix
-#   cp yaml-to-nix.py base.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
+#   install -d /usr/local/lib/proxnix /etc/pve/proxnix
+#   install -m 755 yaml-to-nix.py /usr/local/lib/proxnix/yaml-to-nix.py
+#   cp base.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
 
 set -uo pipefail
 
@@ -45,8 +46,9 @@ VMID="${LXC_NAME:-}"
 ROOTFS="${LXC_ROOTFS_MOUNT:-${LXC_ROOTFS_PATH:-}}"
 
 NIXLXC_DIR="/etc/pve/proxnix"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
-YAML_TO_NIX="${NIXLXC_DIR}/yaml-to-nix.py"
+YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
 
 log() { echo "[proxnix-prestart][${VMID}] $*" >&2; }
 
@@ -70,7 +72,7 @@ fi
 # ── Precondition: yaml-to-nix.py is installed ─────────────────────────────────
 if [[ ! -f "$YAML_TO_NIX" ]]; then
     log "ERROR: ${YAML_TO_NIX} not found."
-    log "Run: cp yaml-to-nix.py base.nix configuration.nix chezmoi.nix /etc/pve/proxnix/"
+    log "Run ./install.sh on this Proxmox node to install local runtime files."
     exit 1
 fi
 

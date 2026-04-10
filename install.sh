@@ -15,9 +15,9 @@
 #   /usr/share/lxc/config/nixos.common.conf     — auto-included for ostype=nixos
 #   /usr/share/lxc/config/nixos.userns.conf     — auto-included for unprivileged
 #   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start hook (auto-runs)
+#   /usr/local/lib/proxnix/yaml-to-nix.py       — local runtime helper
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
-#   /etc/pve/proxnix/yaml-to-nix.py             — YAML→Nix converter
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /etc/pve/proxnix/chezmoi.nix                — chezmoi module
@@ -31,6 +31,7 @@ set -euo pipefail
 
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 NIXLXC_DIR="/etc/pve/proxnix"
 
 DRY_RUN=0
@@ -99,9 +100,18 @@ action "Pre-start hook → $LXC_HOOKS_DIR/"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \
            "$LXC_HOOKS_DIR/nixos-proxnix-prestart" "755"
 
+# ── Local runtime helper ──────────────────────────────────────────────────────
+# Must exist on every node because the hook runs locally during container
+# startup. Keep it out of pmxcfs so we never depend on executable metadata in
+# /etc/pve.
+
+action "Local runtime helper → $PROXNIX_LIB_DIR/"
+do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
+
 # ── Shared proxnix files → /etc/pve/proxnix/ ─────────────────────────────────
 # Written on the first node only. pmxcfs replicates this directory to every
 # other cluster node automatically, so subsequent installs skip this section.
+# Keep only shared data here, not runnable scripts.
 
 if [[ -d "$NIXLXC_DIR" && $FORCE_SHARED -eq 0 ]]; then
     action "Shared files → $NIXLXC_DIR/ (skipped — already exists, replicated via pmxcfs)"
@@ -109,7 +119,6 @@ if [[ -d "$NIXLXC_DIR" && $FORCE_SHARED -eq 0 ]]; then
 else
     action "Shared files → $NIXLXC_DIR/  (first node)"
     do_mkdir "$NIXLXC_DIR"
-    do_install "$SCRIPT_DIR/yaml-to-nix.py"    "$NIXLXC_DIR/yaml-to-nix.py"
     do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
     do_install "$SCRIPT_DIR/chezmoi.nix"       "$NIXLXC_DIR/chezmoi.nix"
@@ -136,8 +145,11 @@ echo "       # proxmox.yaml is optional — networking comes from the PVE WebUI.
 echo "       # Add search_domain or other extras there if needed."
 echo "       # Add user.yaml to declare containers/services."
 echo ""
-echo "  3. Start the container — the hook runs automatically:"
+echo "  3. Start the container — the hook seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"
 echo ""
-echo "  4. After first boot, bootstrap age encryption for secrets:"
+echo "  4. Activate the managed config once inside the running container:"
+echo "       pct exec <vmid> -- nixos-rebuild switch"
+echo ""
+echo "  5. After first boot, bootstrap age encryption for secrets:"
 echo "       $SCRIPT_DIR/bootstrap.sh <vmid>"
