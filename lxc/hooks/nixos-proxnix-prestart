@@ -17,12 +17,15 @@
 #     user.yaml    → <rootfs>/etc/nixos/user.nix
 #
 #   Encrypted secrets — deployed AND registered with Podman automatically:
+#     /etc/pve/priv/proxnix/shared/<name>.age
+#                                      → <rootfs>/etc/secrets/<name>.age
 #     /etc/pve/priv/proxnix/containers/<vmid>/secrets/<name>.age
 #                                      → <rootfs>/etc/secrets/<name>.age
 #     + writes /etc/secrets/.ids/<uuid>    (age shell driver lookup index)
 #     + reconciles Podman's secrets.json   (so `podman run --secret name` works)
 #     Secrets removed from the host are unregistered from Podman on next start.
 #     Uses deterministic UUIDs (UUIDv5 of vmid:name) so IDs are stable.
+#     Container-specific secrets override shared secrets on name collisions.
 #
 #   Drop-in files:
 #     containers/<vmid>/dropins/*.nix  → <rootfs>/etc/nixos/dropins/
@@ -128,6 +131,46 @@ remove_missing_matching_files() {
     [[ $changed -eq 0 ]]
 }
 
+remove_stale_secret_files() {
+    local dest_dir="$1"
+    local found=0
+
+    [[ -d "$dest_dir" ]] || return 1
+
+    while IFS= read -r -d '' dest; do
+        found=1
+        local name
+        name="$(basename "$dest")"
+        name="${name%.age}"
+        if [[ -z "${SECRET_SOURCES[$name]+x}" ]]; then
+            rm -f "$dest"
+            log "Removed stale secret file: ${name}"
+        fi
+    done < <(find "$dest_dir" -maxdepth 1 -type f -name '*.age' -print0 2>/dev/null)
+
+    [[ $found -eq 1 ]]
+}
+
+collect_secret_sources() {
+    local src_dir="$1" origin="$2"
+
+    [[ -d "$src_dir" ]] || return 0
+
+    while IFS= read -r -d '' f; do
+        local fname secret_name previous_origin
+        fname="$(basename "$f")"
+        secret_name="${fname%.age}"
+        previous_origin="${SECRET_ORIGINS[$secret_name]:-}"
+
+        if [[ -n "$previous_origin" && "$previous_origin" != "$origin" ]]; then
+            log "Container secret overrides shared secret: ${secret_name}"
+        fi
+
+        SECRET_SOURCES["$secret_name"]="$f"
+        SECRET_ORIGINS["$secret_name"]="$origin"
+    done < <(find "$src_dir" -maxdepth 1 -name '*.age' -print0 2>/dev/null)
+}
+
 # ── Ensure target directories exist ───────────────────────────────────────────
 mkdir -p \
     "${ROOTFS}/etc/nixos" \
@@ -218,23 +261,27 @@ ln -snf ../proxnix-first-boot-rebuild.service \
     "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-first-boot-rebuild.service"
 
 # ── Deploy secrets and auto-register with Podman ──────────────────────────────
-# Collect the current set of secret names (age files on host).
+# Shared secrets apply to every container. Per-container secrets override them
+# by name when both exist.
+SHARED_SECRETS_DIR="${NIXLXC_PRIV_DIR}/shared"
 SECRETS_DIR="${CONTAINER_PRIV_DIR}/secrets"
 SECRET_NAMES=()
+declare -A SECRET_SOURCES=()
+declare -A SECRET_ORIGINS=()
 
-if [[ -d "$SECRETS_DIR" ]]; then
-    while IFS= read -r -d '' f; do
-        fname="$(basename "$f")"
-        secret_name="${fname%.age}"
-        dest="${ROOTFS}/etc/secrets/${fname}"
-        if write_if_changed "$f" "$dest" "400"; then
-            log "Updated secret file: ${secret_name}"
-        fi
-        SECRET_NAMES+=("$secret_name")
-    done < <(find "$SECRETS_DIR" -maxdepth 1 -name '*.age' -print0 2>/dev/null)
-fi
+collect_secret_sources "$SHARED_SECRETS_DIR" "shared"
+collect_secret_sources "$SECRETS_DIR" "container"
 
-remove_missing_matching_files "$SECRETS_DIR" "${ROOTFS}/etc/secrets" -name '*.age' || true
+for secret_name in "${!SECRET_SOURCES[@]}"; do
+    src="${SECRET_SOURCES[$secret_name]}"
+    dest="${ROOTFS}/etc/secrets/${secret_name}.age"
+    if write_if_changed "$src" "$dest" "400"; then
+        log "Updated ${SECRET_ORIGINS[$secret_name]} secret: ${secret_name}"
+    fi
+    SECRET_NAMES+=("$secret_name")
+done
+
+remove_stale_secret_files "${ROOTFS}/etc/secrets" || true
 
 # Reconcile Podman's secrets.json and the age shell driver's .ids/ directory.
 #

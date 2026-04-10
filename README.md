@@ -39,6 +39,7 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Optional per-container native-services config |
 | `/etc/pve/proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
 | `/etc/pve/proxnix/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
+| `/etc/pve/priv/proxnix/shared/*.age` | Shared age-encrypted secrets delivered to every bootstrapped container |
 | `/etc/pve/priv/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files stored in root-only `pmxcfs` |
 
 ---
@@ -214,17 +215,20 @@ Your workstation          Proxmox host              NixOS LXC container
 master private key        master_age_pubkey          /etc/age/identity.txt (600)
                           containers/100/            /etc/secrets/*.age    (400)
                             age_pubkey               /etc/secrets/.ids/    (UUID→name
-                          /etc/pve/priv/proxnix/     mappings for shell driver)
+                                                      mappings for shell driver)
+                          /etc/pve/priv/proxnix/
+                            shared/
+                              db_password.age
                             containers/100/
                               secrets/
-                                db_password.age      /run/<svc>-secrets/   (native
+                                api_key.age          /run/<svc>-secrets/   (native
                                                       services — tmpfs, service
                                                       lifetime only)
 ```
 
 The `/etc/age-secret-driver` script in `base.nix` implements all four mandatory Podman shell-driver commands (`list`, `lookup`, `store`, `delete`). The global driver config in `/etc/containers/containers.conf.d/age-secrets.conf` wires it up system-wide.
 
-**Multi-recipient**: every `.age` file is encrypted to both the container's public key and your master key. The container only ever holds its own private key; your master key lives outside the cluster and is used for recovery and rotation.
+**Multi-recipient**: every `.age` file is encrypted to the intended container recipients plus your master key. The container only ever holds its own private key; your master key lives outside the cluster and is used for recovery and rotation.
 
 ### Per-container setup
 
@@ -245,6 +249,22 @@ printf 'hunter2' | age \
 ```
 
 The encrypted file is pushed to `/etc/secrets/db_password.age` inside the container on every `pct start`.
+
+### Shared secrets
+
+Use `/etc/pve/priv/proxnix/shared/*.age` for secrets that every bootstrapped container should be able to decrypt:
+
+```bash
+printf 'hunter2' | proxnix-secrets set-shared db_password
+```
+
+Shared secrets are encrypted to all current container `age_pubkey` recipients plus the master key. On container start, shared secrets are copied into `/etc/secrets/` first, then per-container secrets are copied on top. **Per-container secrets win on name collisions.**
+
+When you add a new container and run `./bootstrap.sh <vmid>`, re-encrypt all shared secrets so the new public key is included:
+
+```bash
+proxnix-secrets rotate-shared --all
+```
 
 ### Podman containers
 
@@ -299,22 +319,28 @@ PROXNIX_PRIV_DIR=/etc/pve/priv/proxnix # default secret store
 
 **Commands**:
 ```bash
-proxnix-secrets ls                     # list all secrets across all containers
-proxnix-secrets ls 100                 # list secrets for vmid 100
+proxnix-secrets ls                     # list shared + per-container secrets
+proxnix-secrets ls 100                 # list effective secrets for vmid 100
+proxnix-secrets ls-shared              # list shared secrets only
 
 proxnix-secrets set 100 db_password    # prompt for value, encrypt, push
 printf 'hunter2' | proxnix-secrets set 100 db_password   # from stdin
+proxnix-secrets set-shared db_password # encrypt for all bootstrapped CTs
 
-proxnix-secrets get 100 db_password    # decrypt and print to stdout
+proxnix-secrets get 100 db_password    # decrypt effective secret for vmid 100
+proxnix-secrets get-shared db_password # decrypt a shared secret
 
 proxnix-secrets rotate 100 db_password # re-encrypt with current keys
                                         # (use after adding a new container or
                                         #  rotating the master key)
+proxnix-secrets rotate-shared --all    # re-encrypt all shared secrets
+proxnix-secrets rotate-shared db_password
 
 proxnix-secrets rm 100 db_password     # delete
+proxnix-secrets rm-shared db_password  # delete a shared secret
 ```
 
-`set` and `rotate` both encrypt to two recipients — the container's `age_pubkey` and the host's `master_age_pubkey` — so either private key can decrypt.
+`set` and `rotate` encrypt to the container's `age_pubkey` plus the host's `master_age_pubkey`. `set-shared` and `rotate-shared` encrypt to every current container `age_pubkey` plus the master key.
 
 After pushing new secrets, restart the container so the pre-start hook can register them with Podman:
 ```bash

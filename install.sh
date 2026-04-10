@@ -23,6 +23,7 @@
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /etc/pve/proxnix/chezmoi.nix                — chezmoi module
 #   /etc/pve/proxnix/containers/                — per-container config + pubkeys
+#   /etc/pve/priv/proxnix/shared/               — shared encrypted secrets
 #   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
 #
 # proxnix-secrets (local workstation tool) has its own install instructions:
@@ -138,6 +139,7 @@ else
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
     do_install "$SCRIPT_DIR/chezmoi.nix"       "$NIXLXC_DIR/chezmoi.nix"
     do_mkdir "$NIXLXC_DIR/containers"
+    do_mkdir "$NIXLXC_PRIV_DIR/shared"
     do_mkdir "$NIXLXC_PRIV_DIR/containers"
 fi
 
