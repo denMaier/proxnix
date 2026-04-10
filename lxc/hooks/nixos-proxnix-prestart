@@ -155,18 +155,10 @@ if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
     : > "${META_DIR}/bootstrap_done"
 fi
 
-# Stage the shared age identity for containers with shared_secrets: true in user.yaml.
-# The key is deployed plaintext — /etc/age/ in the container is no more sensitive
-# than the container's own private key already stored there.
+# Stage the shared age identity if one exists — every container gets it.
 SHARED_IDENTITY_PATH="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
-if [[ -f "${CONTAINER_DIR}/user.yaml" ]] \
-   && grep -q '^shared_secrets:[[:space:]]*true' "${CONTAINER_DIR}/user.yaml"; then
-    if [[ -f "$SHARED_IDENTITY_PATH" ]]; then
-        cp "$SHARED_IDENTITY_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"
-    else
-        log "WARNING: shared_secrets: true in ${VMID}/user.yaml but no shared identity found."
-        log "  Run: proxnix-secrets init-shared"
-    fi
+if [[ -f "$SHARED_IDENTITY_PATH" ]]; then
+    cp "$SHARED_IDENTITY_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"
 fi
 
 trap - EXIT

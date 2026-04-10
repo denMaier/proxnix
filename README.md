@@ -162,18 +162,12 @@ proxnix-secrets ls 100                 # list secrets for a container
 
 ### Shared secrets
 
-Encrypted for a single shared age keypair. Any container with `shared_secrets: true` in its `user.yaml` can decrypt them — no re-encryption needed when adding new containers.
+Encrypted for a single shared age keypair. Every container receives the shared private key automatically, so any container can decrypt shared secrets. No per-container configuration needed.
 
 **One-time setup** (already done if you ran `init-shared` after install):
 ```bash
 proxnix-secrets init-shared
 ```
-
-**Mark a container as shared-secrets capable** — add to its `user.yaml`:
-```yaml
-shared_secrets: true
-```
-The shared private key is deployed to the container automatically on next start.
 
 **Manage shared secrets:**
 ```bash
@@ -274,5 +268,5 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 | Path | Purpose |
 |------|---------|
 | `/etc/age/identity.txt` | Container's own age private key (generated on first boot) |
-| `/etc/age/shared_identity.txt` | Shared age private key (present only if `shared_secrets: true` in `user.yaml`) |
+| `/etc/age/shared_identity.txt` | Shared age private key (present when `init-shared` has been run) |
 | `/etc/secrets/*.age` | Encrypted secret files (per-container and shared) |

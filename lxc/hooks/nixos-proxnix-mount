@@ -240,17 +240,13 @@ else
     rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
 fi
 
-# Deploy or remove the shared age identity for containers with shared_secrets flag.
+# Deploy the shared age identity — every container gets it when one exists.
 if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
     mkdir -p "${ROOTFS}/etc/age"
     chmod 700 "${ROOTFS}/etc/age"
     cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/age/shared_identity.txt"
     chmod 600 "${ROOTFS}/etc/age/shared_identity.txt"
     log "Deployed shared age identity"
-elif [[ -f "${ROOTFS}/etc/age/shared_identity.txt" ]]; then
-    # Flag was cleared — remove the key
-    rm -f "${ROOTFS}/etc/age/shared_identity.txt"
-    log "Removed shared age identity (flag cleared)"
 fi
 
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"
