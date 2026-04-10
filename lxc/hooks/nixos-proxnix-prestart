@@ -66,11 +66,14 @@ if [[ ! -f "$YAML_TO_NIX" ]]; then
     exit 1
 fi
 
+KEYS_STAGE_DIR="${STAGE_DIR}/keys"
+
 cleanup_stage
 mkdir -p \
     "$MANAGED_DROPIN_DIR" \
     "$QUADLET_DIR" \
     "$SECRETS_STAGE_DIR" \
+    "$KEYS_STAGE_DIR" \
     "$META_DIR"
 
 for f in "${PROXNIX_SHARED_FILES[@]}"; do
@@ -150,6 +153,19 @@ chmod 0644 "${META_DIR}/vmid"
 
 if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
     : > "${META_DIR}/bootstrap_done"
+fi
+
+# Stage the shared age identity for containers with the shared_secrets flag.
+# The key is deployed plaintext — /etc/age/ in the container is no more sensitive
+# than the container's own private key already stored there.
+SHARED_IDENTITY_PATH="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
+if [[ -f "${CONTAINER_DIR}/shared_secrets" ]]; then
+    if [[ -f "$SHARED_IDENTITY_PATH" ]]; then
+        cp "$SHARED_IDENTITY_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"
+    else
+        log "WARNING: shared_secrets flag set for ${VMID} but no shared identity found."
+        log "  Run: proxnix-secrets init-shared"
+    fi
 fi
 
 trap - EXIT

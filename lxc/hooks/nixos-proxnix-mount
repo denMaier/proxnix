@@ -35,6 +35,7 @@ RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
+KEYS_STAGE_DIR="${STAGE_DIR}/keys"
 META_DIR="${STAGE_DIR}/meta"
 DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${META_DIR}/current-config-hash" 2>/dev/null || true)"
 CURRENT_CONFIG_HASH=""
@@ -237,6 +238,17 @@ if [[ -f "${META_DIR}/bootstrap_done" ]]; then
     touch "${ROOTFS}/etc/secrets/.bootstrap_done"
 else
     rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
+fi
+
+# Deploy or remove the shared age identity for containers with shared_secrets flag.
+if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
+    cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/age/shared_identity.txt"
+    chmod 600 "${ROOTFS}/etc/age/shared_identity.txt"
+    log "Deployed shared age identity"
+elif [[ -f "${ROOTFS}/etc/age/shared_identity.txt" ]]; then
+    # Flag was cleared — remove the key
+    rm -f "${ROOTFS}/etc/age/shared_identity.txt"
+    log "Removed shared age identity (flag cleared)"
 fi
 
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"

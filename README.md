@@ -8,9 +8,14 @@ No Flakes. Static IPs. Key-only SSH. Secrets via age.
 
 ## How it works
 
-A pre-start hook runs on the Proxmox host every time a managed container starts and renders the desired guest state under `/run/proxnix/<vmid>/`. A mount hook then copies that rendered state into `/etc/nixos/managed/`, keeps the managed files read-only, and updates a config hash when that tree changes. A boot-time `proxnix-apply-config` unit then runs `nixos-rebuild switch` only when the desired hash differs from the last applied hash.
+Every time a managed container starts, two hooks run on the Proxmox host:
+
+1. **Pre-start** — renders the desired guest state (Nix configs, secrets, Quadlet files) into a staging directory under `/run/proxnix/<vmid>/`
+2. **Mount** — copies that staged state into the container's rootfs before the first process starts
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
+
+Inside the container, a `proxnix-apply-config` unit runs `nixos-rebuild switch` automatically on restart whenever the managed config hash changes.
 
 ---
 
@@ -29,29 +34,46 @@ After install, store your master public key (used for secret recovery):
 ```bash
 # SSH public key works:
 ssh-keygen -y -f ~/.ssh/id_ed25519 > /etc/pve/proxnix/master_age_pubkey
+
 # or a dedicated age key:
 age-keygen 2>&1 | grep 'public key' | awk '{print $NF}' > /etc/pve/proxnix/master_age_pubkey
+```
+
+If you plan to use shared secrets, initialize the shared keypair (once per cluster):
+
+```bash
+proxnix-secrets init-shared
 ```
 
 ---
 
 ## New container
 
-**1. Create the container:**
+**1. Create the container**
 
 Download the template via the WebUI (Storage → CT Templates → Download from URL) using a tarball from [Hydra](https://hydra.nixos.org/project/nixos) → Jobs → `nixos.proxmoxLXC`. Then create it normally through the wizard.
 
-There is no OS type dropdown — Proxmox auto-detects `ostype=nixos` from `/etc/os-release` inside the tarball. Verify after creation with `pct config <vmid> | grep ostype`. If it shows something else (e.g. you used a generic NixOS tarball), fix it with `pct set <vmid> --ostype nixos`.
+There is no OS type dropdown — Proxmox auto-detects `ostype=nixos` from `/etc/os-release` inside the tarball. Verify after creation:
 
-`ostype=nixos` is what makes Proxmox auto-include `nixos.common.conf` and activate the proxnix hook. Set SSH public keys in the wizard — proxnix mirrors them into Nix. Skip the root password field — proxnix overwrites it with a locked password on the first rebuild; SSH key access is the only way in after that.
+```bash
+pct config <vmid> | grep ostype
+```
 
-**2. Optional: add per-container config on the host:**
+If it shows something other than `nixos` (e.g. you used a generic NixOS tarball), fix it:
+
+```bash
+pct set <vmid> --ostype nixos
+```
+
+`ostype=nixos` is what makes Proxmox auto-include `nixos.common.conf` and activate the proxnix hooks. Set SSH public keys in the wizard — proxnix mirrors them into Nix. Skip the root password field — proxnix locks it on the first rebuild; SSH key access is the only way in after that.
+
+**2. Add per-container config (optional)**
 
 ```bash
 VMID=100
 mkdir -p /etc/pve/proxnix/containers/$VMID/dropins
 
-# extras the WebUI can't express (search domain, additional ssh keys):
+# extras the WebUI can't express (search domain, additional SSH keys):
 cp proxmox.yaml /etc/pve/proxnix/containers/$VMID/proxmox.yaml
 
 # native NixOS services (Jellyfin, Immich, ...):
@@ -61,37 +83,37 @@ cp user.yaml /etc/pve/proxnix/containers/$VMID/user.yaml
 $EDITOR /etc/pve/proxnix/containers/$VMID/dropins/myapp.container
 ```
 
-**3. Start the container:**
+**3. Start the container**
 
 ```bash
 pct start 100
 ```
 
-**4. First-boot bootstrap (once per container):**
+**4. First-boot bootstrap**
 
-The hydra template ships without a nixpkgs channel, so `proxnix-apply-config` cannot run automatically on the very first boot. You need to bootstrap manually:
+The Hydra template ships without a nixpkgs channel, so `proxnix-apply-config` cannot run on the very first boot. Bootstrap manually:
 
-> **RAM requirement:** NixOS evaluation needs at least **2 GB RAM**. Set this in the container's Resources tab before starting.
+> **RAM:** NixOS evaluation needs at least **2 GB RAM**. Set this in the container's Resources tab before starting.
 
 ```bash
 pct enter 100
 ~/proxnix-bootstrap.sh
 ```
 
-The script (written by the mount hook) adds the correct nixos channel, updates it, and runs `nixos-rebuild switch`. After it completes the container is fully configured and `proxnix-apply-config` will handle all subsequent config changes automatically on restart.
+The script adds the correct nixos channel, updates it, and runs `nixos-rebuild switch`. After it completes the container is fully configured and subsequent config changes are applied automatically on restart.
 
 If you get a permission error on the script, run it explicitly:
 ```bash
 bash ~/proxnix-bootstrap.sh
 ```
 
-**6. Bootstrap secrets:**
+**5. Bootstrap secrets**
 
 ```bash
-./bootstrap.sh 100   # extracts the container's age public key
+./bootstrap.sh 100
 ```
 
-Follow the printed encryption command to add your first secrets, then `pct restart 100` to push them.
+This reads the container's age public key and stores it on the host so you can encrypt secrets for it. Follow the printed instructions to add your first secret, then restart the container to push it.
 
 ---
 
@@ -99,9 +121,9 @@ Follow the printed encryption command to add your first secrets, then `pct resta
 
 **Change network config / SSH keys:** edit the container in the WebUI (or `proxmox.yaml` for extras), restart the container.
 
-**Add/change a container workload:** edit the Quadlet file in `dropins/` on the host, restart the container.
+**Add/change a Podman workload:** edit the Quadlet file in `dropins/` on the host, restart the container.
 
-**Push a NixOS config change:** edit `proxmox.yaml`, `user.yaml`, or host-managed `.nix` files, then restart the container. For ad-hoc guest-only overrides, place them in `/etc/nixos/local.nix` and run `nixos-rebuild switch` manually.
+**Push a NixOS config change:** edit `user.yaml` or a dropin `.nix` file, then restart the container. For ad-hoc guest-only changes, put them in `/etc/nixos/local.nix` inside the container and run `nixos-rebuild switch` manually.
 
 **Health check:**
 ```bash
@@ -115,42 +137,76 @@ proxnix-doctor --all
 
 Secrets are age-encrypted files stored on the Proxmox host under `/etc/pve/priv/proxnix/`. The mount hook copies them into `/etc/secrets/` inside the container on every start and registers them with Podman's shell driver so `podman run --secret name` works without any manual setup.
 
-Every `.age` file is encrypted to two recipients: the container's own age public key and your master key. The container's private key never leaves the container; your master key stays off the cluster and is used for recovery or rotation.
+### Setup
 
-**Manage secrets from your workstation** (install `proxnix-secrets` locally):
+Install `proxnix-secrets` on your **local workstation**:
 
 ```bash
 cp proxnix-secrets ~/.local/bin/
 chmod +x ~/.local/bin/proxnix-secrets
 ```
 
-Config (`~/.config/proxnix/config`):
+Create `~/.config/proxnix/config`:
 ```bash
 PROXNIX_HOST=root@proxmox
 PROXNIX_IDENTITY=~/.age/identity.txt   # or ~/.ssh/id_ed25519
 ```
 
-Common commands:
+### Per-container secrets
+
+Encrypted for the container's own age key and your master key. Only that container can decrypt them.
+
 ```bash
-proxnix-secrets ls 100                 # list effective secrets for a container
 proxnix-secrets set 100 db_password    # prompt for value, encrypt, push
 proxnix-secrets get 100 db_password    # decrypt and print
 proxnix-secrets rm  100 db_password
-proxnix-secrets rotate 100 db_password # re-encrypt (after key rotation)
-
-proxnix-secrets set-shared db_password # push to every bootstrapped container
-proxnix-secrets rotate-shared --all    # re-encrypt all shared secrets
+proxnix-secrets rotate 100 db_password # re-encrypt after key rotation
+proxnix-secrets ls 100                 # list secrets for a container
 ```
 
-After adding or removing secrets, `pct restart <vmid>` to push the changes.
+### Shared secrets
 
-**Use a secret in a Quadlet container:**
+Encrypted for a single shared age keypair. Any container marked `shared_secrets` can decrypt them — no re-encryption needed when adding new containers.
+
+**One-time setup** (already done if you ran `init-shared` after install):
+```bash
+proxnix-secrets init-shared
+```
+
+**Mark a container as shared-secrets capable** (on the Proxmox host):
+```bash
+touch /etc/pve/proxnix/containers/100/shared_secrets
+```
+The shared private key is deployed to the container automatically on next start.
+
+**Manage shared secrets:**
+```bash
+proxnix-secrets set-shared db_password   # encrypt for shared keypair
+proxnix-secrets get-shared db_password   # decrypt and print
+proxnix-secrets rm-shared  db_password
+proxnix-secrets ls-shared
+```
+
+**Rotate the shared keypair** (use after a key leak):
+```bash
+proxnix-secrets rotate-shared
+```
+This generates a new keypair and re-encrypts all shared secrets. Restart each container to pick up the new key.
+
+### Using secrets
+
+After adding or removing secrets, restart the container to push the changes:
+```bash
+pct restart 100
+```
+
+**In a Quadlet container:**
 ```ini
 [Container]
 Secret=db_password,type=env,target=DB_PASSWORD
 ```
 
-**Use a secret in a native NixOS service** — declare in `user.yaml`:
+**In a native NixOS service** — declare in `user.yaml`:
 ```yaml
 services:
   immich:
@@ -158,50 +214,11 @@ services:
       - name: db_password
         path: /run/immich-secrets/db_password
 ```
-Then point the service at the path in a dropin `.nix`:
+Then reference the path in a dropin `.nix`:
 ```nix
 { ... }: { services.immich.database.passwordFile = "/run/immich-secrets/db_password"; }
 ```
-
 The decryption happens in an `ExecStartPre` step; the plaintext lives in a tmpfs directory for the service lifetime only.
-
----
-
-## File layout
-
-### On each Proxmox node (local, not replicated)
-
-| Path | Purpose |
-|------|---------|
-| `/usr/share/lxc/config/nixos.common.conf` | Auto-included for `ostype=nixos`; registers the hook |
-| `/usr/share/lxc/config/nixos.userns.conf` | Unprivileged container overrides |
-| `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Host render hook — runs on every `pct start` |
-| `/usr/share/lxc/hooks/nixos-proxnix-mount` | Rootfs sync hook — runs during the LXC mount phase |
-| `/usr/local/lib/proxnix/yaml-to-nix.py` | PVE conf + YAML → Nix converter |
-| `/usr/local/lib/proxnix/nixos-proxnix-common.sh` | Shared helper sourced by both hooks |
-| `/usr/local/sbin/proxnix-doctor` | Health checker |
-
-### Cluster-wide via pmxcfs (`/etc/pve/`)
-
-| Path | Purpose |
-|------|---------|
-| `proxnix/master_age_pubkey` | Your public key for secret recovery |
-| `proxnix/base.nix` | Shared baseline pushed into every container |
-| `proxnix/common.nix` | Admin user, SSH hardening, journald, timesyncd |
-| `proxnix/configuration.nix` | NixOS entrypoint (imports base + dropins) |
-| `proxnix/chezmoi.nix` | App-config management module |
-| `proxnix/containers/<vmid>/proxmox.yaml` | Optional network extras and SSH keys |
-| `proxnix/containers/<vmid>/user.yaml` | Native NixOS service config |
-| `proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
-| `proxnix/containers/<vmid>/dropins/` | `.nix` fragments and Quadlet files |
-| `priv/proxnix/shared/*.age` | Shared encrypted secrets (all bootstrapped containers) |
-| `priv/proxnix/containers/<vmid>/secrets/*.age` | Per-container encrypted secrets |
-
-### Inside each managed container (`/etc/nixos/`)
-
-`configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/`. `local.nix` is the optional guest-local escape hatch.
-
-Inside `/etc/nixos/managed/` the hook writes `base.nix`, `common.nix`, `chezmoi.nix`, `proxmox.nix` (generated from PVE conf + `proxmox.yaml`), `user.nix` (generated from `user.yaml`), and `dropins/*.nix`.
 
 ---
 
@@ -214,7 +231,53 @@ Inside `/etc/nixos/managed/` the hook writes `base.nix`, `common.nix`, `chezmoi.
 
 To set the shared admin password hash:
 ```bash
-# generate: openssl passwd -6 or mkpasswd -m sha-512
+# generate the hash first:
+openssl passwd -6        # or: mkpasswd -m sha-512
+
 printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
-proxnix-secrets rotate-shared common_admin_password_hash
 ```
+
+---
+
+## File layout
+
+### On each Proxmox node (local, not replicated)
+
+| Path | Purpose |
+|------|---------|
+| `/usr/share/lxc/config/nixos.common.conf` | Auto-included for `ostype=nixos`; registers the hooks |
+| `/usr/share/lxc/config/nixos.userns.conf` | Unprivileged container overrides |
+| `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Render hook — runs on every `pct start` |
+| `/usr/share/lxc/hooks/nixos-proxnix-mount` | Rootfs sync hook — runs during the LXC mount phase |
+| `/usr/local/lib/proxnix/yaml-to-nix.py` | PVE conf + YAML → Nix converter |
+| `/usr/local/lib/proxnix/nixos-proxnix-common.sh` | Shared helper sourced by both hooks |
+| `/usr/local/sbin/proxnix-doctor` | Health checker |
+
+### Cluster-wide via pmxcfs (`/etc/pve/`)
+
+| Path | Purpose |
+|------|---------|
+| `proxnix/master_age_pubkey` | Your public key for secret recovery |
+| `proxnix/shared_age_pubkey` | Public key of the shared secret keypair |
+| `proxnix/base.nix` | Shared baseline pushed into every container |
+| `proxnix/common.nix` | Admin user, SSH hardening, journald, timesyncd |
+| `proxnix/configuration.nix` | NixOS entrypoint (imports base + dropins) |
+| `proxnix/chezmoi.nix` | App-config management module |
+| `proxnix/containers/<vmid>/proxmox.yaml` | Optional network extras and SSH keys |
+| `proxnix/containers/<vmid>/user.yaml` | Native NixOS service config |
+| `proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
+| `proxnix/containers/<vmid>/shared_secrets` | Flag file — grants access to shared secrets |
+| `proxnix/containers/<vmid>/dropins/` | `.nix` fragments and Quadlet files |
+| `priv/proxnix/shared_age_identity.txt` | Private key of the shared secret keypair |
+| `priv/proxnix/shared/*.age` | Shared encrypted secrets |
+| `priv/proxnix/containers/<vmid>/secrets/*.age` | Per-container encrypted secrets |
+
+### Inside each managed container
+
+`/etc/nixos/configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/` (`base.nix`, `common.nix`, `chezmoi.nix`, `proxmox.nix`, `user.nix`, `dropins/*.nix`). `/etc/nixos/local.nix` is the optional guest-local escape hatch.
+
+| Path | Purpose |
+|------|---------|
+| `/etc/age/identity.txt` | Container's own age private key (generated on first boot) |
+| `/etc/age/shared_identity.txt` | Shared age private key (present only if `shared_secrets` flag is set) |
+| `/etc/secrets/*.age` | Encrypted secret files (per-container and shared) |

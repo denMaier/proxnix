@@ -149,9 +149,10 @@
             exit 1
           fi
           name="$(cat "$name_file")"
+          set -- --decrypt --identity "$IDENTITY"
+          [ -f /etc/age/shared_identity.txt ] && set -- "$@" --identity /etc/age/shared_identity.txt
           exec /run/current-system/sw/bin/age \
-            --decrypt \
-            --identity "$IDENTITY" \
+            "$@" \
             "$SECRETS_DIR/''${name}.age"
           ;;
         store)
