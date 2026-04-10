@@ -6,6 +6,9 @@
 #
 # Currently useful additions:
 #   search_domain: set networking.search (no equivalent in PVE WebUI)
+#   ssh_keys:      add or override root SSH public keys
 #
 # Example:
 # search_domain: example.internal
+# ssh_keys:
+#   - ssh-ed25519 AAAA... you@host

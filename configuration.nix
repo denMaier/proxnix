@@ -1,12 +1,4 @@
 let
-  # quadlet-nix: Nix-native Quadlet container declarations.
-  # Pin to a release tag + sha256 for reproducibility:
-  #   url = "https://github.com/SEIAROTg/quadlet-nix/archive/refs/tags/vX.Y.Z.tar.gz";
-  #   sha256 = "sha256:...";
-  quadletNix = builtins.fetchTarball {
-    url = "https://github.com/SEIAROTg/quadlet-nix/archive/main.tar.gz";
-  };
-
   # Dynamically import every *.nix file dropped into /etc/nixos/dropins/.
   # Files are pushed there by the pre-start hook from the host-side dropins/ folder.
   # The directory may not exist on a brand-new container — that's fine.
@@ -19,7 +11,6 @@ let
     else [];
 in {
   imports = [
-    "${quadletNix}/nixos-module.nix"
     ./chezmoi.nix
     ./base.nix
     ./proxmox.nix

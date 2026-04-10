@@ -34,8 +34,8 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/etc/pve/proxnix/base.nix` | Shared NixOS base config replicated via `pmxcfs` |
 | `/etc/pve/proxnix/configuration.nix` | Shared NixOS entrypoint replicated via `pmxcfs` |
 | `/etc/pve/proxnix/chezmoi.nix` | Shared chezmoi module replicated via `pmxcfs` |
-| `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` | Optional per-container networking overrides |
-| `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Per-container services config |
+| `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` | Optional per-container additions (for example `search_domain` or `ssh_keys`) |
+| `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Optional per-container services config |
 | `/etc/pve/proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
 | `/etc/pve/proxnix/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
 | `/etc/pve/priv/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files stored in root-only `pmxcfs` |
@@ -65,9 +65,15 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/Proxmo
 
 Or import an existing NixOS rootfs tarball manually.
 
-Make sure the container's `ostype` is `nixos` so Proxmox includes `nixos.common.conf` automatically.
+Create the container in the Proxmox WebUI or with `pct create`, then make sure:
 
-### 3 — Add per-container YAML config on the host
+- `ostype` is `nixos` so Proxmox includes `nixos.common.conf` automatically
+- `features: nesting=1` is enabled if you plan to use the default Podman path
+- the WebUI hostname, IP, gateway, DNS, and SSH public keys are set the way you want them
+
+`proxnix` will mirror those WebUI-backed settings into generated Nix on first boot. It does **not** patch the creation template itself, and it does **not** keep a reusable root password in sync after creation.
+
+### 3 — Optional per-container YAML config on the host
 
 ```bash
 VMID=100
@@ -82,16 +88,21 @@ $EDITOR /etc/pve/proxnix/containers/$VMID/proxmox.yaml
 $EDITOR /etc/pve/proxnix/containers/$VMID/user.yaml
 ```
 
-`proxmox.yaml` is optional if the PVE container config already has the right hostname, IP, gateway, and DNS.
+`proxmox.yaml` is optional if the PVE container config already has the right hostname, IP, gateway, DNS, and SSH public keys.
 
 ### 4 — First boot and first rebuild
 
 ```bash
 pct start 100
-pct exec 100 -- nixos-rebuild switch
 ```
 
-On the first boot, the pre-start hook writes `base.nix`, `configuration.nix`, `chezmoi.nix`, `proxmox.nix`, and `user.nix` into the container before PID 1 starts. The one-time manual `nixos-rebuild switch` activates that managed config and installs the watcher that will rebuild automatically on later config changes.
+On the first boot, the pre-start hook writes `base.nix`, `configuration.nix`, `chezmoi.nix`, `proxmox.nix`, and `user.nix` into the container before PID 1 starts. It also seeds a `proxnix-first-boot-rebuild.service` unit directly into the rootfs, so the first managed `nixos-rebuild switch` happens automatically during boot.
+
+If you want to watch that first activation:
+
+```bash
+pct exec 100 -- journalctl -u proxnix-first-boot-rebuild -b
+```
 
 ### 5 — Bootstrap secrets for the container
 
@@ -128,8 +139,8 @@ From then on, every `pct start 100` will run the proxnix pre-start hook automati
 
 ## Day-to-Day Workflow
 
-**Change networking** (IP, hostname, DNS):  
-Edit `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` on the host, then restart the container or run `nixos-rebuild switch` manually inside.
+**Change networking** (IP, hostname, DNS, SSH public keys):  
+Edit the container in the Proxmox WebUI for fields PVE owns, or use `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` for extras such as `search_domain` / `ssh_keys`, then restart the container or run `nixos-rebuild switch` manually inside.
 
 **Add/remove a Podman container**:  
 Edit `/etc/pve/proxnix/containers/<vmid>/user.yaml` on the host, then restart the container or run `pct exec <vmid> -- nixos-rebuild switch`.
@@ -141,8 +152,7 @@ See `user-native.yaml` for the Jellyfin + Immich example.
 **Auto-rebuild on config push**:  
 The `nixos-config-watcher.path` systemd unit inside every container watches  
 `/etc/nixos/proxmox.nix` and `/etc/nixos/user.nix` for modifications.  
-Any write to either file triggers `nixos-rebuild switch` automatically —  
-after the initial manual rebuild has enabled the watcher.
+Any write to either file triggers `nixos-rebuild switch` automatically.
 
 ---
 
@@ -150,7 +160,7 @@ after the initial manual rebuild has enabled the watcher.
 
 ### Podman variant (`podman: true` in user.yaml)
 
-Containers are declared via the [`quadlet-nix`](https://github.com/SEIAROTg/quadlet-nix) NixOS module, which generates proper Podman Quadlet unit files from Nix attributes. Full Quadlet feature set is available including secrets, `AutoUpdate`, networks, volumes, and pods. Docker-compat socket and container DNS are enabled in `base.nix`.
+Containers are declared via the built-in `virtualisation.oci-containers` NixOS module with the `podman` backend. Secrets are passed through Podman's `--secret` flag, and Docker-compat socket plus container DNS are enabled in `base.nix`. For the full Quadlet spec, use raw `.container` / `.network` / `.volume` drop-ins.
 
 ### Native variant (`podman: false` in user.yaml)
 
@@ -298,7 +308,7 @@ For containers or config that doesn't fit the `user.yaml` schema, place files in
     └── mydata.volume       ← Quadlet volume
 ```
 
-**`.nix` files** are pushed to `/etc/nixos/dropins/` inside the container and auto-imported by `configuration.nix` on every rebuild. Use them for anything expressible in Nix: extra `virtualisation.quadlet` blocks with `rawConfig`, additional systemd services, package overrides, etc.
+**`.nix` files** are pushed to `/etc/nixos/dropins/` inside the container and auto-imported by `configuration.nix` on every rebuild. Use them for anything expressible in Nix: extra `virtualisation.oci-containers.*` blocks, additional systemd services, package overrides, etc.
 
 **Quadlet files** (`.container`, `.volume`, `.network`, `.pod`, `.image`, `.build`) are pushed directly to `/etc/containers/systemd/` inside the container. They are picked up by Podman's `podman-system-generator` on `daemon-reload` — no NixOS rebuild needed. This path gives you the full Quadlet spec:
 
@@ -392,34 +402,56 @@ Services should not write back into `/srv/config`. If a service insists on mutat
 | `docker-compose.yml` | [`compose2nix`](https://github.com/aksiksi/compose2nix) → paste output into a `.nix` drop-in |
 | `podman run …` flags | [`podlet`](https://github.com/containers/podlet) `generate run -- <flags>` → `.container` drop-in |
 | Existing `.container` Quadlet files | Drop them straight into `dropins/` — no conversion needed |
-| Nix-native Quadlet (complex configs) | Use `virtualisation.quadlet.*` in a `.nix` drop-in (backed by quadlet-nix) |
+| Complex Nix-native Podman config | Use `virtualisation.oci-containers.*` in a `.nix` drop-in |
 
 ---
 
-## Pinning quadlet-nix
+## Why `quadlet-nix` is not bundled
 
-`configuration.nix` fetches `quadlet-nix` from `main` by default. For a stable homelab, pin it to a release:
+Older proxnix revisions fetched `quadlet-nix` from GitHub during evaluation. That made a brand-new container depend on outbound network access and an unpinned remote module before its first managed rebuild could succeed.
 
-```nix
-quadletNix = builtins.fetchTarball {
-  url = "https://github.com/SEIAROTg/quadlet-nix/archive/refs/tags/vX.Y.Z.tar.gz";
-  sha256 = "sha256:...";
-};
-```
+The default stack now avoids any remote module fetch on first boot:
 
-Run `nix-prefetch-url --unpack <url>` on the Proxmox host to get the sha256.
+- `user.yaml` Podman containers use built-in `virtualisation.oci-containers`
+- raw Quadlet files still work through `dropins/*.container`
+- if you want `quadlet-nix`, import and pin it yourself in a `.nix` drop-in
 
 ---
 
 ## SSH Access
 
-`base.nix` enables OpenSSH with password auth disabled. Add your public key to `root`'s authorized_keys inside the container, or bake it into `base.nix`:
+`base.nix` enables OpenSSH with password auth disabled.
+
+By default, proxnix will mirror SSH public keys from the PVE container config (`ssh-public-keys`) into `users.users.root.openssh.authorizedKeys.keys` during generation of `proxmox.nix`. You can also add keys explicitly in `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`:
+
+```yaml
+ssh_keys:
+  - ssh-ed25519 AAAA... you@host
+```
+
+If you prefer to hard-code keys globally, bake them into `base.nix`:
 
 ```nix
 users.users.root.openssh.authorizedKeys.keys = [
   "ssh-ed25519 AAAA... you@host"
 ];
 ```
+
+---
+
+## What proxnix can and cannot reconcile
+
+**Can reconcile automatically**
+
+- WebUI-backed hostname, IPv4/IPv6, gateway, DNS, and SSH public keys
+- first managed activation of `/etc/nixos` on boot
+- later config pushes through the pre-start hook plus `nixos-config-watcher`
+
+**Cannot reconcile automatically**
+
+- a broken or incomplete upstream NixOS LXC image/template
+- the WebUI root password after creation; password SSH is disabled once `base.nix` is active
+- security-sensitive CT feature flags such as `nesting=1`; proxnix warns, but does not silently change them for you
 
 ---
 

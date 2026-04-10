@@ -190,28 +190,32 @@
   # Shown at every login until bootstrap.sh has been run on the Proxmox host.
   # The pre-start hook writes /etc/secrets/.bootstrap_done once age_pubkey
   # exists for this container, at which point this block is silent.
-  environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
-    mode = "0644";
-    text = ''
-      if [ ! -f /etc/secrets/.bootstrap_done ]; then
-        printf '\n  Bootstrap pending — run on the Proxmox host:\n'
-        printf '    ./bootstrap.sh %s\n' "$(hostname)"
-        printf '  Then restart the container to enable secrets.\n\n'
-      fi
-    '';
-  };
+    environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
+      mode = "0644";
+      text = ''
+        if [ ! -f /etc/secrets/.bootstrap_done ]; then
+          vmid="$(cat /etc/proxnix/vmid 2>/dev/null || true)"
+          [ -n "$vmid" ] || vmid="$(hostname)"
+          printf '\n  Bootstrap pending — run on the Proxmox host:\n'
+          printf '    ./bootstrap.sh %s\n' "$vmid"
+          printf '  Then restart the container to enable secrets.\n\n'
+        fi
+      '';
+    };
 
   # ── Message of the day ────────────────────────────────────────────────────
   users.motd = ''
 
-    ── proxnix ───────────────────────────────────────────────────────────────
-     Config files   /etc/nixos/{proxmox,user,base,chezmoi}.nix
-                    /etc/nixos/dropins/*.nix
+     ── proxnix ───────────────────────────────────────────────────────────────
+      Config files   /etc/nixos/{proxmox,user,base,chezmoi}.nix
+                     /etc/nixos/dropins/*.nix
 
-     Rebuild        nixos-rebuild switch
-                    (automatic — watcher fires when proxmox.nix or user.nix
-                     changes on container start)
-     Rebuild log    journalctl -fu nixos-config-watcher
+      Rebuild        automatic on first boot
+                     nixos-rebuild switch
+                     (watcher fires when proxmox.nix or user.nix changes on
+                      container start)
+      First-boot log journalctl -u proxnix-first-boot-rebuild -b
+      Rebuild log    journalctl -fu nixos-config-watcher
 
      Secrets        podman secret ls
                     podman run --secret NAME …
@@ -221,9 +225,9 @@
                     cfg apply           apply source state to /srv/config/
                     cfg apply --dry-run preview without writing
 
-     Containers     podman ps -a
-                    podman logs -f NAME
-                    systemctl status NAME.service   (Quadlet-managed)
+      Containers     podman ps -a
+                     podman logs -f NAME
+                     systemctl status podman-NAME.service
 
      Nix            nix-collect-garbage -d          remove old generations
                     nixos-rebuild list-generations

@@ -55,9 +55,6 @@ YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
 
 log() { echo "[proxnix-prestart][${VMID}] $*" >&2; }
 
-# ── Precondition: proxnix is managing this container ──────────────────────────
-[[ -d "$CONTAINER_DIR" ]] || exit 0
-
 # ── Precondition: rootfs is accessible ────────────────────────────────────────
 if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
     log "ERROR: rootfs not accessible."
@@ -92,12 +89,27 @@ write_if_changed() {
     return 1
 }
 
+write_text_if_changed() {
+    local content="$1" dest="$2" mode="$3"
+    local tmp
+    local changed=0
+    tmp="$(mktemp /tmp/proxnix-prestart-inline-XXXXXX)"
+    printf '%s' "$content" > "$tmp"
+    if write_if_changed "$tmp" "$dest" "$mode"; then
+        changed=1
+    fi
+    rm -f "$tmp"
+    [[ $changed -eq 1 ]]
+}
+
 # ── Ensure target directories exist ───────────────────────────────────────────
 mkdir -p \
     "${ROOTFS}/etc/nixos" \
     "${ROOTFS}/etc/nixos/dropins" \
+    "${ROOTFS}/etc/proxnix" \
     "${ROOTFS}/etc/secrets" \
-    "${ROOTFS}/etc/containers/systemd"
+    "${ROOTFS}/etc/containers/systemd" \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
 chmod 700 "${ROOTFS}/etc/secrets"
 
 # ── Deploy shared base NixOS files ────────────────────────────────────────────
@@ -143,6 +155,41 @@ for f in proxmox.nix user.nix; do
         log "No change in ${f}"
     fi
 done
+
+if [[ -f "$PVE_CONF" ]]; then
+    FEATURES_LINE="$(sed -n 's/^features: //p' "$PVE_CONF" | head -n1)"
+    if [[ ! "${FEATURES_LINE}" =~ (^|,)nesting=1($|,) ]]; then
+        log "WARNING: features: nesting=1 is not enabled."
+        log "  Podman is enabled by default; set nesting=1 in the Proxmox CT config if you plan to use it."
+    fi
+fi
+
+write_text_if_changed "${VMID}" "${ROOTFS}/etc/proxnix/vmid" "644"
+
+FIRST_BOOT_UNIT_CONTENT='[Unit]
+Description=Activate proxnix-managed NixOS configuration on first boot
+ConditionPathExists=/etc/nixos/configuration.nix
+ConditionPathExists=!/etc/proxnix/first-boot-rebuild.done
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -lc "/run/current-system/sw/bin/nixos-rebuild switch"
+ExecStartPost=/bin/sh -lc "mkdir -p /etc/proxnix && touch /etc/proxnix/first-boot-rebuild.done"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+'
+
+if write_text_if_changed "${FIRST_BOOT_UNIT_CONTENT}" \
+    "${ROOTFS}/etc/systemd/system/proxnix-first-boot-rebuild.service" "644"; then
+    log "Updated proxnix-first-boot-rebuild.service"
+fi
+ln -snf ../proxnix-first-boot-rebuild.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-first-boot-rebuild.service"
 
 # ── Deploy secrets and auto-register with Podman ──────────────────────────────
 # Collect the current set of secret names (age files on host).
