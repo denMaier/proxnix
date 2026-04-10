@@ -153,7 +153,9 @@ check_host_files() {
     "$LXC_CONFIG_DIR/nixos.common.conf" \
       "$LXC_CONFIG_DIR/nixos.userns.conf" \
       "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
+      "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
       "$PROXNIX_LIB_DIR/yaml-to-nix.py" \
+      "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \

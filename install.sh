@@ -15,8 +15,11 @@
 # Per-node (every cluster node, not replicated):
 #   /usr/share/lxc/config/nixos.common.conf     — auto-included for ostype=nixos
 #   /usr/share/lxc/config/nixos.userns.conf     — auto-included for unprivileged
-#   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start hook (auto-runs)
+#   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start render hook
+#   /usr/share/lxc/hooks/nixos-proxnix-mount    — mount-time sync hook
 #   /usr/local/lib/proxnix/yaml-to-nix.py       — local runtime helper
+#   /usr/local/lib/proxnix/nixos-proxnix-common.sh
+#                                               — shared hook helper
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
@@ -101,22 +104,25 @@ action "LXC config files → $LXC_CONFIG_DIR/"
 do_install "$SCRIPT_DIR/lxc/config/nixos.common.conf"  "$LXC_CONFIG_DIR/nixos.common.conf"
 do_install "$SCRIPT_DIR/lxc/config/nixos.userns.conf"  "$LXC_CONFIG_DIR/nixos.userns.conf"
 
-# ── Pre-start hook ────────────────────────────────────────────────────────────
-# Runs during lxc-start, after the rootfs is mounted.
-# Registered via lxc.hook.pre-start in nixos.common.conf — no per-container
-# setup needed.
+# ── Host lifecycle hooks ──────────────────────────────────────────────────────
+# The pre-start hook renders desired state on the host into /run/proxnix/<vmid>.
+# The mount hook then copies that staged state into the mounted rootfs.
 
-action "Pre-start hook → $LXC_HOOKS_DIR/"
+action "Lifecycle hooks → $LXC_HOOKS_DIR/"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \
            "$LXC_HOOKS_DIR/nixos-proxnix-prestart" "755"
+do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-mount" \
+           "$LXC_HOOKS_DIR/nixos-proxnix-mount" "755"
 
 # ── Local runtime helper ──────────────────────────────────────────────────────
-# Must exist on every node because the hook runs locally during container
-# startup. Keep it out of pmxcfs so we never depend on executable metadata in
+# Must exist on every node because the hooks run locally during container
+# startup. Keep them out of pmxcfs so we never depend on executable metadata in
 # /etc/pve.
 
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
+do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-common.sh" \
+           "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" "644"
 
 # ── Local admin helper ────────────────────────────────────────────────────────
 
@@ -171,7 +177,7 @@ echo "       # proxmox.yaml is optional — use it for search_domain or ssh_keys
 echo "       # Add user.yaml only for native NixOS services."
 echo "       # Put Quadlet files in dropins/*.container, *.network, *.volume, ..."
 echo ""
-echo "  4. Start the container — the hook seeds /etc/nixos before boot:"
+echo "  4. Start the container — pre-start renders state, mount seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"
 echo ""
 echo "       # Activation now runs automatically at boot when the managed config hash changes."

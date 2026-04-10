@@ -1,78 +1,63 @@
 #!/bin/bash
-# LXC pre-start hook: full proxnix config deployment for NixOS containers.
+# LXC pre-start hook: render proxnix's desired guest state on the host.
 #
 # Registered automatically for every ostype=nixos container via
-# nixos.common.conf / nixos.userns.conf. Runs after lxc-pve-prestart-hook
-# has staged the container rootfs, so the rootfs is directly accessible at
-# $LXC_ROOTFS_MOUNT without needing pct mount / pct unmount.
+# nixos.common.conf / nixos.userns.conf. Runs after lxc-pve-prestart-hook so
+# the PVE config is available, but before the rootfs mount is required.
 #
-# What this deploys on every start:
-#   Shared NixOS base files (same for every container):
-#     /etc/pve/proxnix/configuration.nix → <rootfs>/etc/nixos/configuration.nix
-#     /etc/pve/proxnix/base.nix          → <rootfs>/etc/nixos/managed/base.nix
-#     /etc/pve/proxnix/common.nix        → <rootfs>/etc/nixos/managed/common.nix
-#     /etc/pve/proxnix/chezmoi.nix       → <rootfs>/etc/nixos/managed/chezmoi.nix
+# This hook does not touch the guest rootfs directly. It stages the desired
+# state under /run/proxnix/<vmid>/ for the matching mount hook to copy into the
+# mounted rootfs:
+#   rendered/configuration.nix
+#   rendered/managed/{base,common,chezmoi,proxmox,user}.nix
+#   rendered/managed/dropins/*.nix
+#   quadlet/*.{container,volume,network,pod,image,build}
+#   secrets/*.age
+#   meta/{current-config-hash,vmid,proxnix-apply-config.service}
 #
-#   Per-container generated files (from YAML via yaml-to-nix.py):
-#     proxmox.yaml → <rootfs>/etc/nixos/managed/proxmox.nix
-#     user.yaml    → <rootfs>/etc/nixos/managed/user.nix
-#
-#   Encrypted secrets — deployed AND registered with Podman automatically:
-#     /etc/pve/priv/proxnix/shared/<name>.age
-#                                      → <rootfs>/etc/secrets/<name>.age
-#     /etc/pve/priv/proxnix/containers/<vmid>/secrets/<name>.age
-#                                      → <rootfs>/etc/secrets/<name>.age
-#     + writes /etc/secrets/.ids/<uuid>    (age shell driver lookup index)
-#     + reconciles Podman's secrets.json   (so `podman run --secret name` works)
-#     Secrets removed from the host are unregistered from Podman on next start.
-#     Uses deterministic UUIDs (UUIDv5 of vmid:name) so IDs are stable.
-#     Container-specific secrets override shared secrets on name collisions.
-#
-#   Drop-in files:
-#     containers/<vmid>/dropins/*.nix  → <rootfs>/etc/nixos/managed/dropins/
-#     containers/<vmid>/dropins/*.{container,volume,...}
-#                                      → <rootfs>/etc/containers/systemd/
-#
-# Managed Nix files are copied only when the computed content hash changes.
-# The guest-side proxnix-apply-config service compares the desired managed
-# config hash with the last applied hash and runs nixos-rebuild switch only
-# when they differ.
-#
-# Install (once per Proxmox host):
-#   cp lxc/config/nixos.common.conf  /usr/share/lxc/config/
-#   cp lxc/config/nixos.userns.conf  /usr/share/lxc/config/
-#   cp lxc/hooks/nixos-proxnix-prestart /usr/share/lxc/hooks/
-#   chmod +x /usr/share/lxc/hooks/nixos-proxnix-prestart
-#   install -d /usr/local/lib/proxnix /etc/pve/proxnix /etc/pve/priv/proxnix
-#   install -m 755 yaml-to-nix.py /usr/local/lib/proxnix/yaml-to-nix.py
-#   cp base.nix common.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
+# Managed Nix files are hashed from the rendered tree only. The guest-side
+# proxnix-apply-config service compares that desired hash with the last applied
+# hash and runs nixos-rebuild switch only when they differ.
 
 set -uo pipefail
 
 VMID="${LXC_NAME:-}"
-ROOTFS="${LXC_ROOTFS_MOUNT:-${LXC_ROOTFS_PATH:-}}"
-
-NIXLXC_DIR="/etc/pve/proxnix"
-NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
-CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
-CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
-YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
+COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 
 log() { echo "[proxnix-prestart][${VMID}] $*" >&2; }
 
-if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
-    log "ERROR: rootfs not accessible."
-    log "  LXC_ROOTFS_MOUNT=${LXC_ROOTFS_MOUNT:-unset}"
-    log "  LXC_ROOTFS_PATH=${LXC_ROOTFS_PATH:-unset}"
-    log "Hint: ensure lxc-pve-prestart-hook ran before this hook."
+if [[ -z "$VMID" ]]; then
+    log "ERROR: LXC_NAME is not set."
     exit 1
 fi
 
-if [[ ! -d "${ROOTFS}/etc" ]]; then
-    log "ERROR: ${ROOTFS}/etc missing — rootfs does not look right."
+if [[ ! -f "$COMMON_LIB" ]]; then
+    log "ERROR: ${COMMON_LIB} not found."
+    log "Run ./install.sh on this Proxmox node to install local runtime files."
     exit 1
 fi
+
+# shellcheck source=/dev/null
+source "$COMMON_LIB"
+
+YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
+CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
+CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
+STAGE_DIR="$(proxnix_stage_dir "$VMID")"
+RENDERED_DIR="${STAGE_DIR}/rendered"
+MANAGED_DIR="${RENDERED_DIR}/managed"
+MANAGED_DROPIN_DIR="${MANAGED_DIR}/dropins"
+QUADLET_DIR="${STAGE_DIR}/quadlet"
+SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
+META_DIR="${STAGE_DIR}/meta"
+PVE_CONF="/etc/pve/lxc/${VMID}.conf"
+
+cleanup_stage() {
+    rm -rf "$STAGE_DIR"
+}
+
+trap 'status=$?; if [[ $status -ne 0 ]]; then cleanup_stage; fi; exit $status' EXIT
 
 if [[ ! -f "$YAML_TO_NIX" ]]; then
     log "ERROR: ${YAML_TO_NIX} not found."
@@ -80,132 +65,14 @@ if [[ ! -f "$YAML_TO_NIX" ]]; then
     exit 1
 fi
 
-write_if_changed() {
-    local src="$1" dest="$2" mode="$3"
-    if [[ ! -f "$dest" ]] || ! diff -q "$src" "$dest" >/dev/null 2>&1; then
-        cp "$src" "$dest"
-        chmod "$mode" "$dest"
-        return 0
-    fi
-    return 1
-}
-
-write_text_if_changed() {
-    local content="$1" dest="$2" mode="$3"
-    local tmp
-    local changed=0
-    tmp="$(mktemp /tmp/proxnix-prestart-inline-XXXXXX)"
-    printf '%s' "$content" > "$tmp"
-    if write_if_changed "$tmp" "$dest" "$mode"; then
-        changed=1
-    fi
-    rm -f "$tmp"
-    [[ $changed -eq 1 ]]
-}
-
-hash_tree() {
-    local dir="$1"
-    (
-        cd "$dir" || exit 1
-        find . -type f -print0 \
-            | LC_ALL=C sort -z \
-            | xargs -0 sha256sum \
-            | sha256sum \
-            | awk '{print $1}'
-    )
-}
-
-set_tree_readonly() {
-    local dir="$1"
-    [[ -d "$dir" ]] || return 0
-    find "$dir" -type d -exec chmod 0555 {} +
-    find "$dir" -type f -exec chmod 0444 {} +
-}
-
-remove_missing_matching_files() {
-    local src_dir="$1" dest_dir="$2"
-    shift 2
-    local find_expr=("$@")
-    local changed=1
-    local found=0
-
-    [[ -d "$dest_dir" ]] || return 1
-
-    while IFS= read -r -d '' dest; do
-        found=1
-        local name
-        name="$(basename "$dest")"
-        if [[ ! -f "${src_dir}/${name}" ]]; then
-            rm -f "$dest"
-            log "Removed stale file: ${name}"
-            changed=0
-        fi
-    done < <(find "$dest_dir" -maxdepth 1 -type f "${find_expr[@]}" -print0 2>/dev/null)
-
-    if [[ $found -eq 0 ]]; then
-        return 1
-    fi
-    [[ $changed -eq 0 ]]
-}
-
-remove_stale_secret_files() {
-    local dest_dir="$1"
-    local found=0
-
-    [[ -d "$dest_dir" ]] || return 1
-
-    while IFS= read -r -d '' dest; do
-        found=1
-        local name
-        name="$(basename "$dest")"
-        name="${name%.age}"
-        if [[ -z "${SECRET_SOURCES[$name]+x}" ]]; then
-            rm -f "$dest"
-            log "Removed stale secret file: ${name}"
-        fi
-    done < <(find "$dest_dir" -maxdepth 1 -type f -name '*.age' -print0 2>/dev/null)
-
-    [[ $found -eq 1 ]]
-}
-
-collect_secret_sources() {
-    local src_dir="$1" origin="$2"
-
-    [[ -d "$src_dir" ]] || return 0
-
-    while IFS= read -r -d '' f; do
-        local fname secret_name previous_origin
-        fname="$(basename "$f")"
-        secret_name="${fname%.age}"
-        previous_origin="${SECRET_ORIGINS[$secret_name]:-}"
-
-        if [[ -n "$previous_origin" && "$previous_origin" != "$origin" ]]; then
-            log "Container secret overrides shared secret: ${secret_name}"
-        fi
-
-        SECRET_SOURCES["$secret_name"]="$f"
-        SECRET_ORIGINS["$secret_name"]="$origin"
-    done < <(find "$src_dir" -maxdepth 1 -name '*.age' -print0 2>/dev/null)
-}
-
+cleanup_stage
 mkdir -p \
-    "${ROOTFS}/etc/nixos" \
-    "${ROOTFS}/etc/nixos/managed" \
-    "${ROOTFS}/etc/nixos/managed/dropins" \
-    "${ROOTFS}/etc/proxnix" \
-    "${ROOTFS}/etc/secrets" \
-    "${ROOTFS}/etc/containers/systemd" \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
-chmod 700 "${ROOTFS}/etc/secrets"
+    "$MANAGED_DROPIN_DIR" \
+    "$QUADLET_DIR" \
+    "$SECRETS_STAGE_DIR" \
+    "$META_DIR"
 
-WORKDIR="$(mktemp -d /tmp/proxnix-prestart-XXXXXX)"
-trap 'rm -rf "$WORKDIR"' EXIT
-
-MANAGED_WORKDIR="${WORKDIR}/managed"
-MANAGED_DROPIN_WORKDIR="${MANAGED_WORKDIR}/dropins"
-mkdir -p "$MANAGED_DROPIN_WORKDIR"
-
-for f in configuration.nix base.nix common.nix chezmoi.nix; do
+for f in "${PROXNIX_SHARED_FILES[@]}"; do
     src="${NIXLXC_DIR}/${f}"
     if [[ ! -f "$src" ]]; then
         log "ERROR: missing required shared file: ${src}"
@@ -214,19 +81,17 @@ for f in configuration.nix base.nix common.nix chezmoi.nix; do
     fi
 done
 
-cp "${NIXLXC_DIR}/configuration.nix" "${WORKDIR}/configuration.nix"
-cp "${NIXLXC_DIR}/base.nix"          "${MANAGED_WORKDIR}/base.nix"
-cp "${NIXLXC_DIR}/common.nix"        "${MANAGED_WORKDIR}/common.nix"
-cp "${NIXLXC_DIR}/chezmoi.nix"       "${MANAGED_WORKDIR}/chezmoi.nix"
+cp "${NIXLXC_DIR}/configuration.nix" "${RENDERED_DIR}/configuration.nix"
+cp "${NIXLXC_DIR}/base.nix"          "${MANAGED_DIR}/base.nix"
+cp "${NIXLXC_DIR}/common.nix"        "${MANAGED_DIR}/common.nix"
+cp "${NIXLXC_DIR}/chezmoi.nix"       "${MANAGED_DIR}/chezmoi.nix"
 
-PVE_CONF="/etc/pve/lxc/${VMID}.conf"
-
-ARGS=("--out-dir" "$MANAGED_WORKDIR")
+ARGS=("--out-dir" "$MANAGED_DIR")
 [[ -f "$PVE_CONF"                     ]] && ARGS+=("--pve-conf"     "$PVE_CONF")
 [[ -f "${CONTAINER_DIR}/proxmox.yaml" ]] && ARGS+=("--proxmox-yaml" "${CONTAINER_DIR}/proxmox.yaml")
 [[ -f "${CONTAINER_DIR}/user.yaml"    ]] && ARGS+=("--user-yaml"    "${CONTAINER_DIR}/user.yaml")
 
-log "Generating .nix files (PVE conf: ${PVE_CONF})..."
+log "Rendering desired state (PVE conf: ${PVE_CONF})..."
 if ! python3 "$YAML_TO_NIX" "${ARGS[@]}"; then
     log "ERROR: yaml-to-nix.py failed — check PVE conf and ${CONTAINER_DIR}/*.yaml"
     exit 1
@@ -240,21 +105,16 @@ if [[ -f "$PVE_CONF" ]]; then
     fi
 fi
 
-write_text_if_changed "${VMID}" "${ROOTFS}/etc/proxnix/vmid" "644" >/dev/null || true
-
 DROPIN_DIR="${CONTAINER_DIR}/dropins"
 if [[ -d "$DROPIN_DIR" ]]; then
     while IFS= read -r -d '' f; do
         fname="$(basename "$f")"
         case "$fname" in
             *.nix)
-                cp "$f" "${MANAGED_DROPIN_WORKDIR}/${fname}"
+                cp "$f" "${MANAGED_DROPIN_DIR}/${fname}"
                 ;;
             *.container|*.volume|*.network|*.pod|*.image|*.build)
-                dest="${ROOTFS}/etc/containers/systemd/${fname}"
-                if write_if_changed "$f" "$dest" "644"; then
-                    log "Updated Quadlet drop-in: ${fname}"
-                fi
+                cp "$f" "${QUADLET_DIR}/${fname}"
                 ;;
             *)
                 log "Ignored unknown drop-in type: ${fname}"
@@ -263,40 +123,32 @@ if [[ -d "$DROPIN_DIR" ]]; then
     done < <(find "$DROPIN_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
 fi
 
-remove_missing_matching_files "$DROPIN_DIR" "${ROOTFS}/etc/containers/systemd" \
-    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) || true
+declare -A SECRET_SOURCES=()
+declare -A SECRET_ORIGINS=()
+SHARED_SECRETS_DIR="${NIXLXC_PRIV_DIR}/shared"
+SECRETS_DIR="${CONTAINER_PRIV_DIR}/secrets"
 
-DESIRED_CONFIG_HASH="$(hash_tree "$WORKDIR")"
-CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
+collect_secret_sources "$SHARED_SECRETS_DIR" "shared"
+collect_secret_sources "$SECRETS_DIR" "container"
 
-if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" ]]; then
-    rm -rf "${ROOTFS}/etc/nixos/managed"
-    mkdir -p "${ROOTFS}/etc/nixos/managed"
-    cp "${WORKDIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix"
-    cp -a "${MANAGED_WORKDIR}/." "${ROOTFS}/etc/nixos/managed/"
-    rm -f \
-        "${ROOTFS}/etc/nixos/base.nix" \
-        "${ROOTFS}/etc/nixos/common.nix" \
-        "${ROOTFS}/etc/nixos/chezmoi.nix" \
-        "${ROOTFS}/etc/nixos/proxmox.nix" \
-        "${ROOTFS}/etc/nixos/user.nix"
-    rm -rf "${ROOTFS}/etc/nixos/dropins"
-    set_tree_readonly "${ROOTFS}/etc/nixos/managed"
-    chmod 0444 "${ROOTFS}/etc/nixos/configuration.nix"
-    write_text_if_changed "${DESIRED_CONFIG_HASH}" "${ROOTFS}/etc/proxnix/current-config-hash" "644" >/dev/null || true
-    log "Updated managed NixOS config (hash ${DESIRED_CONFIG_HASH})"
-else
-    log "Managed NixOS config unchanged (hash ${DESIRED_CONFIG_HASH})"
-fi
+for secret_name in "${!SECRET_SOURCES[@]}"; do
+    cp "${SECRET_SOURCES[$secret_name]}" "${SECRETS_STAGE_DIR}/${secret_name}.age"
+done
 
-# This unit is written by the hook instead of base.nix so it already exists
-# on the very first proxnix-managed boot, before any successful rebuild.
-APPLY_CONFIG_UNIT_CONTENT='[Unit]
+DESIRED_CONFIG_HASH="$(proxnix_hash_tree "$RENDERED_DIR")"
+printf '%s' "$DESIRED_CONFIG_HASH" > "${META_DIR}/current-config-hash"
+chmod 0644 "${META_DIR}/current-config-hash"
+printf '%s' "$VMID" > "${META_DIR}/vmid"
+chmod 0644 "${META_DIR}/vmid"
+
+cat > "${META_DIR}/proxnix-apply-config.service" <<'EOF'
+[Unit]
 Description=Apply proxnix-managed NixOS configuration when the managed config hash changes
 ConditionPathExists=/etc/nixos/configuration.nix
 ConditionPathExists=/etc/proxnix/current-config-hash
-After=network-online.target
+After=local-fs.target network-online.target
 Wants=network-online.target
+Before=multi-user.target
 
 [Service]
 Type=oneshot
@@ -306,138 +158,13 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-'
-
-if write_text_if_changed "${APPLY_CONFIG_UNIT_CONTENT}" \
-    "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service" "644"; then
-    log "Updated proxnix-apply-config.service"
-fi
-ln -snf ../proxnix-apply-config.service \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
-rm -f \
-    "${ROOTFS}/etc/systemd/system/proxnix-first-boot-rebuild.service" \
-    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-first-boot-rebuild.service"
-
-SHARED_SECRETS_DIR="${NIXLXC_PRIV_DIR}/shared"
-SECRETS_DIR="${CONTAINER_PRIV_DIR}/secrets"
-SECRET_NAMES=()
-declare -A SECRET_SOURCES=()
-declare -A SECRET_ORIGINS=()
-
-collect_secret_sources "$SHARED_SECRETS_DIR" "shared"
-collect_secret_sources "$SECRETS_DIR" "container"
-
-for secret_name in "${!SECRET_SOURCES[@]}"; do
-    src="${SECRET_SOURCES[$secret_name]}"
-    dest="${ROOTFS}/etc/secrets/${secret_name}.age"
-    if write_if_changed "$src" "$dest" "400"; then
-        log "Updated ${SECRET_ORIGINS[$secret_name]} secret: ${secret_name}"
-    fi
-    SECRET_NAMES+=("$secret_name")
-done
-
-remove_stale_secret_files "${ROOTFS}/etc/secrets" || true
-
-PODMAN_SECRETS_PATH="${ROOTFS}/var/lib/containers/storage/secrets/secrets.json"
-
-python3 - "$ROOTFS" "$VMID" "${SECRET_NAMES[@]+"${SECRET_NAMES[@]}"}" <<'PYEOF'
-import json
-import sys
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-
-rootfs      = Path(sys.argv[1])
-vmid        = sys.argv[2]
-live_names  = set(sys.argv[3:])
-
-SECRETS_JSON = rootfs / "var/lib/containers/storage/secrets/secrets.json"
-IDS_DIR      = rootfs / "etc/secrets/.ids"
-LABEL_KEY    = "proxnix.managed"
-
-DRIVER_OPTS = {
-    "store":  "/etc/age-secret-driver store",
-    "lookup": "/etc/age-secret-driver lookup",
-    "list":   "/etc/age-secret-driver list",
-    "delete": "/etc/age-secret-driver delete",
-}
-
-def make_uuid(vmid: str, name: str) -> str:
-    return uuid.uuid5(uuid.NAMESPACE_DNS, f"proxnix:{vmid}:{name}").hex
-
-IDS_DIR.mkdir(parents=True, exist_ok=True)
-SECRETS_JSON.parent.mkdir(parents=True, exist_ok=True)
-SECRETS_JSON.parent.chmod(0o700)
-
-if SECRETS_JSON.exists():
-    try:
-        data = json.loads(SECRETS_JSON.read_text())
-    except Exception:
-        data = {}
-else:
-    data = {}
-
-if not isinstance(data.get("secrets"), dict):
-    data["secrets"] = {}
-if not isinstance(data.get("nameToID"), dict):
-    data["nameToID"] = {}
-if not isinstance(data.get("idToName"), dict):
-    data["idToName"] = {}
-
-now = datetime.now(timezone.utc).isoformat()
-changed = False
-
-stale_ids = [
-    sid for sid, entry in data["secrets"].items()
-    if isinstance(entry.get("labels"), dict)
-    and entry["labels"].get(LABEL_KEY) == "true"
-    and (entry.get("name") or "") not in live_names
-]
-for sid in stale_ids:
-    name = data["secrets"][sid].get("name", "")
-    del data["secrets"][sid]
-    data["nameToID"].pop(name, None)
-    data["idToName"].pop(sid, None)
-    (IDS_DIR / sid).unlink(missing_ok=True)
-    print(f"[proxnix-prestart][{vmid}] Unregistered removed secret: {name}", file=sys.stderr)
-    changed = True
-
-for name in sorted(live_names):
-    sid = make_uuid(vmid, name)
-    existing = data["secrets"].get(sid, {})
-    created_at = existing.get("createdAt") or now
-
-    entry = {
-        "name": name,
-        "id": sid,
-        "labels": {LABEL_KEY: "true"},
-        "metadata": {},
-        "createdAt": created_at,
-        "updatedAt": now,
-        "driver": "shell",
-        "driverOptions": DRIVER_OPTS,
-    }
-    if data["secrets"].get(sid) != entry:
-        data["secrets"][sid] = entry
-        data["nameToID"][name] = sid
-        data["idToName"][sid] = name
-        changed = True
-
-    ids_file = IDS_DIR / sid
-    if not ids_file.exists() or ids_file.read_text() != name:
-        ids_file.write_text(name)
-        ids_file.chmod(0o640)
-
-if changed:
-    SECRETS_JSON.write_text(json.dumps(data, indent=2) + "\n")
-    SECRETS_JSON.chmod(0o600)
-    print(f"[proxnix-prestart][{vmid}] Podman secrets.json reconciled "
-          f"({len(live_names)} secret(s))", file=sys.stderr)
-PYEOF
+EOF
+chmod 0644 "${META_DIR}/proxnix-apply-config.service"
 
 if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
-    touch "${ROOTFS}/etc/secrets/.bootstrap_done"
+    : > "${META_DIR}/bootstrap_done"
 fi
 
-log "Pre-start deployment complete."
+trap - EXIT
+log "Rendered staged state at ${STAGE_DIR}"
 exit 0

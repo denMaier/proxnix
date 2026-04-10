@@ -63,11 +63,13 @@ action "LXC config files"
 do_rm "$LXC_CONFIG_DIR/nixos.common.conf"
 do_rm "$LXC_CONFIG_DIR/nixos.userns.conf"
 
-action "Pre-start hook"
+action "Lifecycle hooks"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
+do_rm "$LXC_HOOKS_DIR/nixos-proxnix-mount"
 
 action "Local runtime helper"
 do_rm "$PROXNIX_LIB_DIR/yaml-to-nix.py"
+do_rm "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 action "Local admin helper"

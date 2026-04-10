@@ -8,7 +8,7 @@ No Flakes. Static IPs. Key-only SSH. Secrets via age.
 
 ## How it works
 
-A pre-start hook runs on the Proxmox host every time a managed container starts. It writes the host-owned NixOS config into `/etc/nixos/managed/`, keeps the managed files read-only, and updates a config hash when that tree changes. A boot-time `proxnix-apply-config` unit then runs `nixos-rebuild switch` only when the desired hash differs from the last applied hash.
+A pre-start hook runs on the Proxmox host every time a managed container starts and renders the desired guest state under `/run/proxnix/<vmid>/`. A mount hook then copies that rendered state into `/etc/nixos/managed/`, keeps the managed files read-only, and updates a config hash when that tree changes. A boot-time `proxnix-apply-config` unit then runs `nixos-rebuild switch` only when the desired hash differs from the last applied hash.
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
 
@@ -97,7 +97,7 @@ proxnix-doctor --all
 
 ## Secrets
 
-Secrets are age-encrypted files stored on the Proxmox host under `/etc/pve/priv/proxnix/`. The pre-start hook copies them into `/etc/secrets/` inside the container on every start and registers them with Podman's shell driver so `podman run --secret name` works without any manual setup.
+Secrets are age-encrypted files stored on the Proxmox host under `/etc/pve/priv/proxnix/`. The mount hook copies them into `/etc/secrets/` inside the container on every start and registers them with Podman's shell driver so `podman run --secret name` works without any manual setup.
 
 Every `.age` file is encrypted to two recipients: the container's own age public key and your master key. The container's private key never leaves the container; your master key stays off the cluster and is used for recovery or rotation.
 
@@ -159,8 +159,10 @@ The decryption happens in an `ExecStartPre` step; the plaintext lives in a tmpfs
 |------|---------|
 | `/usr/share/lxc/config/nixos.common.conf` | Auto-included for `ostype=nixos`; registers the hook |
 | `/usr/share/lxc/config/nixos.userns.conf` | Unprivileged container overrides |
-| `/usr/share/lxc/hooks/nixos-proxnix-prestart` | The hook — runs on every `pct start` |
+| `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Host render hook — runs on every `pct start` |
+| `/usr/share/lxc/hooks/nixos-proxnix-mount` | Rootfs sync hook — runs during the LXC mount phase |
 | `/usr/local/lib/proxnix/yaml-to-nix.py` | PVE conf + YAML → Nix converter |
+| `/usr/local/lib/proxnix/nixos-proxnix-common.sh` | Shared helper sourced by both hooks |
 | `/usr/local/sbin/proxnix-doctor` | Health checker |
 
 ### Cluster-wide via pmxcfs (`/etc/pve/`)

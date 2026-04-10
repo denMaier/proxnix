@@ -1,0 +1,249 @@
+#!/bin/bash
+# LXC mount hook: copy proxnix's rendered state into the mounted guest rootfs.
+#
+# Consumes the staging directory produced by nixos-proxnix-prestart under
+# /run/proxnix/<vmid>/ and syncs it into the mounted rootfs exposed at
+# $LXC_ROOTFS_MOUNT. This hook is the only proxnix hook that writes into the
+# guest filesystem.
+
+set -uo pipefail
+
+VMID="${LXC_NAME:-}"
+ROOTFS="${LXC_ROOTFS_MOUNT:-}"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
+
+log() { echo "[proxnix-mount][${VMID}] $*" >&2; }
+
+if [[ -z "$VMID" ]]; then
+    log "ERROR: LXC_NAME is not set."
+    exit 1
+fi
+
+if [[ ! -f "$COMMON_LIB" ]]; then
+    log "ERROR: ${COMMON_LIB} not found."
+    log "Run ./install.sh on this Proxmox node to install local runtime files."
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$COMMON_LIB"
+
+STAGE_DIR="$(proxnix_stage_dir "$VMID")"
+RENDERED_DIR="${STAGE_DIR}/rendered"
+MANAGED_DIR="${RENDERED_DIR}/managed"
+QUADLET_DIR="${STAGE_DIR}/quadlet"
+SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
+META_DIR="${STAGE_DIR}/meta"
+APPLY_UNIT_STAGE="${META_DIR}/proxnix-apply-config.service"
+DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${META_DIR}/current-config-hash" 2>/dev/null || true)"
+CURRENT_CONFIG_HASH=""
+needs_managed_sync=0
+
+if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
+    log "ERROR: rootfs mount not accessible."
+    log "  LXC_ROOTFS_MOUNT=${LXC_ROOTFS_MOUNT:-unset}"
+    exit 1
+fi
+
+if [[ ! -d "${ROOTFS}/etc" ]]; then
+    log "ERROR: ${ROOTFS}/etc missing — rootfs does not look right."
+    exit 1
+fi
+
+if [[ ! -d "$STAGE_DIR" ]]; then
+    log "ERROR: staged proxnix state missing at ${STAGE_DIR}."
+    log "Hint: ensure nixos-proxnix-prestart ran successfully before this hook."
+    exit 1
+fi
+
+if [[ ! -f "${RENDERED_DIR}/configuration.nix" || ! -d "$MANAGED_DIR" || -z "$DESIRED_CONFIG_HASH" ]]; then
+    log "ERROR: staged proxnix state is incomplete under ${STAGE_DIR}."
+    exit 1
+fi
+
+mkdir -p \
+    "${ROOTFS}/etc/nixos" \
+    "${ROOTFS}/etc/nixos/managed" \
+    "${ROOTFS}/etc/nixos/managed/dropins" \
+    "${ROOTFS}/etc/proxnix" \
+    "${ROOTFS}/etc/secrets" \
+    "${ROOTFS}/etc/containers/systemd" \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
+chmod 700 "${ROOTFS}/etc/secrets"
+
+CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
+if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" \
+   || ! -f "${ROOTFS}/etc/nixos/configuration.nix" \
+   || ! -d "${ROOTFS}/etc/nixos/managed" ]]; then
+    needs_managed_sync=1
+fi
+
+if [[ $needs_managed_sync -eq 1 ]]; then
+    rm -rf "${ROOTFS}/etc/nixos/managed"
+    mkdir -p "${ROOTFS}/etc/nixos/managed"
+    cp "${RENDERED_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix"
+    cp -a "${MANAGED_DIR}/." "${ROOTFS}/etc/nixos/managed/"
+    rm -f \
+        "${ROOTFS}/etc/nixos/base.nix" \
+        "${ROOTFS}/etc/nixos/common.nix" \
+        "${ROOTFS}/etc/nixos/chezmoi.nix" \
+        "${ROOTFS}/etc/nixos/proxmox.nix" \
+        "${ROOTFS}/etc/nixos/user.nix"
+    rm -rf "${ROOTFS}/etc/nixos/dropins"
+    proxnix_set_tree_readonly "${ROOTFS}/etc/nixos/managed"
+    chmod 0444 "${ROOTFS}/etc/nixos/configuration.nix"
+    log "Updated managed NixOS config (hash ${DESIRED_CONFIG_HASH})"
+else
+    log "Managed NixOS config unchanged (hash ${DESIRED_CONFIG_HASH})"
+fi
+proxnix_write_text_if_changed "${DESIRED_CONFIG_HASH}" "${ROOTFS}/etc/proxnix/current-config-hash" "644" >/dev/null || true
+
+if [[ -f "${META_DIR}/vmid" ]]; then
+    proxnix_write_if_changed "${META_DIR}/vmid" "${ROOTFS}/etc/proxnix/vmid" "644" >/dev/null || true
+fi
+
+if [[ -d "$QUADLET_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        fname="$(basename "$f")"
+        dest="${ROOTFS}/etc/containers/systemd/${fname}"
+        if proxnix_write_if_changed "$f" "$dest" "644"; then
+            log "Updated Quadlet drop-in: ${fname}"
+        fi
+    done < <(find "$QUADLET_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+fi
+
+proxnix_remove_missing_matching_files "$QUADLET_DIR" "${ROOTFS}/etc/containers/systemd" \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) || true
+
+if [[ -d "$SECRETS_STAGE_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        secret_name="$(basename "$f")"
+        dest="${ROOTFS}/etc/secrets/${secret_name}"
+        if proxnix_write_if_changed "$f" "$dest" "400"; then
+            log "Updated secret: ${secret_name%.age}"
+        fi
+    done < <(find "$SECRETS_STAGE_DIR" -maxdepth 1 -type f -name '*.age' -print0 2>/dev/null)
+fi
+
+proxnix_remove_missing_matching_files "$SECRETS_STAGE_DIR" "${ROOTFS}/etc/secrets" \
+    \( -name '*.age' \) || true
+
+if [[ -f "$APPLY_UNIT_STAGE" ]]; then
+    if proxnix_write_if_changed "$APPLY_UNIT_STAGE" "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service" "644"; then
+        log "Updated proxnix-apply-config.service"
+    fi
+fi
+ln -snf ../proxnix-apply-config.service \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
+rm -f \
+    "${ROOTFS}/etc/systemd/system/proxnix-first-boot-rebuild.service" \
+    "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-first-boot-rebuild.service"
+
+python3 - "$ROOTFS" "$VMID" "$SECRETS_STAGE_DIR" <<'PYEOF'
+import json
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+rootfs = Path(sys.argv[1])
+vmid = sys.argv[2]
+secrets_dir = Path(sys.argv[3])
+live_names = {path.stem for path in secrets_dir.glob("*.age")} if secrets_dir.is_dir() else set()
+
+SECRETS_JSON = rootfs / "var/lib/containers/storage/secrets/secrets.json"
+IDS_DIR = rootfs / "etc/secrets/.ids"
+LABEL_KEY = "proxnix.managed"
+
+DRIVER_OPTS = {
+    "store": "/etc/age-secret-driver store",
+    "lookup": "/etc/age-secret-driver lookup",
+    "list": "/etc/age-secret-driver list",
+    "delete": "/etc/age-secret-driver delete",
+}
+
+def make_uuid(vmid: str, name: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_DNS, f"proxnix:{vmid}:{name}").hex
+
+IDS_DIR.mkdir(parents=True, exist_ok=True)
+SECRETS_JSON.parent.mkdir(parents=True, exist_ok=True)
+SECRETS_JSON.parent.chmod(0o700)
+
+if SECRETS_JSON.exists():
+    try:
+        data = json.loads(SECRETS_JSON.read_text())
+    except Exception:
+        data = {}
+else:
+    data = {}
+
+if not isinstance(data.get("secrets"), dict):
+    data["secrets"] = {}
+if not isinstance(data.get("nameToID"), dict):
+    data["nameToID"] = {}
+if not isinstance(data.get("idToName"), dict):
+    data["idToName"] = {}
+
+now = datetime.now(timezone.utc).isoformat()
+changed = False
+
+stale_ids = [
+    sid for sid, entry in data["secrets"].items()
+    if isinstance(entry.get("labels"), dict)
+    and entry["labels"].get(LABEL_KEY) == "true"
+    and (entry.get("name") or "") not in live_names
+]
+for sid in stale_ids:
+    name = data["secrets"][sid].get("name", "")
+    del data["secrets"][sid]
+    data["nameToID"].pop(name, None)
+    data["idToName"].pop(sid, None)
+    (IDS_DIR / sid).unlink(missing_ok=True)
+    print(f"[proxnix-mount][{vmid}] Unregistered removed secret: {name}", file=sys.stderr)
+    changed = True
+
+for name in sorted(live_names):
+    sid = make_uuid(vmid, name)
+    existing = data["secrets"].get(sid, {})
+    created_at = existing.get("createdAt") or now
+
+    entry = {
+        "name": name,
+        "id": sid,
+        "labels": {LABEL_KEY: "true"},
+        "metadata": {},
+        "createdAt": created_at,
+        "updatedAt": now,
+        "driver": "shell",
+        "driverOptions": DRIVER_OPTS,
+    }
+    if data["secrets"].get(sid) != entry:
+        data["secrets"][sid] = entry
+        data["nameToID"][name] = sid
+        data["idToName"][sid] = name
+        changed = True
+
+    ids_file = IDS_DIR / sid
+    if not ids_file.exists() or ids_file.read_text() != name:
+        ids_file.write_text(name)
+        ids_file.chmod(0o640)
+
+if changed:
+    SECRETS_JSON.write_text(json.dumps(data, indent=2) + "\n")
+    SECRETS_JSON.chmod(0o600)
+    print(
+        f"[proxnix-mount][{vmid}] Podman secrets.json reconciled ({len(live_names)} secret(s))",
+        file=sys.stderr,
+    )
+PYEOF
+
+if [[ -f "${META_DIR}/bootstrap_done" ]]; then
+    touch "${ROOTFS}/etc/secrets/.bootstrap_done"
+else
+    rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
+fi
+
+rm -rf "$STAGE_DIR"
+log "Mount-time sync complete."
+exit 0
