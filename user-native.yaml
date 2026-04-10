@@ -1,4 +1,4 @@
-podman: false
+runtime: native
 services:
   jellyfin:
     enable: true

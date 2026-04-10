@@ -16,6 +16,7 @@ set -euo pipefail
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SBIN_DIR="/usr/local/sbin"
 
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
@@ -68,6 +69,9 @@ do_rm "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
 action "Local runtime helper"
 do_rm "$PROXNIX_LIB_DIR/yaml-to-nix.py"
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
+
+action "Local admin helper"
+do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
 
 echo ""
 echo "Done."

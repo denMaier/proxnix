@@ -1,0 +1,332 @@
+#!/bin/bash
+# proxnix-doctor — Best-effort health checks for proxnix-managed NixOS LXCs.
+#
+# Run on a Proxmox host as root.
+#
+# Usage:
+#   proxnix-doctor <vmid> [<vmid> ...]
+#   proxnix-doctor --all
+#
+# Exit codes:
+#   0  all checks passed
+#   1  warnings found, no hard failures
+#   2  one or more hard failures
+
+set -euo pipefail
+
+NIXLXC_DIR="/etc/pve/proxnix"
+NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
+LXC_CONFIG_DIR="/usr/share/lxc/config"
+LXC_HOOKS_DIR="/usr/share/lxc/hooks"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SBIN_DIR="/usr/local/sbin"
+
+warns=0
+fails=0
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  $(basename "$0") <vmid> [<vmid> ...]
+  $(basename "$0") --all
+EOF
+  exit 2
+}
+
+heading() { printf '\n[%s]\n' "$1"; }
+ok()      { printf '  OK    %s\n' "$1"; }
+info()    { printf '  INFO  %s\n' "$1"; }
+warn()    { printf '  WARN  %s\n' "$1"; warns=$((warns + 1)); }
+fail()    { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+
+conf_value() {
+  local conf="$1" key="$2"
+  sed -n "s/^${key}: //p" "$conf" | head -n1
+}
+
+user_yaml_mode() {
+  local user_yaml="$1"
+  if [[ ! -f "$user_yaml" ]]; then
+    printf 'none'
+    return
+  fi
+  local runtime
+  runtime="$(sed -n 's/^[[:space:]]*runtime:[[:space:]]*//p' "$user_yaml" | head -n1 | tr -d '"' | tr -d "'")"
+
+  if grep -Eq '^[[:space:]]*containers:[[:space:]]*$' "$user_yaml"; then
+    printf 'legacy-container'
+    return
+  fi
+
+  case "$runtime" in
+    native)
+      printf 'native'
+      ;;
+    quadlet|oci)
+      printf 'legacy-container'
+      ;;
+    "")
+      if grep -Eq '^[[:space:]]*services:[[:space:]]*$' "$user_yaml"; then
+        printf 'native'
+      else
+        printf 'empty'
+      fi
+      ;;
+    *)
+      printf 'unknown'
+      ;;
+  esac
+}
+
+has_quadlet_dropins() {
+  local dropin_dir="$1"
+  [[ -d "$dropin_dir" ]] || return 1
+
+  find "$dropin_dir" -maxdepth 1 -type f \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
+    | grep -q .
+}
+
+check_guest_quadlet_dropins() {
+  local vmid="$1" dropin_dir="$2"
+  local found=0
+
+  [[ -d "$dropin_dir" ]] || return 0
+
+  while IFS= read -r -d '' host_file; do
+    found=1
+    local base guest_file
+    base="$(basename "$host_file")"
+    guest_file="/etc/containers/systemd/${base}"
+    if pct exec "$vmid" -- test -f "$guest_file" >/dev/null 2>&1; then
+      ok "guest Quadlet present: $guest_file"
+    else
+      fail "guest Quadlet missing: $guest_file"
+    fi
+  done < <(find "$dropin_dir" -maxdepth 1 -type f \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
+    -print0 2>/dev/null)
+
+  [[ $found -eq 1 ]] || info "no Quadlet drop-ins detected"
+}
+
+check_for_legacy_container_yaml() {
+  local user_yaml="$1"
+  local mode
+  mode="$(user_yaml_mode "$user_yaml")"
+  case "$mode" in
+    legacy-container)
+      fail "legacy container definitions found in ${user_yaml}; move them to dropins/*.container files"
+      ;;
+    unknown)
+      fail "unrecognized ${user_yaml}; user.yaml now only supports native services"
+      ;;
+  esac
+}
+
+workload_mode() {
+  local user_yaml="$1" dropin_dir="$2"
+  local yaml_mode
+  yaml_mode="$(user_yaml_mode "$user_yaml")"
+  if has_quadlet_dropins "$dropin_dir"; then
+    printf 'quadlet-dropins'
+  elif [[ "$yaml_mode" == "native" ]]; then
+    printf 'native'
+  elif [[ "$yaml_mode" == "empty" ]]; then
+    printf 'empty'
+  else
+    printf 'baseline'
+  fi
+}
+
+check_host_files() {
+  heading "host"
+  [[ "$(id -u)" -eq 0 ]] || die "must run as root on the Proxmox host"
+  command -v pveversion >/dev/null 2>&1 || die "pveversion not found — is this a Proxmox host?"
+
+  for path in \
+    "$LXC_CONFIG_DIR/nixos.common.conf" \
+      "$LXC_CONFIG_DIR/nixos.userns.conf" \
+      "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
+      "$PROXNIX_LIB_DIR/yaml-to-nix.py" \
+      "$PROXNIX_SBIN_DIR/proxnix-doctor" \
+      "$NIXLXC_DIR/base.nix" \
+    "$NIXLXC_DIR/configuration.nix" \
+    "$NIXLXC_DIR/chezmoi.nix" \
+    "$NIXLXC_PRIV_DIR"
+  do
+    if [[ -e "$path" ]]; then
+      ok "$path present"
+    else
+      fail "$path missing"
+    fi
+  done
+}
+
+check_container() {
+  local vmid="$1"
+  local conf="/etc/pve/lxc/${vmid}.conf"
+  local cdir="${NIXLXC_DIR}/containers/${vmid}"
+  local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
+  local user_yaml="${cdir}/user.yaml"
+  local dropin_dir="${cdir}/dropins"
+  local mode state ostype features ssh_keys
+
+  heading "ct ${vmid}"
+
+  if [[ ! -f "$conf" ]]; then
+    fail "PVE config missing: $conf"
+    return
+  fi
+  ok "PVE config present: $conf"
+
+  ostype="$(conf_value "$conf" ostype)"
+  if [[ "$ostype" == "nixos" ]]; then
+    ok "ostype=nixos"
+  else
+    fail "ostype is '${ostype:-unset}' — proxnix auto-hooking expects nixos"
+  fi
+
+  features="$(conf_value "$conf" features)"
+  check_for_legacy_container_yaml "$user_yaml"
+  mode="$(workload_mode "$user_yaml" "$dropin_dir")"
+  if [[ "$mode" == "quadlet-dropins" && ! "$features" =~ (^|,)nesting=1($|,) ]]; then
+    warn "features: nesting=1 is not enabled; recommended for Quadlet container workloads"
+  elif [[ "$mode" == "quadlet-dropins" ]]; then
+    ok "features include nesting=1"
+  else
+    info "nesting=1 not required for current workload mode"
+  fi
+
+  ssh_keys="$(conf_value "$conf" ssh-public-keys)"
+  if [[ -n "$ssh_keys" ]]; then
+    ok "ssh-public-keys set in PVE config"
+  else
+    warn "no ssh-public-keys in PVE config; add keys there or in ${cdir}/proxmox.yaml"
+  fi
+
+  if [[ -d "$cdir" ]]; then
+    ok "container config dir present: $cdir"
+  else
+    info "no ${cdir}; proxnix will still seed baseline config, but there is no per-container YAML"
+  fi
+
+  if [[ -d "$priv_cdir" ]]; then
+    ok "private container dir present: $priv_cdir"
+  else
+    info "no ${priv_cdir}; no host-side encrypted secrets stored yet"
+  fi
+
+  case "$mode" in
+    quadlet-dropins) info "workload mode: quadlet drop-ins" ;;
+    native) info "workload mode: native services" ;;
+    empty) info "workload mode: empty user.yaml" ;;
+    *) info "workload mode: baseline only" ;;
+  esac
+
+  if ! command -v pct >/dev/null 2>&1; then
+    fail "pct not found"
+    return
+  fi
+
+  state="$(pct status "$vmid" 2>/dev/null | awk '{print $2}')"
+  if [[ -z "$state" ]]; then
+    fail "could not determine container state with pct status"
+    return
+  fi
+  info "state: $state"
+
+  if [[ "$state" != "running" ]]; then
+    info "container not running; skipping in-guest checks"
+    return
+  fi
+
+  for guest_file in \
+    /etc/nixos/base.nix \
+    /etc/nixos/configuration.nix \
+    /etc/nixos/proxmox.nix \
+    /etc/nixos/user.nix \
+    /etc/proxnix/vmid
+  do
+    if pct exec "$vmid" -- test -f "$guest_file" >/dev/null 2>&1; then
+      ok "guest file present: $guest_file"
+    else
+      fail "guest file missing: $guest_file"
+    fi
+  done
+
+  local guest_vmid
+  guest_vmid="$(pct exec "$vmid" -- cat /etc/proxnix/vmid 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$guest_vmid" == "$vmid" ]]; then
+    ok "/etc/proxnix/vmid matches VMID"
+  else
+    fail "/etc/proxnix/vmid is '${guest_vmid:-unset}', expected '${vmid}'"
+  fi
+
+  if pct exec "$vmid" -- test -f /etc/proxnix/first-boot-rebuild.done >/dev/null 2>&1; then
+    ok "first-boot rebuild marker present"
+  else
+    warn "first-boot rebuild marker missing; check: journalctl -u proxnix-first-boot-rebuild -b"
+  fi
+
+  if pct exec "$vmid" -- systemctl is-enabled nixos-config-watcher.path >/dev/null 2>&1; then
+    ok "nixos-config-watcher.path enabled"
+  else
+    warn "nixos-config-watcher.path not enabled"
+  fi
+
+  if pct exec "$vmid" -- systemctl is-active nixos-config-watcher.path >/dev/null 2>&1; then
+    ok "nixos-config-watcher.path active"
+  else
+    warn "nixos-config-watcher.path not active"
+  fi
+
+  if [[ -f "${cdir}/age_pubkey" ]]; then
+    if pct exec "$vmid" -- test -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
+      ok "bootstrap marker present"
+    else
+      warn "host has age_pubkey but guest bootstrap marker is missing; restart the container"
+    fi
+  else
+    info "age bootstrap not completed yet"
+  fi
+
+  if [[ "$mode" == "quadlet-dropins" ]]; then
+    check_guest_quadlet_dropins "$vmid" "$dropin_dir"
+  fi
+}
+
+main() {
+  local targets=()
+
+  if [[ $# -eq 0 ]]; then
+    usage
+  fi
+
+  if [[ "${1:-}" == "--all" ]]; then
+    mapfile -t targets < <(command find /etc/pve/lxc -maxdepth 1 -name '*.conf' -type f -exec basename {} .conf \; | sort -n)
+    [[ ${#targets[@]} -gt 0 ]] || die "no LXC configs found under /etc/pve/lxc"
+  else
+    targets=("$@")
+  fi
+
+  check_host_files
+  for vmid in "${targets[@]}"; do
+    check_container "$vmid"
+  done
+
+  printf '\nSummary: %d fail(s), %d warning(s)\n' "$fails" "$warns"
+  if (( fails > 0 )); then
+    exit 2
+  fi
+  if (( warns > 0 )); then
+    exit 1
+  fi
+}
+
+main "$@"

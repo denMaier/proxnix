@@ -25,6 +25,7 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/usr/share/lxc/config/nixos.userns.conf` | User namespace overrides for unprivileged NixOS LXCs |
 | `/usr/share/lxc/hooks/nixos-proxnix-prestart` | Deploys config, secrets, and drop-ins into the container rootfs on every start |
 | `/usr/local/lib/proxnix/yaml-to-nix.py` | Local YAML→Nix converter runtime |
+| `/usr/local/sbin/proxnix-doctor` | Host-side health checker for proxnix containers |
 
 ### Shared across the cluster (`pmxcfs`)
 
@@ -35,7 +36,7 @@ No Flakes, stdlib-only tooling, static IPs, key-only SSH.
 | `/etc/pve/proxnix/configuration.nix` | Shared NixOS entrypoint replicated via `pmxcfs` |
 | `/etc/pve/proxnix/chezmoi.nix` | Shared chezmoi module replicated via `pmxcfs` |
 | `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` | Optional per-container additions (for example `search_domain` or `ssh_keys`) |
-| `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Optional per-container services config |
+| `/etc/pve/proxnix/containers/<vmid>/user.yaml` | Optional per-container native-services config |
 | `/etc/pve/proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
 | `/etc/pve/proxnix/containers/<vmid>/dropins/` | Optional drop-in files (`.nix` or Quadlet) |
 | `/etc/pve/priv/proxnix/containers/<vmid>/secrets/*.age` | Age-encrypted secret files stored in root-only `pmxcfs` |
@@ -68,27 +69,30 @@ Or import an existing NixOS rootfs tarball manually.
 Create the container in the Proxmox WebUI or with `pct create`, then make sure:
 
 - `ostype` is `nixos` so Proxmox includes `nixos.common.conf` automatically
-- `features: nesting=1` is enabled if you plan to use the default Podman path
+- `features: nesting=1` is enabled if you plan to run container workloads via Quadlet
 - the WebUI hostname, IP, gateway, DNS, and SSH public keys are set the way you want them
 
 `proxnix` will mirror those WebUI-backed settings into generated Nix on first boot. It does **not** patch the creation template itself, and it does **not** keep a reusable root password in sync after creation.
 
-### 3 — Optional per-container YAML config on the host
+### 3 — Optional per-container config on the host
 
 ```bash
 VMID=100
-mkdir -p /etc/pve/proxnix/containers/$VMID
+mkdir -p /etc/pve/proxnix/containers/$VMID/dropins
 
-# Copy and edit the examples from this repo
+# Optional: network extras + native service config
 cp proxmox.yaml /etc/pve/proxnix/containers/$VMID/proxmox.yaml
 cp user.yaml    /etc/pve/proxnix/containers/$VMID/user.yaml
 
-# Edit to match your network and desired services
+# Optional: raw Quadlet files for container workloads
+$EDITOR /etc/pve/proxnix/containers/$VMID/dropins/myapp.container
+
+# Edit to match your network and desired native services
 $EDITOR /etc/pve/proxnix/containers/$VMID/proxmox.yaml
 $EDITOR /etc/pve/proxnix/containers/$VMID/user.yaml
 ```
 
-`proxmox.yaml` is optional if the PVE container config already has the right hostname, IP, gateway, DNS, and SSH public keys.
+`proxmox.yaml` is optional if the PVE container config already has the right hostname, IP, gateway, DNS, and SSH public keys. `user.yaml` is only for native NixOS services. Container workloads live in `dropins/*.container`, `*.network`, `*.volume`, and related Quadlet files.
 
 ### 4 — First boot and first rebuild
 
@@ -139,30 +143,56 @@ From then on, every `pct start 100` will run the proxnix pre-start hook automati
 
 ## Day-to-Day Workflow
 
-**Change networking** (IP, hostname, DNS, SSH public keys):  
+**Change networking** (IP, hostname, DNS, SSH public keys):
 Edit the container in the Proxmox WebUI for fields PVE owns, or use `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml` for extras such as `search_domain` / `ssh_keys`, then restart the container or run `nixos-rebuild switch` manually inside.
 
-**Add/remove a Podman container**:  
-Edit `/etc/pve/proxnix/containers/<vmid>/user.yaml` on the host, then restart the container or run `pct exec <vmid> -- nixos-rebuild switch`.
+**Add/remove a container workload**:
+Edit `/etc/pve/proxnix/containers/<vmid>/dropins/*.container` on the host, then restart the container so the pre-start hook recopies the Quadlet files.
 
-**Switch a container to native services** (Jellyfin, Immich):  
-Set `podman: false` in `user.yaml` and declare the services under the `services:` key.  
+**Run a quick health check**:
+Run `proxnix-doctor <vmid>` on the Proxmox host. Use `proxnix-doctor --all` to scan every LXC.
+
+**Switch a container to native services** (Jellyfin, Immich):
+Set `runtime: native` in `user.yaml` and declare the services under the `services:` key.
 See `user-native.yaml` for the Jellyfin + Immich example.
 
-**Auto-rebuild on config push**:  
+**Auto-rebuild on config push**:
 The `nixos-config-watcher.path` systemd unit inside every container watches  
 `/etc/nixos/proxmox.nix` and `/etc/nixos/user.nix` for modifications.  
 Any write to either file triggers `nixos-rebuild switch` automatically.
 
 ---
 
-## Podman vs. Native Services
+## Workload Sources
 
-### Podman variant (`podman: true` in user.yaml)
+### Container workloads: raw Quadlet drop-ins
 
-Containers are declared via the built-in `virtualisation.oci-containers` NixOS module with the `podman` backend. Secrets are passed through Podman's `--secret` flag, and Docker-compat socket plus container DNS are enabled in `base.nix`. For the full Quadlet spec, use raw `.container` / `.network` / `.volume` drop-ins.
+Container workloads are declared directly as Quadlet files under:
 
-### Native variant (`podman: false` in user.yaml)
+```text
+/etc/pve/proxnix/containers/<vmid>/dropins/
+```
+
+The pre-start hook copies them into:
+
+```text
+/etc/containers/systemd/
+```
+
+inside the guest on every start. This keeps Quadlet as the source of truth and avoids any extra YAML → Nix → Quadlet render step.
+
+### Native services: `user.yaml`
+
+`user.yaml` now only describes native NixOS services. Use:
+
+```yaml
+runtime: native
+services:
+  jellyfin:
+    enable: true
+```
+
+for workloads like Jellyfin or Immich that should run as native services inside the container.
 
 Use this for services that need `/dev/dri` hardware acceleration passthrough (Jellyfin, Immich). Podman is still available from `base.nix` unless you explicitly disable it in `configuration.nix`:
 
@@ -308,7 +338,7 @@ For containers or config that doesn't fit the `user.yaml` schema, place files in
     └── mydata.volume       ← Quadlet volume
 ```
 
-**`.nix` files** are pushed to `/etc/nixos/dropins/` inside the container and auto-imported by `configuration.nix` on every rebuild. Use them for anything expressible in Nix: extra `virtualisation.oci-containers.*` blocks, additional systemd services, package overrides, etc.
+**`.nix` files** are pushed to `/etc/nixos/dropins/` inside the container and auto-imported by `configuration.nix` on every rebuild. Use them for anything expressible in Nix: additional systemd services, service wiring, package overrides, Podman settings, or other host-independent NixOS config.
 
 **Quadlet files** (`.container`, `.volume`, `.network`, `.pod`, `.image`, `.build`) are pushed directly to `/etc/containers/systemd/` inside the container. They are picked up by Podman's `podman-system-generator` on `daemon-reload` — no NixOS rebuild needed. This path gives you the full Quadlet spec:
 
@@ -399,22 +429,61 @@ Services should not write back into `/srv/config`. If a service insists on mutat
 
 | You have | Tool to use |
 |---|---|
-| `docker-compose.yml` | [`compose2nix`](https://github.com/aksiksi/compose2nix) → paste output into a `.nix` drop-in |
-| `podman run …` flags | [`podlet`](https://github.com/containers/podlet) `generate run -- <flags>` → `.container` drop-in |
+| `docker-compose.yml` | [`podlet`](https://github.com/containers/podlet) → Quadlet drop-ins |
+| `podman run …` flags | [`podlet`](https://github.com/containers/podlet) → `.container` drop-in |
 | Existing `.container` Quadlet files | Drop them straight into `dropins/` — no conversion needed |
-| Complex Nix-native Podman config | Use `virtualisation.oci-containers.*` in a `.nix` drop-in |
+| Extra NixOS config around a container | Use a `.nix` drop-in alongside the Quadlet files |
 
 ---
 
-## Why `quadlet-nix` is not bundled
+## Quadlet Drop-in Delivery
 
-Older proxnix revisions fetched `quadlet-nix` from GitHub during evaluation. That made a brand-new container depend on outbound network access and an unpinned remote module before its first managed rebuild could succeed.
+Quadlet files are stored in the shared proxnix tree on the host:
 
-The default stack now avoids any remote module fetch on first boot:
+```text
+/etc/pve/proxnix/containers/<vmid>/dropins/
+```
 
-- `user.yaml` Podman containers use built-in `virtualisation.oci-containers`
-- raw Quadlet files still work through `dropins/*.container`
-- if you want `quadlet-nix`, import and pin it yourself in a `.nix` drop-in
+On every `pct start`, the pre-start hook copies them into:
+
+```text
+/etc/containers/systemd/
+```
+
+inside the guest before PID 1 starts. That means:
+
+- host-side `dropins/*.container` is the declarative source of truth
+- proxnix handles delivery into the guest
+- Quadlet + systemd handle unit generation and execution
+
+---
+
+## Doctor Command
+
+`proxnix-doctor` runs on the Proxmox host and checks both host-side setup and per-container state.
+
+Examples:
+
+```bash
+proxnix-doctor 100
+proxnix-doctor --all
+```
+
+Checks include:
+
+- proxnix host files installed on the node
+- `ostype=nixos`
+- `features: nesting=1` when a container runtime is in use
+- guest files seeded into `/etc/nixos/`
+- first-boot rebuild completion marker
+- `nixos-config-watcher.path` enabled and active
+- guest Quadlet drop-ins copied into `/etc/containers/systemd/` when present
+
+Exit codes:
+
+- `0` — all clear
+- `1` — warnings only
+- `2` — hard failures
 
 ---
 

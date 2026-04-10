@@ -102,6 +102,32 @@ write_text_if_changed() {
     [[ $changed -eq 1 ]]
 }
 
+remove_missing_matching_files() {
+    local src_dir="$1" dest_dir="$2"
+    shift 2
+    local find_expr=("$@")
+    local changed=1
+    local found=0
+
+    [[ -d "$dest_dir" ]] || return 1
+
+    while IFS= read -r -d '' dest; do
+        found=1
+        local name
+        name="$(basename "$dest")"
+        if [[ ! -f "${src_dir}/${name}" ]]; then
+            rm -f "$dest"
+            log "Removed stale file: ${name}"
+            changed=0
+        fi
+    done < <(find "$dest_dir" -maxdepth 1 -type f "${find_expr[@]}" -print0 2>/dev/null)
+
+    if [[ $found -eq 0 ]]; then
+        return 1
+    fi
+    [[ $changed -eq 0 ]]
+}
+
 # ── Ensure target directories exist ───────────────────────────────────────────
 mkdir -p \
     "${ROOTFS}/etc/nixos" \
@@ -207,6 +233,8 @@ if [[ -d "$SECRETS_DIR" ]]; then
         SECRET_NAMES+=("$secret_name")
     done < <(find "$SECRETS_DIR" -maxdepth 1 -name '*.age' -print0 2>/dev/null)
 fi
+
+remove_missing_matching_files "$SECRETS_DIR" "${ROOTFS}/etc/secrets" -name '*.age' || true
 
 # Reconcile Podman's secrets.json and the age shell driver's .ids/ directory.
 #
@@ -351,6 +379,10 @@ if [[ -d "$DROPIN_DIR" ]]; then
         esac
     done < <(find "$DROPIN_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
 fi
+
+remove_missing_matching_files "$DROPIN_DIR" "${ROOTFS}/etc/nixos/dropins" -name '*.nix' || true
+remove_missing_matching_files "$DROPIN_DIR" "${ROOTFS}/etc/containers/systemd" \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) || true
 
 # ── Bootstrap marker ──────────────────────────────────────────────────────────
 # Written once bootstrap.sh has been run (age_pubkey exists on the host).

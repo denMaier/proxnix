@@ -34,6 +34,7 @@ set -euo pipefail
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SBIN_DIR="/usr/local/sbin"
 NIXLXC_DIR="/etc/pve/proxnix"
 NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 
@@ -115,6 +116,11 @@ do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
 
+# ── Local admin helper ────────────────────────────────────────────────────────
+
+action "Local admin helper → $PROXNIX_SBIN_DIR/"
+do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
+
 # ── Shared proxnix files → /etc/pve/{proxnix,priv/proxnix}/ ──────────────────
 # Written on the first node only. pmxcfs replicates these directories to every
 # other cluster node automatically, so subsequent installs skip this section.
@@ -156,9 +162,10 @@ echo "       # Hostname/IP/gateway/DNS/SSH keys from the WebUI are mirrored"
 echo "       # into generated Nix on first boot."
 echo ""
 echo "  3. Optional: add per-container config under $NIXLXC_DIR/containers/<vmid>/"
-echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>"
+echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>/dropins"
 echo "       # proxmox.yaml is optional — use it for search_domain or ssh_keys."
-echo "       # Add user.yaml to declare containers/services."
+echo "       # Add user.yaml only for native NixOS services."
+echo "       # Put Quadlet files in dropins/*.container, *.network, *.volume, ..."
 echo ""
 echo "  4. Start the container — the hook seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"
@@ -169,3 +176,6 @@ echo "       pct exec <vmid> -- journalctl -u proxnix-first-boot-rebuild -b"
 echo ""
 echo "  5. After first boot, bootstrap age encryption for secrets:"
 echo "       $SCRIPT_DIR/bootstrap.sh <vmid>"
+echo ""
+echo "  6. Run health checks anytime:"
+echo "       proxnix-doctor <vmid>"
