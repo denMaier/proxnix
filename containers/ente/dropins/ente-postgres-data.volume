@@ -1,0 +1,5 @@
+[Unit]
+Description=Ente Postgres data volume
+
+[Volume]
+VolumeName=ente-postgres-data

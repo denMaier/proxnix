@@ -1,0 +1,21 @@
+[Unit]
+Description=Ente S3 bucket initializer
+Requires=ente-versitygw.service
+After=ente-versitygw.service
+
+[Container]
+ContainerName=ente-s3-init
+Image=docker.io/amazon/aws-cli:latest
+Network=ente.network
+Secret=ente-s3-user,target=s3_user
+Secret=ente-s3-pass,target=s3_pass
+Volume=/etc/ente/s3-init.sh:/usr/local/bin/ente-s3-init.sh:ro
+Exec=/bin/sh /usr/local/bin/ente-s3-init.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

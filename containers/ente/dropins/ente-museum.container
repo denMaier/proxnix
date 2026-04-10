@@ -1,0 +1,46 @@
+[Unit]
+Description=Ente Museum
+Requires=ente-postgres.service ente-pod.service ente-versitygw.service
+After=ente-postgres.service ente-pod.service ente-versitygw.service
+
+[Container]
+ContainerName=ente-museum
+Image=ghcr.io/ente-io/server:latest
+Pod=ente.pod
+Volume=/etc/ente/museum.yaml:/museum.yaml:ro
+
+Environment=ENTE_DB_PASSWORD=
+Environment=ENTE_S3_B2_EU_CEN_KEY=
+Environment=ENTE_S3_B2_EU_CEN_SECRET=
+Environment=ENTE_S3_WASABI_EU_CENTRAL_2_V3_KEY=
+Environment=ENTE_S3_WASABI_EU_CENTRAL_2_V3_SECRET=
+Environment=ENTE_S3_SCW_EU_FR_V3_KEY=
+Environment=ENTE_S3_SCW_EU_FR_V3_SECRET=
+Environment=ENTE_KEY_ENCRYPTION=
+Environment=ENTE_KEY_HASH=
+Environment=ENTE_JWT_SECRET=
+
+Secret=ente-pg-pass,type=env,target=ENTE_DB_PASSWORD
+Secret=ente-s3-user,type=env,target=ENTE_S3_B2_EU_CEN_KEY
+Secret=ente-s3-pass,type=env,target=ENTE_S3_B2_EU_CEN_SECRET
+Secret=ente-s3-user,type=env,target=ENTE_S3_WASABI_EU_CENTRAL_2_V3_KEY
+Secret=ente-s3-pass,type=env,target=ENTE_S3_WASABI_EU_CENTRAL_2_V3_SECRET
+Secret=ente-s3-user,type=env,target=ENTE_S3_SCW_EU_FR_V3_KEY
+Secret=ente-s3-pass,type=env,target=ENTE_S3_SCW_EU_FR_V3_SECRET
+Secret=ente-museum-key,type=env,target=ENTE_KEY_ENCRYPTION
+Secret=ente-museum-hash,type=env,target=ENTE_KEY_HASH
+Secret=ente-museum-jwt-secret,type=env,target=ENTE_JWT_SECRET
+
+HealthCmd=wget --quiet --tries=1 --spider http://127.0.0.1:8080/ping
+HealthInterval=60s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=120s
+Notify=healthy
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

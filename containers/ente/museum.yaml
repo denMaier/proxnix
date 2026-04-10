@@ -1,0 +1,33 @@
+db:
+  host: ente-postgres
+  port: 5432
+  name: ente_db
+  user: pguser
+
+s3:
+  are_local_buckets: true
+  use_path_style_urls: true
+
+  b2-eu-cen:
+    endpoint: localhost:3200
+    region: eu-central-2
+    bucket: b2-eu-cen
+
+  wasabi-eu-central-2-v3:
+    endpoint: localhost:3200
+    region: eu-central-2
+    bucket: wasabi-eu-central-2-v3
+    compliance: false
+
+  scw-eu-fr-v3:
+    endpoint: localhost:3200
+    region: eu-central-2
+    bucket: scw-eu-fr-v3
+
+apps:
+  public-albums: http://localhost:3002
+  cast: http://localhost:3004
+  public-locker: http://localhost:3005
+  public-paste: http://localhost:3008
+  embed-albums: http://localhost:3006
+  accounts: http://localhost:3001
