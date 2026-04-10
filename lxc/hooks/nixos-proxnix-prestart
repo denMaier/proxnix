@@ -20,6 +20,7 @@
 # hash and runs nixos-rebuild switch only when they differ.
 
 set -uo pipefail
+umask 022  # ensure staged files/dirs are world-readable by the mount hook (runs as subuid)
 
 VMID="${LXC_NAME:-}"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
