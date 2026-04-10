@@ -66,6 +66,11 @@
     unitConfig = {
       ConditionPathExists = "/etc/nixos/configuration.nix";
     };
+    environment = {
+      # nixos-rebuild needs to find nixpkgs; point at root's channel tree which
+      # the bootstrap script populates with nix-channel --add / --update.
+      NIX_PATH = "nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels";
+    };
     serviceConfig = {
       Type = "oneshot";
       StandardOutput = "journal";
@@ -89,6 +94,17 @@
       chmod 644 "$tmp"
       mv "$tmp" /etc/proxnix/applied-config-hash
     '';
+  };
+
+  # ping defaults to cap_net_raw file capability, which requires CAP_SETFCAP to
+  # set on the wrapper binary.  CAP_SETFCAP is not available in unprivileged LXC
+  # containers, causing suid-sgid-wrappers.service to fail.  Use setuid instead.
+  security.wrappers.ping = {
+    source = lib.mkForce "${pkgs.iputils}/bin/ping";
+    setuid = lib.mkForce true;
+    owner = lib.mkForce "root";
+    group = lib.mkForce "root";
+    capabilities = lib.mkForce "";
   };
 
   # Weekly Nix store GC: remove generations older than 7 days

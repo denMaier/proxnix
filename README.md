@@ -65,11 +65,27 @@ $EDITOR /etc/pve/proxnix/containers/$VMID/dropins/myapp.container
 
 ```bash
 pct start 100
-# watch config activation:
-pct exec 100 -- journalctl -fu proxnix-apply-config
 ```
 
-**4. Bootstrap secrets:**
+**4. First-boot bootstrap (once per container):**
+
+The hydra template ships without a nixpkgs channel, so `proxnix-apply-config` cannot run automatically on the very first boot. You need to bootstrap manually:
+
+> **RAM requirement:** NixOS evaluation needs at least **2 GB RAM**. Set this in the container's Resources tab before starting.
+
+```bash
+pct enter 100
+~/proxnix-bootstrap.sh
+```
+
+The script (written by the mount hook) adds the correct nixos channel, updates it, and runs `nixos-rebuild switch`. After it completes the container is fully configured and `proxnix-apply-config` will handle all subsequent config changes automatically on restart.
+
+If you get a permission error on the script, run it explicitly:
+```bash
+bash ~/proxnix-bootstrap.sh
+```
+
+**6. Bootstrap secrets:**
 
 ```bash
 ./bootstrap.sh 100   # extracts the container's age public key

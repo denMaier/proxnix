@@ -242,7 +242,7 @@ fi
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"
 STATE_VERSION="${STATE_VERSION:-25.05}"
 cat > "${ROOTFS}/root/proxnix-bootstrap.sh" << EOF
-#!/bin/bash
+#!/run/current-system/sw/bin/bash
 set -euo pipefail
 source /etc/set-environment
 nix-channel --add https://nixos.org/channels/nixos-${STATE_VERSION} nixos
