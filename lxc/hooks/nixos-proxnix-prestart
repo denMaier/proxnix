@@ -9,6 +9,7 @@
 # What this deploys on every start:
 #   Shared NixOS base files (same for every container):
 #     /etc/pve/proxnix/base.nix          → <rootfs>/etc/nixos/base.nix
+#     /etc/pve/proxnix/common.nix        → <rootfs>/etc/nixos/common.nix
 #     /etc/pve/proxnix/configuration.nix → <rootfs>/etc/nixos/configuration.nix
 #     /etc/pve/proxnix/chezmoi.nix       → <rootfs>/etc/nixos/chezmoi.nix
 #
@@ -42,7 +43,7 @@
 #   chmod +x /usr/share/lxc/hooks/nixos-proxnix-prestart
 #   install -d /usr/local/lib/proxnix /etc/pve/proxnix /etc/pve/priv/proxnix
 #   install -m 755 yaml-to-nix.py /usr/local/lib/proxnix/yaml-to-nix.py
-#   cp base.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
+#   cp base.nix common.nix configuration.nix chezmoi.nix /etc/pve/proxnix/
 
 set -uo pipefail
 
@@ -182,7 +183,7 @@ mkdir -p \
 chmod 700 "${ROOTFS}/etc/secrets"
 
 # ── Deploy shared base NixOS files ────────────────────────────────────────────
-for f in base.nix configuration.nix chezmoi.nix; do
+for f in base.nix common.nix configuration.nix chezmoi.nix; do
     src="${NIXLXC_DIR}/${f}"
     dest="${ROOTFS}/etc/nixos/${f}"
     if [[ ! -f "$src" ]]; then

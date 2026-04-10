@@ -13,6 +13,7 @@ in {
   imports = [
     ./chezmoi.nix
     ./base.nix
+    ./common.nix
     ./proxmox.nix
     ./user.nix
   ] ++ dropins;

@@ -10,7 +10,7 @@
 #   ./install.sh [--dry-run] [--force-shared]
 #
 # --force-shared  overwrite shared pmxcfs content even if it already exists
-#                 (use after upgrading proxnix to push new base.nix etc.)
+#                 (use after upgrading proxnix to push new shared .nix files)
 #
 # Per-node (every cluster node, not replicated):
 #   /usr/share/lxc/config/nixos.common.conf     — auto-included for ostype=nixos
@@ -20,6 +20,7 @@
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
+#   /etc/pve/proxnix/common.nix                 — shared operator baseline
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /etc/pve/proxnix/chezmoi.nix                — chezmoi module
 #   /etc/pve/proxnix/containers/                — per-container config + pubkeys
@@ -136,6 +137,7 @@ else
     do_mkdir "$NIXLXC_DIR"
     do_mkdir "$NIXLXC_PRIV_DIR"
     do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
+    do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
     do_install "$SCRIPT_DIR/chezmoi.nix"       "$NIXLXC_DIR/chezmoi.nix"
     do_mkdir "$NIXLXC_DIR/containers"

@@ -156,6 +156,7 @@ check_host_files() {
       "$PROXNIX_LIB_DIR/yaml-to-nix.py" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
       "$NIXLXC_DIR/base.nix" \
+      "$NIXLXC_DIR/common.nix" \
     "$NIXLXC_DIR/configuration.nix" \
     "$NIXLXC_DIR/chezmoi.nix" \
     "$NIXLXC_PRIV_DIR"
@@ -248,6 +249,7 @@ check_container() {
 
   for guest_file in \
     /etc/nixos/base.nix \
+    /etc/nixos/common.nix \
     /etc/nixos/configuration.nix \
     /etc/nixos/proxmox.nix \
     /etc/nixos/user.nix \

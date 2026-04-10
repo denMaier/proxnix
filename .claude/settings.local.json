@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:wiki.nixos.org)",
+      "WebFetch(domain:nixos.wiki)",
+      "WebSearch",
+      "Bash(ls /Users/denis/Projects/proxnix/lxc/config/nixos*)",
+      "WebFetch(domain:git.proxmox.com)"
+    ]
+  }
+}

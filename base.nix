@@ -12,6 +12,15 @@
   #   proxnix.chezmoi.bootstrapRepo = "git@github.com:you/configs.git";
   proxnix.chezmoi.enable = true;
 
+  # Shared cross-container operator baseline translated from the legacy
+  # Debian/Ansible bootstrap: admin user, SSH hardening, journald caps,
+  # timesync, swappiness, and a few convenience packages.
+  proxnix.common = {
+    enable = true;
+    adminPasswordHashSecretName = "common_admin_password_hash";
+    wheelNeedsPassword = true;
+  };
+
   # Let Proxmox inject network config; we declare it explicitly in proxmox.nix
   proxmoxLXC.manageNetwork = false;
 
@@ -21,21 +30,20 @@
   # fstrim is a no-op in LXC and spams the journal
   services.fstrim.enable = false;
 
+  # pct enter (lxc-attach) creates an interactive non-login shell, so PAM never
+  # runs and /etc/set-environment is never sourced — PATH and NIX_PATH are bare.
+  # Sourcing it from /etc/bashrc fixes this for every interactive bash session
+  # without affecting normal SSH logins (double-sourcing is harmless).
+  programs.bash.interactiveShellInit = ''
+    [ -f /etc/set-environment ] && . /etc/set-environment
+  '';
+
   # These mount units don't exist inside an unprivileged LXC container
   systemd.suppressedSystemUnits = [
     "dev-mqueue.mount"
     "sys-kernel-debug.mount"
     "sys-fs-fuse-connections.mount"
   ];
-
-  # SSH: key-only root login, no passwords
-  services.openssh = {
-    enable = true;
-    settings = {
-      PasswordAuthentication = false;
-      PermitRootLogin = "prohibit-password";
-    };
-  };
 
   # Local DNS caching via systemd-resolved
   services.resolved = {
@@ -115,7 +123,7 @@
           exec /run/current-system/sw/bin/age \
             --decrypt \
             --identity "$IDENTITY" \
-            "$SECRETS_DIR/${name}.age"
+            "$SECRETS_DIR/''${name}.age"
           ;;
         store)
           # Pre-start hook pre-populates .ids/ for all proxnix-managed secrets.
