@@ -242,9 +242,14 @@ in {
           temp_hash="$(mktemp /run/proxnix-admin-password-hash.XXXXXX)"
           trap 'rm -f "$temp_hash"' EXIT
 
-          ${pkgs.age}/bin/age \
+          set -- \
             --decrypt \
-            --identity /etc/age/identity.txt \
+            --identity /etc/age/identity.txt
+          [ -f /etc/age/shared_identity.txt ] && \
+            set -- "$@" --identity /etc/age/shared_identity.txt
+
+          ${pkgs.age}/bin/age \
+            "$@" \
             --output "$temp_hash" \
             /etc/secrets/${cfg.adminPasswordHashSecretName}.age
 
