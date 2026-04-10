@@ -170,30 +170,6 @@
     defaultNetwork.settings.dns_enabled = true;
   };
 
-  # Watch proxmox.nix and user.nix for changes; trigger nixos-rebuild switch
-  # when either file is modified (e.g. after the pre-start hook pushes new config).
-  systemd.paths.nixos-config-watcher = {
-    description = "Watch NixOS config files for changes";
-    wantedBy = [ "multi-user.target" ];
-    pathConfig = {
-      PathModified = [
-        "/etc/nixos/proxmox.nix"
-        "/etc/nixos/user.nix"
-      ];
-    };
-  };
-
-  systemd.services.nixos-config-watcher = {
-    description = "Rebuild NixOS on config file change";
-    # Restart = "no" is correct for a oneshot triggered by a path unit
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "/run/current-system/sw/bin/nixos-rebuild switch";
-      StandardOutput = "journal";
-      StandardError = "journal";
-    };
-  };
-
   # ── Bootstrap reminder ────────────────────────────────────────────────────
   # Shown at every login until bootstrap.sh has been run on the Proxmox host.
   # The pre-start hook writes /etc/secrets/.bootstrap_done once age_pubkey
@@ -215,15 +191,14 @@
   users.motd = ''
 
      ── proxnix ───────────────────────────────────────────────────────────────
-      Config files   /etc/nixos/{proxmox,user,base,chezmoi}.nix
-                     /etc/nixos/dropins/*.nix
+      Config files   /etc/nixos/configuration.nix
+                     /etc/nixos/managed/{base,common,chezmoi,proxmox,user}.nix
+                     /etc/nixos/managed/dropins/*.nix
+                     /etc/nixos/local.nix        optional local override
 
-      Rebuild        automatic on first boot
+      Rebuild        automatic when managed config hash changes
                      nixos-rebuild switch
-                     (watcher fires when proxmox.nix or user.nix changes on
-                      container start)
-      First-boot log journalctl -u proxnix-first-boot-rebuild -b
-      Rebuild log    journalctl -fu nixos-config-watcher
+      Rebuild log    journalctl -u proxnix-apply-config -b
 
      Secrets        podman secret ls
                     podman run --secret NAME …

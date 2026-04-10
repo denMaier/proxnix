@@ -1,22 +1,25 @@
 let
-  # Dynamically import every *.nix file dropped into /etc/nixos/dropins/.
-  # Files are pushed there by the pre-start hook from the host-side dropins/ folder.
-  # The directory may not exist on a brand-new container — that's fine.
-  dropinDir = /etc/nixos/dropins;
+  managedDir = /etc/nixos/managed;
+  dropinDir = managedDir + "/dropins";
+  localOverride = /etc/nixos/local.nix;
   dropins =
     if builtins.pathExists dropinDir
     then map (f: dropinDir + "/${f}")
          (builtins.filter (f: builtins.match ".*\\.nix" f != null)
           (builtins.attrNames (builtins.readDir dropinDir)))
     else [];
+  localImports =
+    if builtins.pathExists localOverride
+    then [ localOverride ]
+    else [];
 in {
   imports = [
-    ./chezmoi.nix
-    ./base.nix
-    ./common.nix
-    ./proxmox.nix
-    ./user.nix
-  ] ++ dropins;
+    (managedDir + "/chezmoi.nix")
+    (managedDir + "/base.nix")
+    (managedDir + "/common.nix")
+    (managedDir + "/proxmox.nix")
+    (managedDir + "/user.nix")
+  ] ++ dropins ++ localImports;
 
   # To disable Podman on a native-services container (Jellyfin, Immich):
   #   virtualisation.podman.enable = lib.mkForce false;

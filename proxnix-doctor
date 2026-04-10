@@ -248,12 +248,14 @@ check_container() {
   fi
 
   for guest_file in \
-    /etc/nixos/base.nix \
-    /etc/nixos/common.nix \
     /etc/nixos/configuration.nix \
-    /etc/nixos/proxmox.nix \
-    /etc/nixos/user.nix \
-    /etc/proxnix/vmid
+    /etc/nixos/managed/base.nix \
+    /etc/nixos/managed/common.nix \
+    /etc/nixos/managed/chezmoi.nix \
+    /etc/nixos/managed/proxmox.nix \
+    /etc/nixos/managed/user.nix \
+    /etc/proxnix/vmid \
+    /etc/proxnix/current-config-hash
   do
     if pct exec "$vmid" -- test -f "$guest_file" >/dev/null 2>&1; then
       ok "guest file present: $guest_file"
@@ -270,22 +272,19 @@ check_container() {
     fail "/etc/proxnix/vmid is '${guest_vmid:-unset}', expected '${vmid}'"
   fi
 
-  if pct exec "$vmid" -- test -f /etc/proxnix/first-boot-rebuild.done >/dev/null 2>&1; then
-    ok "first-boot rebuild marker present"
+  if pct exec "$vmid" -- systemctl is-enabled proxnix-apply-config.service >/dev/null 2>&1; then
+    ok "proxnix-apply-config.service enabled"
   else
-    warn "first-boot rebuild marker missing; check: journalctl -u proxnix-first-boot-rebuild -b"
+    warn "proxnix-apply-config.service not enabled"
   fi
 
-  if pct exec "$vmid" -- systemctl is-enabled nixos-config-watcher.path >/dev/null 2>&1; then
-    ok "nixos-config-watcher.path enabled"
+  local current_hash applied_hash
+  current_hash="$(pct exec "$vmid" -- cat /etc/proxnix/current-config-hash 2>/dev/null | tr -d '\r\n' || true)"
+  applied_hash="$(pct exec "$vmid" -- cat /etc/proxnix/applied-config-hash 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
+    ok "applied managed config hash matches current hash"
   else
-    warn "nixos-config-watcher.path not enabled"
-  fi
-
-  if pct exec "$vmid" -- systemctl is-active nixos-config-watcher.path >/dev/null 2>&1; then
-    ok "nixos-config-watcher.path active"
-  else
-    warn "nixos-config-watcher.path not active"
+    warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config -b"
   fi
 
   if [[ -f "${cdir}/age_pubkey" ]]; then

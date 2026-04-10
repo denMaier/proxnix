@@ -8,7 +8,7 @@ No Flakes. Static IPs. Key-only SSH. Secrets via age.
 
 ## How it works
 
-A pre-start hook runs on the Proxmox host every time a managed container starts. It writes the NixOS config into the container's rootfs before PID 1 starts — so the container always boots with the current config without you SSH-ing in. On first boot a one-shot systemd unit runs `nixos-rebuild switch`. On subsequent boots a path watcher fires a rebuild if `proxmox.nix` or `user.nix` changed.
+A pre-start hook runs on the Proxmox host every time a managed container starts. It writes the host-owned NixOS config into `/etc/nixos/managed/`, keeps the managed files read-only, and updates a config hash when that tree changes. A boot-time `proxnix-apply-config` unit then runs `nixos-rebuild switch` only when the desired hash differs from the last applied hash.
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
 
@@ -65,8 +65,8 @@ $EDITOR /etc/pve/proxnix/containers/$VMID/dropins/myapp.container
 
 ```bash
 pct start 100
-# watch first-boot rebuild:
-pct exec 100 -- journalctl -fu proxnix-first-boot-rebuild
+# watch config activation:
+pct exec 100 -- journalctl -fu proxnix-apply-config
 ```
 
 **4. Bootstrap secrets:**
@@ -85,7 +85,7 @@ Follow the printed encryption command to add your first secrets, then `pct resta
 
 **Add/change a container workload:** edit the Quadlet file in `dropins/` on the host, restart the container.
 
-**Push a NixOS config change:** edit `proxmox.yaml` or `user.yaml` on the host — the pre-start hook writes the change on next start and the path watcher triggers `nixos-rebuild switch` automatically. For ad-hoc changes: SSH in and run `nixos-rebuild switch` directly.
+**Push a NixOS config change:** edit `proxmox.yaml`, `user.yaml`, or host-managed `.nix` files, then restart the container. For ad-hoc guest-only overrides, place them in `/etc/nixos/local.nix` and run `nixos-rebuild switch` manually.
 
 **Health check:**
 ```bash
@@ -181,9 +181,9 @@ The decryption happens in an `ExecStartPre` step; the plaintext lives in a tmpfs
 
 ### Inside each managed container (`/etc/nixos/`)
 
-These are written by the hook on every start — don't edit them by hand.
+`configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/`. `local.nix` is the optional guest-local escape hatch.
 
-`base.nix`, `common.nix`, `configuration.nix`, `chezmoi.nix`, `proxmox.nix` (generated from PVE conf + `proxmox.yaml`), `user.nix` (generated from `user.yaml`), `dropins/*.nix`.
+Inside `/etc/nixos/managed/` the hook writes `base.nix`, `common.nix`, `chezmoi.nix`, `proxmox.nix` (generated from PVE conf + `proxmox.yaml`), `user.nix` (generated from `user.yaml`), and `dropins/*.nix`.
 
 ---
 
