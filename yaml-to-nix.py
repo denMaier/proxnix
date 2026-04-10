@@ -266,6 +266,7 @@ def parse_pve_conf(path):
         gw = params.get('gw')
         if gw and 'gateway' not in data:
             data['gateway'] = gw
+            data['gateway_iface'] = iface['name']
 
         # IPv6 — static, SLAAC, or DHCPv6
         ip6 = params.get('ip6', '')
@@ -282,6 +283,7 @@ def parse_pve_conf(path):
         gw6 = params.get('gw6')
         if gw6 and 'gateway6' not in data:
             data['gateway6'] = gw6
+            data['gateway6_iface'] = iface['name']
 
         interfaces.append(iface)
 
@@ -311,8 +313,10 @@ def generate_proxmox_nix(data):
     hostname      = data.get('hostname')
     dns           = data.get('dns', [])
     search_domain = data.get('search_domain')
-    gateway       = data.get('gateway')
-    gateway6      = data.get('gateway6')
+    gateway        = data.get('gateway')
+    gateway_iface  = data.get('gateway_iface')
+    gateway6       = data.get('gateway6')
+    gateway6_iface = data.get('gateway6_iface')
     ssh_keys      = decode_ssh_public_keys(data.get('ssh_keys', []))
 
     lines = [
@@ -355,9 +359,15 @@ def generate_proxmox_nix(data):
 
         if gateway:
             lines.append("")
-            lines.append(f"  networking.defaultGateway = {nix_str(gateway)};")
+            if gateway_iface:
+                lines.append(f"  networking.defaultGateway = {{ address = {nix_str(gateway)}; interface = {nix_str(gateway_iface)}; }};")
+            else:
+                lines.append(f"  networking.defaultGateway = {nix_str(gateway)};")
         if gateway6:
-            lines.append(f"  networking.defaultGateway6 = {nix_str(gateway6)};")
+            if gateway6_iface:
+                lines.append(f"  networking.defaultGateway6 = {{ address = {nix_str(gateway6)}; interface = {nix_str(gateway6_iface)}; }};")
+            else:
+                lines.append(f"  networking.defaultGateway6 = {nix_str(gateway6)};")
 
     if dns:
         lines.append(f"  networking.nameservers = {nix_str_list(dns)};")
