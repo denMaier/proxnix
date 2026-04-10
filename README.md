@@ -32,11 +32,7 @@ On the first cluster node this creates `/etc/pve/proxnix/` and `/etc/pve/priv/pr
 After install, store your master public key (used for secret recovery):
 
 ```bash
-# SSH public key works:
 ssh-keygen -y -f ~/.ssh/id_ed25519 > /etc/pve/proxnix/master_age_pubkey
-
-# or a dedicated age key:
-age-keygen 2>&1 | grep 'public key' | awk '{print $NF}' > /etc/pve/proxnix/master_age_pubkey
 ```
 
 If you plan to use shared secrets, initialize the shared keypair (once per cluster):
@@ -149,7 +145,7 @@ chmod +x ~/.local/bin/proxnix-secrets
 Create `~/.config/proxnix/config`:
 ```bash
 PROXNIX_HOST=root@proxmox
-PROXNIX_IDENTITY=~/.age/identity.txt   # or ~/.ssh/id_ed25519
+PROXNIX_IDENTITY=~/.config/age/identity.txt   # or ~/.ssh/id_ed25519
 ```
 
 ### Per-container secrets
@@ -166,16 +162,16 @@ proxnix-secrets ls 100                 # list secrets for a container
 
 ### Shared secrets
 
-Encrypted for a single shared age keypair. Any container marked `shared_secrets` can decrypt them — no re-encryption needed when adding new containers.
+Encrypted for a single shared age keypair. Any container with `shared_secrets: true` in its `user.yaml` can decrypt them — no re-encryption needed when adding new containers.
 
 **One-time setup** (already done if you ran `init-shared` after install):
 ```bash
 proxnix-secrets init-shared
 ```
 
-**Mark a container as shared-secrets capable** (on the Proxmox host):
-```bash
-touch /etc/pve/proxnix/containers/100/shared_secrets
+**Mark a container as shared-secrets capable** — add to its `user.yaml`:
+```yaml
+shared_secrets: true
 ```
 The shared private key is deployed to the container automatically on next start.
 
@@ -266,7 +262,6 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 | `proxnix/containers/<vmid>/proxmox.yaml` | Optional network extras and SSH keys |
 | `proxnix/containers/<vmid>/user.yaml` | Native NixOS service config |
 | `proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
-| `proxnix/containers/<vmid>/shared_secrets` | Flag file — grants access to shared secrets |
 | `proxnix/containers/<vmid>/dropins/` | `.nix` fragments and Quadlet files |
 | `priv/proxnix/shared_age_identity.txt` | Private key of the shared secret keypair |
 | `priv/proxnix/shared/*.age` | Shared encrypted secrets |
@@ -279,5 +274,5 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 | Path | Purpose |
 |------|---------|
 | `/etc/age/identity.txt` | Container's own age private key (generated on first boot) |
-| `/etc/age/shared_identity.txt` | Shared age private key (present only if `shared_secrets` flag is set) |
+| `/etc/age/shared_identity.txt` | Shared age private key (present only if `shared_secrets: true` in `user.yaml`) |
 | `/etc/secrets/*.age` | Encrypted secret files (per-container and shared) |

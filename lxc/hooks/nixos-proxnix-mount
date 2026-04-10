@@ -242,6 +242,8 @@ fi
 
 # Deploy or remove the shared age identity for containers with shared_secrets flag.
 if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
+    mkdir -p "${ROOTFS}/etc/age"
+    chmod 700 "${ROOTFS}/etc/age"
     cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/age/shared_identity.txt"
     chmod 600 "${ROOTFS}/etc/age/shared_identity.txt"
     log "Deployed shared age identity"
