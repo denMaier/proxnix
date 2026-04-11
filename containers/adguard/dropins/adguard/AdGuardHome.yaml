@@ -6,7 +6,7 @@ http:
   session_ttl: 720h
 users:
   - name: denis
-    password: __REDACTED_PASSWORD_HASH__
+    password: __PROXNIX_ADGUARD_ADMIN_PASSWORD_HASH__
 auth_attempts: 5
 block_auth_min: 15
 http_proxy: ""
@@ -112,7 +112,7 @@ filters:
     id: 1761558570
 whitelist_filters: []
 user_rules:
-  - '@@||hentaihaven.xxx^'
+  - "@@||hentaihaven.xxx^"
 dhcp:
   enabled: false
   interface_name: ""
@@ -163,13 +163,13 @@ filtering:
     - domain: thinklab.example-network.top
       answer: 192.0.2.13
       enabled: true
-    - domain: '*.example-network.top'
+    - domain: "*.example-network.top"
       answer: 192.0.2.10
       enabled: true
     - domain: example-network.top
       answer: 192.0.2.10
       enabled: true
-    - domain: '*.maieretal.de'
+    - domain: "*.maieretal.de"
       answer: 192.0.2.10
       enabled: true
     - domain: prox.example-network.top
@@ -189,9 +189,6 @@ filtering:
       enabled: true
     - domain: thinklab.maieretal.de
       answer: 192.0.2.13
-      enabled: true
-    - domain: vps.maieretal.de
-      answer: 217.154.162.220
       enabled: true
     - domain: proxyconfig.maieretal.de
       answer: proxy-auto-config-f0x.pages.dev

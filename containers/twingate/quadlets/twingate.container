@@ -1,0 +1,14 @@
+[Container]
+ContainerName=twingate
+Environment=TWINGATE_NETWORK=example-network TWINGATE_LABEL_HOSTNAME=example-host TWINGATE_LABEL_DEPLOYED_BY=docker
+Secret=twingate_access_token,type=env,target=TWINGATE_ACCESS_TOKEN
+Secret=twingate_refresh_token,type=env,target=TWINGATE_REFRESH_TOKEN
+Image=twingate/connector:1
+Network=host
+Pull=always
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

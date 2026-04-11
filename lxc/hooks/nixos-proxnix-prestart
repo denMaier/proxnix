@@ -121,6 +121,12 @@ if [[ -d "$DROPIN_DIR" ]]; then
                 ;;
         esac
     done < <(find "$DROPIN_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+
+    while IFS= read -r -d '' d; do
+        dname="$(basename "$d")"
+        rm -rf "${MANAGED_DROPIN_DIR:?}/${dname}"
+        cp -a "$d" "${MANAGED_DROPIN_DIR}/${dname}"
+    done < <(find "$DROPIN_DIR" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 fi
 
 has_quadlet_units=0
