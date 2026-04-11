@@ -14,15 +14,13 @@ let
     else [];
 in {
   imports = [
-    (managedDir + "/etckeeper.nix")
     (managedDir + "/base.nix")
     (managedDir + "/common.nix")
     (managedDir + "/proxmox.nix")
     (managedDir + "/user.nix")
   ] ++ dropins ++ localImports;
 
-  # To disable Podman on a native-services container (Jellyfin, Immich):
-  #   virtualisation.podman.enable = lib.mkForce false;
+  # Podman is disabled automatically when no Quadlet unit files are staged.
 
   system.stateVersion = "25.05";
 }

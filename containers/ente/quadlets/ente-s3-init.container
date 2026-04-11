@@ -9,7 +9,7 @@ Image=docker.io/amazon/aws-cli:latest
 Network=ente.network
 Secret=ente-s3-user,target=s3_user
 Secret=ente-s3-pass,target=s3_pass
-Volume=/etc/ente/s3-init.sh:/usr/local/bin/ente-s3-init.sh:ro
+Volume=/etc/proxnix/quadlets/s3-init.sh:/usr/local/bin/ente-s3-init.sh:ro
 Exec=/bin/sh /usr/local/bin/ente-s3-init.sh
 
 [Service]

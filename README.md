@@ -2,7 +2,7 @@
 
 NixOS LXC containers on Proxmox, managed from the host.
 
-No Flakes. Static IPs. Key-only SSH. Secrets via age.
+No Flakes. Static IPs. Key-only SSH. Secrets via SOPS + age.
 
 ---
 
@@ -15,7 +15,7 @@ Every time a managed container starts, two hooks run on the Proxmox host:
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
 
-Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service under `/etc/systemd/system.attached/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes.
+Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service under `/etc/systemd/system.attached/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes. Podman is enabled only when top-level Quadlet unit files are present.
 
 ---
 
@@ -67,7 +67,7 @@ pct set <vmid> --ostype nixos
 
 ```bash
 VMID=100
-mkdir -p /etc/pve/proxnix/containers/$VMID/dropins
+mkdir -p /etc/pve/proxnix/containers/$VMID/quadlets
 
 # extras the WebUI can't express (search domain, additional SSH keys):
 cp proxmox.yaml /etc/pve/proxnix/containers/$VMID/proxmox.yaml
@@ -75,8 +75,10 @@ cp proxmox.yaml /etc/pve/proxnix/containers/$VMID/proxmox.yaml
 # native NixOS services (Jellyfin, Immich, ...):
 cp user.yaml /etc/pve/proxnix/containers/$VMID/user.yaml
 
-# Podman workloads — drop raw Quadlet files here:
-$EDITOR /etc/pve/proxnix/containers/$VMID/dropins/myapp.container
+# Podman workloads — drop raw Quadlet files here.
+# Unit files go to /etc/containers/systemd; non-unit config goes to
+# /etc/proxnix/quadlets and is tracked with jj.
+$EDITOR /etc/pve/proxnix/containers/$VMID/quadlets/myapp.container
 ```
 
 **3. Start the container**
@@ -117,9 +119,11 @@ This reads the container's age public key and stores it on the host so you can e
 
 **Change network config / SSH keys:** edit the container in the WebUI (or `proxmox.yaml` for extras), restart the container.
 
-**Add/change a Podman workload:** edit the Quadlet file in `dropins/` on the host, restart the container.
+**Add/change a Podman workload:** edit files under `quadlets/` on the host, restart the container. Inside the guest, proxnix puts Quadlet unit files directly into `/etc/containers/systemd`, while non-unit app config is mirrored into `/etc/proxnix/quadlets` and tracked with `jj`.
 
 **Push a NixOS config change:** edit `user.yaml` or a dropin `.nix` file, then restart the container. The next boot schedules one guarded `nixos-rebuild switch` automatically. For ad-hoc guest-only changes, put them in `/etc/nixos/local.nix` inside the container and run `nixos-rebuild switch` manually.
+
+**Secrets:** manage scalar secrets with `proxnix-secrets`. Native services and Quadlet containers both read from the same staged SOPS-backed store inside the guest.
 
 **Health check:**
 ```bash
@@ -131,7 +135,7 @@ proxnix-doctor --all
 
 ## Secrets
 
-Secrets are age-encrypted files stored on the Proxmox host under `/etc/pve/priv/proxnix/`. The mount hook copies them into `/etc/secrets/` inside the container on every start and registers them with Podman's shell driver so `podman run --secret name` works without any manual setup.
+Secrets are SOPS-encrypted YAML stores under `/etc/pve/priv/proxnix/`. There is one shared store and one optional store per container. On start, proxnix stages the shared and container stores into `/etc/proxnix/secrets/` inside the guest, merges their visible keys for Podman registration, and uses the same `proxnix-secrets` helper for native service extraction.
 
 ### Setup
 
@@ -142,6 +146,8 @@ cp proxnix-secrets ~/.local/bin/
 chmod +x ~/.local/bin/proxnix-secrets
 ```
 
+The guest-side helper is separate: `install.sh` installs `proxnix-secrets-guest` on the Proxmox node, and the mount hook injects it into each managed container as `/usr/local/bin/proxnix-secrets`.
+
 Create `~/.config/proxnix/config`:
 ```bash
 PROXNIX_HOST=root@proxmox
@@ -150,19 +156,19 @@ PROXNIX_IDENTITY=~/.config/age/identity.txt   # or ~/.ssh/id_ed25519
 
 ### Per-container secrets
 
-Encrypted for the container's own age key and your master key. Only that container can decrypt them.
+Encrypted for the container's own age key and your master key. Only that container can decrypt its per-container store.
 
 ```bash
 proxnix-secrets set 100 db_password    # prompt for value, encrypt, push
 proxnix-secrets get 100 db_password    # decrypt and print
 proxnix-secrets rm  100 db_password
-proxnix-secrets rotate 100 db_password # re-encrypt after key rotation
+proxnix-secrets rotate 100             # re-encrypt the container store after key rotation
 proxnix-secrets ls 100                 # list secrets for a container
 ```
 
 ### Shared secrets
 
-Encrypted for a single shared age keypair. Every container receives the shared private key automatically, so any container can decrypt shared secrets. No per-container configuration needed.
+Encrypted for a single shared age keypair and your master key. Every container receives the shared private key automatically, so any container can decrypt shared secrets. Container keys override shared keys with the same name.
 
 **One-time setup** (already done if you ran `init-shared` after install):
 ```bash
@@ -181,7 +187,7 @@ proxnix-secrets ls-shared
 ```bash
 proxnix-secrets rotate-shared
 ```
-This generates a new keypair and re-encrypts all shared secrets. Restart each container to pick up the new key.
+This re-encrypts the shared YAML store for the current shared and master recipients. Restart each container to pick up staged changes.
 
 ### Using secrets
 
@@ -208,7 +214,7 @@ Then reference the path in a dropin `.nix`:
 ```nix
 { ... }: { services.immich.database.passwordFile = "/run/immich-secrets/db_password"; }
 ```
-The decryption happens in an `ExecStartPre` step; the plaintext lives in a tmpfs directory for the service lifetime only.
+The extraction happens in an `ExecStartPre` step through the guest-side `proxnix-secrets` helper; the plaintext lives in a tmpfs directory for the service lifetime only.
 
 ---
 
@@ -252,23 +258,26 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 | `proxnix/base.nix` | Shared baseline pushed into every container |
 | `proxnix/common.nix` | Admin user, SSH hardening, journald, timesyncd |
 | `proxnix/configuration.nix` | NixOS entrypoint (imports base + dropins) |
-| `proxnix/etckeeper.nix` | `/etc` drift tracking module |
 | `proxnix/containers/<vmid>/proxmox.yaml` | Optional network extras and SSH keys |
 | `proxnix/containers/<vmid>/user.yaml` | Native NixOS service config |
 | `proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
-| `proxnix/containers/<vmid>/dropins/` | `.nix` fragments and Quadlet files |
+| `proxnix/containers/<vmid>/dropins/` | Optional `.nix` fragments and legacy flat Quadlet files |
+| `proxnix/containers/<vmid>/quadlets/` | Quadlet unit files and app config synced into the guest |
 | `priv/proxnix/shared_age_identity.txt` | Private key of the shared secret keypair |
-| `priv/proxnix/shared/*.age` | Shared encrypted secrets |
-| `priv/proxnix/containers/<vmid>/secrets/*.age` | Per-container encrypted secrets |
+| `priv/proxnix/shared/secrets.sops.yaml` | Shared encrypted secret store |
+| `priv/proxnix/containers/<vmid>/secrets.sops.yaml` | Per-container encrypted secret store |
 
 ### Inside each managed container
 
-`/etc/nixos/configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/` (`base.nix`, `common.nix`, `etckeeper.nix`, `proxmox.nix`, `user.nix`, `dropins/*.nix`). `/etc/nixos/local.nix` is the optional guest-local escape hatch.
+`/etc/nixos/configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/` (`base.nix`, `common.nix`, `proxmox.nix`, `user.nix`, `dropins/*.nix`). `/etc/nixos/local.nix` is the optional guest-local escape hatch.
 
-Each guest also gets an `etckeeper`-managed `/etc/.git` repo. Proxnix seeds a conservative `.gitignore`: rendered `/etc/nixos/managed` state, proxnix metadata, runtime networking files, host keys, age identities, and encrypted secret payloads stay out of Git; guest-local overrides such as `/etc/nixos/local.nix` and hand-edited service configs remain trackable. Use `etc status`, `etc diff`, `etc add`, and `etc commit -m "..."` inside the container.
+Non-unit Quadlet config is mirrored into `/etc/proxnix/quadlets`, which proxnix initializes as a `jj` repository. Quadlet unit files are copied directly into `/etc/containers/systemd/`.
 
 | Path | Purpose |
 |------|---------|
 | `/etc/age/identity.txt` | Container's own age private key (generated on first boot) |
 | `/etc/age/shared_identity.txt` | Shared age private key (present when `init-shared` has been run) |
-| `/etc/secrets/*.age` | Encrypted secret files (per-container and shared) |
+| `/etc/proxnix/secrets/{shared,container}.sops.yaml` | Staged SOPS secret stores |
+| `/etc/proxnix/quadlets/` | `jj`-tracked app config for Quadlet workloads |
+| `/etc/containers/systemd/` | Quadlet unit files consumed by Podman/systemd |
+| `/etc/secrets/.ids/` | Podman shell-driver UUID to name mappings |

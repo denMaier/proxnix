@@ -1,15 +1,11 @@
 { config, lib, pkgs, ... }:
 
-{
+let
+  jjPackage = if pkgs ? jujutsu then pkgs.jujutsu else pkgs.jj;
+in {
   imports = [
     <nixpkgs/nixos/modules/virtualisation/proxmox-lxc.nix>
   ];
-
-  # Enable etckeeper-backed tracking of guest-local /etc drift on every LXC.
-  # Generated proxnix files, volatile machine state, and secrets are ignored.
-  # Override individual options in a dropin .nix if needed:
-  #   proxnix.etckeeper.remote = "git@github.com:you/container-etc.git";
-  proxnix.etckeeper.enable = true;
 
   # Shared cross-container operator baseline translated from the legacy
   # Debian/Ansible bootstrap: admin user, SSH hardening, journald caps,
@@ -80,115 +76,53 @@
     options = "--delete-older-than 7d";
   };
 
-  # age is used as the Podman shell-driver backend and for native-service
-  # secret decryption.
-  environment.systemPackages = [ pkgs.age ];
+  # sops decrypts the staged YAML secret stores. age still provides the
+  # per-container identity used by SOPS. jj tracks guest-local Quadlet config
+  # under /etc/proxnix/quadlets.
+  environment.systemPackages = [
+    pkgs.age
+    pkgs.sops
+    pkgs.python3Minimal
+    jjPackage
+  ];
 
   # Ensure secret directories exist and generate an age keypair on first boot.
   # /etc/age/identity.txt — private key; never leaves the container
-  # /etc/secrets/         — encrypted .age files pushed by the pre-start hook
+  # /etc/proxnix/secrets/ — staged SOPS YAML stores
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
-  # After every successful nixos-rebuild switch/boot, record the currently
-  # desired config hash as applied so the login hint stays silent until the
-  # next host-side config push changes the hash again.
-  system.activationScripts.proxnix-mark-applied = ''
-    if [ -f /etc/proxnix/current-config-hash ]; then
-      install -m 0644 /etc/proxnix/current-config-hash /etc/proxnix/applied-config-hash
-    fi
-  '';
-
   system.activationScripts.age-setup = ''
-    mkdir -p /etc/age /etc/secrets /etc/secrets/.ids
-    chmod 700 /etc/age /etc/secrets /etc/secrets/.ids
+    mkdir -p /etc/age /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
+    chmod 700 /etc/age /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
     if [ ! -f /etc/age/identity.txt ]; then
       ${pkgs.age}/bin/age-keygen -o /etc/age/identity.txt 2>/dev/null
       chmod 600 /etc/age/identity.txt
     fi
   '';
 
-  # Unified Podman shell-driver dispatcher.
-  #
-  # All four mandatory commands route through this single script:
-  #   list   — scan /etc/secrets/.ids/ and return JSON [{id,name},...}]
-  #   lookup — decrypt /etc/secrets/<name>.age using the container's private key
-  #   store  — write the UUID→name mapping (name is passed as stdin by pre-start hook)
-  #   delete — remove the UUID→name mapping
-  #
-  # Registration convention (pre-start hook):
-  #   printf '%s' "$secret_name" | podman secret create "$secret_name" -
-  # Passing the name as stdin lets store() write the mapping without any
-  # extra pct exec round-trips or flag-quoting concerns.
-  environment.etc."age-secret-driver" = {
-    mode = "0755";
-    text = ''
-      #!/bin/sh
-      CMD="$1"
-      IDS_DIR="/etc/secrets/.ids"
-      IDENTITY="/etc/age/identity.txt"
-      SECRETS_DIR="/etc/secrets"
+  system.activationScripts.proxnix-quadlet-jj = ''
+    mkdir -p /etc/proxnix/quadlets
+    if [ ! -d /etc/proxnix/quadlets/.jj ]; then
+      ${jjPackage}/bin/jj git init --colocate /etc/proxnix/quadlets >/dev/null 2>&1 \
+        || ${jjPackage}/bin/jj init --git /etc/proxnix/quadlets >/dev/null 2>&1 \
+        || true
+    fi
+  '';
 
-      case "$CMD" in
-        list)
-          mkdir -p "$IDS_DIR"
-          printf '['
-          first=1
-          for f in "$IDS_DIR"/*; do
-            [ -f "$f" ] || continue
-            uuid="$(basename "$f")"
-            name="$(cat "$f")"
-            [ "$first" = 1 ] && first=0 || printf ','
-            printf '{"id":"%s","name":"%s"}' "$uuid" "$name"
-          done
-          printf ']\n'
-          ;;
-        lookup)
-          name_file="$IDS_DIR/$SECRET_ID"
-          if [ ! -f "$name_file" ]; then
-            printf 'secret not found: %s\n' "$SECRET_ID" >&2
-            exit 1
-          fi
-          name="$(cat "$name_file")"
-          set -- --decrypt --identity "$IDENTITY"
-          [ -f /etc/age/shared_identity.txt ] && set -- "$@" --identity /etc/age/shared_identity.txt
-          exec /run/current-system/sw/bin/age \
-            "$@" \
-            "$SECRETS_DIR/''${name}.age"
-          ;;
-        store)
-          # Pre-start hook pre-populates .ids/ for all proxnix-managed secrets.
-          # This branch is only reached for secrets created manually inside the
-          # container via `podman secret create`; in that case the name is
-          # passed as stdin.
-          mkdir -p "$IDS_DIR"
-          name="$(cat)"
-          [ -n "$name" ] && printf '%s' "$name" > "$IDS_DIR/$SECRET_ID"
-          ;;
-        delete)
-          rm -f "$IDS_DIR/$SECRET_ID"
-          ;;
-        *)
-          printf 'unknown command: %s\n' "$CMD" >&2
-          exit 1
-          ;;
-      esac
-    '';
-  };
-
-  # Wire the age shell driver as the system-wide Podman secret backend.
-  # The pre-start hook pre-registers all proxnix-managed secrets in Podman's
+  # Wire the proxnix helper as the system-wide Podman secret backend.
+  # The mount hook pre-registers all proxnix-managed secrets in Podman's
   # metadata (secrets.json) so `podman run --secret name` works immediately
   # after container start without any manual `podman secret create` step.
-  environment.etc."containers/containers.conf.d/age-secrets.conf" = {
+  environment.etc."containers/containers.conf.d/proxnix-secrets.conf" = {
     mode = "0644";
     text = ''
       [secrets]
       driver = "shell"
 
       [secrets.opts]
-      list   = "/etc/age-secret-driver list"
-      lookup = "/etc/age-secret-driver lookup"
-      store  = "/etc/age-secret-driver store"
-      delete = "/etc/age-secret-driver delete"
+      list   = "/usr/local/bin/proxnix-secrets podman list"
+      lookup = "/usr/local/bin/proxnix-secrets podman lookup"
+      store  = "/usr/local/bin/proxnix-secrets podman store"
+      delete = "/usr/local/bin/proxnix-secrets podman delete"
     '';
   };
 
@@ -239,9 +173,12 @@
 
      ── proxnix ───────────────────────────────────────────────────────────────
       Config files   /etc/nixos/configuration.nix
-                     /etc/nixos/managed/{base,common,etckeeper,proxmox,user}.nix
+                     /etc/nixos/managed/{base,common,proxmox,user}.nix
                      /etc/nixos/managed/dropins/*.nix
                      /etc/nixos/local.nix        optional local override
+
+     Quadlets       /etc/proxnix/quadlets         jj-tracked config files
+                    /etc/containers/systemd       Quadlet unit files
 
       Rebuild        run manually when managed config hash changes:
                      nixos-rebuild switch

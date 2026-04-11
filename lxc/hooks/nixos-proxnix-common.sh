@@ -7,7 +7,6 @@ PROXNIX_SHARED_FILES=(
     configuration.nix
     base.nix
     common.nix
-    etckeeper.nix
 )
 
 proxnix_stage_dir() {
@@ -83,22 +82,14 @@ proxnix_remove_missing_matching_files() {
     [[ $changed -eq 0 ]]
 }
 
-collect_secret_sources() {
-    local src_dir="$1" origin="$2"
-
-    [[ -d "$src_dir" ]] || return 0
-
-    while IFS= read -r -d '' f; do
-        local fname secret_name previous_origin
-        fname="$(basename "$f")"
-        secret_name="${fname%.age}"
-        previous_origin="${SECRET_ORIGINS[$secret_name]:-}"
-
-        if [[ -n "$previous_origin" && "$previous_origin" != "$origin" ]]; then
-            log "Container secret overrides shared secret: ${secret_name}"
-        fi
-
-        SECRET_SOURCES["$secret_name"]="$f"
-        SECRET_ORIGINS["$secret_name"]="$origin"
-    done < <(find "$src_dir" -maxdepth 1 -name '*.age' -print0 2>/dev/null)
+proxnix_sops_store_keys() {
+    local store="$1"
+    [[ -f "$store" ]] || return 0
+    awk '
+        /^[A-Za-z0-9_.-]+:/ {
+            key=$1
+            sub(/:$/, "", key)
+            if (key != "sops") print key
+        }
+    ' "$store" | sort -u
 }

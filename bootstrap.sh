@@ -11,11 +11,8 @@
 # Usage:
 #   ./bootstrap.sh <vmid>
 #
-# After running, encrypt secrets with:
-#   printf 'mysecretvalue' | age \
-#     -r "$(cat /etc/pve/proxnix/containers/<vmid>/age_pubkey)" \
-#     -r "$(cat /etc/pve/proxnix/master_age_pubkey)" \
-#     -o /etc/pve/priv/proxnix/containers/<vmid>/secrets/mysecret.age
+# After running, manage secrets with:
+#   proxnix-secrets set <vmid> mysecret
 
 set -euo pipefail
 
@@ -49,7 +46,7 @@ if [[ -z "$PUBKEY" ]]; then
 fi
 
 # Store on host for use in encryption commands
-mkdir -p "${NIXLXC_PRIV_DIR}/containers/${VMID}/secrets"
+mkdir -p "${NIXLXC_PRIV_DIR}/containers/${VMID}"
 echo "$PUBKEY" > "${CONTAINER_DIR}/age_pubkey"
 
 echo "Container ${VMID} age public key:"
@@ -57,11 +54,8 @@ echo "  ${PUBKEY}"
 echo "Stored at: ${CONTAINER_DIR}/age_pubkey"
 echo ""
 
-# Build the encryption command
-RECIPIENTS=("-r" "${PUBKEY}")
 if [[ -f "$MASTER_PUBKEY_FILE" ]]; then
   MASTER_PUBKEY="$(cat "$MASTER_PUBKEY_FILE")"
-  RECIPIENTS+=("-r" "${MASTER_PUBKEY}")
   echo "Master public key (${MASTER_PUBKEY_FILE}):"
   echo "  ${MASTER_PUBKEY}"
   echo ""
@@ -72,15 +66,10 @@ else
   echo ""
 fi
 
-echo "Encrypt a secret for this container:"
-RECIP_FLAGS=""
-for r in "${RECIPIENTS[@]}"; do
-  [[ "$r" != "-r" ]] && RECIP_FLAGS+=" -r '${r}'" || true
-done
-echo "  printf 'mysecretvalue' | age${RECIP_FLAGS} \\"
-echo "    -o ${NIXLXC_PRIV_DIR}/containers/${VMID}/secrets/mysecret.age"
+echo "Create or update a secret for this container:"
+echo "  proxnix-secrets set ${VMID} mysecret"
 echo ""
-echo "Then restart the container to push the encrypted file and register"
-echo "the Podman shell-driver secret (the pre-start hook runs automatically)."
+echo "Then restart the container to stage the SOPS YAML store and register"
+echo "the Podman shell-driver secrets (the pre-start hook runs automatically)."
 echo ""
 echo "Shared secrets are available automatically in all containers once proxnix-secrets init-shared has been run."

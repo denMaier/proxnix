@@ -78,9 +78,9 @@ in {
       default = null;
       description = lib.mdDoc ''
         Optional shared proxnix secret name containing a shadow-compatible
-        password hash for the shared operator account. The encrypted secret is
-        expected at `/etc/secrets/<name>.age` and is decrypted locally on boot
-        before being applied.
+        password hash for the shared operator account. The value is read from
+        the staged SOPS-backed proxnix secret store on boot before being
+        applied.
       '';
     };
 
@@ -124,6 +124,9 @@ in {
         git
         curl
         cacert
+        lazyjournal
+        yazi
+        oxker
       ];
       description = lib.mdDoc ''
         Convenience packages installed on every proxnix-managed LXC as part of
@@ -234,7 +237,7 @@ in {
         description = "Apply shared proxnix admin password hash";
         wantedBy = [ "multi-user.target" ];
         after = [ "local-fs.target" ];
-        unitConfig.ConditionPathExists = "/etc/secrets/${cfg.adminPasswordHashSecretName}.age";
+        unitConfig.ConditionPathExists = "/usr/local/bin/proxnix-secrets";
         serviceConfig.Type = "oneshot";
         script = ''
           set -euo pipefail
@@ -242,16 +245,10 @@ in {
           temp_hash="$(mktemp /run/proxnix-admin-password-hash.XXXXXX)"
           trap 'rm -f "$temp_hash"' EXIT
 
-          set -- \
-            --decrypt \
-            --identity /etc/age/identity.txt
-          [ -f /etc/age/shared_identity.txt ] && \
-            set -- "$@" --identity /etc/age/shared_identity.txt
-
-          ${pkgs.age}/bin/age \
-            "$@" \
-            --output "$temp_hash" \
-            /etc/secrets/${cfg.adminPasswordHashSecretName}.age
+          if ! /usr/local/bin/proxnix-secrets get ${lib.escapeShellArg cfg.adminPasswordHashSecretName} > "$temp_hash"; then
+            echo "proxnix-common-admin-password: secret ${cfg.adminPasswordHashSecretName} not available yet, skipping" >&2
+            exit 0
+          fi
 
           hash="$(tr -d '\r\n' < "$temp_hash")"
           if [ -z "$hash" ]; then

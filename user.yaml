@@ -1,5 +1,5 @@
 # user.yaml is only for native NixOS services.
-# For containers, place Quadlet files in containers/<vmid>/dropins/.
+# For containers, place Quadlet files and app config in containers/<vmid>/quadlets/.
 runtime: native
 services:
   jellyfin:

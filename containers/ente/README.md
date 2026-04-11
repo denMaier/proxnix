@@ -3,12 +3,10 @@
 Copy this folder into `/etc/pve/proxnix/containers/<vmid>/` for the target
 container.
 
-- `dropins/*.container`, `*.network`, `*.pod`, and `*.volume` are the raw
-  Quadlets proxnix links into `/etc/containers/systemd/` inside the guest.
-- `dropins/ente-files.nix` writes the checked-in config files into the guest at
-  `/etc/ente/` so the Quadlets can mount them.
-- `museum.yaml` and `s3-init.sh` are the editable source copies that match the
-  generated guest files.
+- `quadlets/*.container`, `*.network`, `*.pod`, and `*.volume` are the raw
+  Quadlets proxnix copies into `/etc/containers/systemd/` inside the guest.
+- `quadlets/museum.yaml` and `quadlets/s3-init.sh` live beside the unit files
+  on the host and are mirrored into `/etc/proxnix/quadlets/` inside the guest.
 
 Create these per-container secrets before starting the stack:
 

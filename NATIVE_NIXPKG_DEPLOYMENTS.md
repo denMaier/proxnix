@@ -87,7 +87,7 @@ Use only when the stable channel is missing a required fix or version.
 
 ### `secrets`
 
-Declares age-encrypted secrets that proxnix decrypts in `ExecStartPre`.
+Declares proxnix secrets that proxnix extracts from the staged SOPS YAML store in `ExecStartPre`.
 
 Example:
 
@@ -106,7 +106,7 @@ If `path` is omitted, proxnix defaults to `/run/<service>-secrets/<secret-name>`
 ## How secrets work for native services
 
 Native service secrets are stored on the host with `proxnix-secrets`.
-At runtime, proxnix decrypts them in an `ExecStartPre` step into a tmpfs-backed `/run/...` path.
+At runtime, proxnix extracts them through the guest-side `proxnix-secrets` helper into a tmpfs-backed `/run/...` path.
 
 Your generated config must then point the service at that file path, either:
 

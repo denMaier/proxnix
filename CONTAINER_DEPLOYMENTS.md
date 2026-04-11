@@ -15,12 +15,14 @@ Do **not** put container definitions in `user.yaml`.
 For a target container VMID, host-side files live at:
 
 - `/etc/pve/proxnix/containers/<vmid>/dropins/`
+- `/etc/pve/proxnix/containers/<vmid>/quadlets/`
 - optional `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`
 - optional `/etc/pve/proxnix/containers/<vmid>/user.yaml` only for native services, not containers
 
 Inside this repo, app templates can live under:
 
-- `containers/<app>/dropins/`
+- `containers/<app>/quadlets/`
+- `containers/<app>/dropins/` for NixOS `.nix` fragments
 - `containers/<app>/README.md`
 - app-specific config files at the root of that app folder
 
@@ -28,7 +30,7 @@ The existing Ente example follows this pattern.
 
 ## Accepted drop-in file types
 
-These files in `dropins/` are copied into `/etc/containers/systemd/` inside the guest:
+These files in `quadlets/` are copied directly into `/etc/containers/systemd/` inside the guest:
 
 - `*.container`
 - `*.volume`
@@ -41,7 +43,7 @@ These files in `dropins/` are imported into NixOS as extra modules:
 
 - `*.nix`
 
-Use `*.nix` drop-ins for guest-side support files when Quadlets need config files to exist at stable paths such as `/etc/<app>/...`.
+Use `*.nix` drop-ins only for NixOS integration. App-specific support config belongs beside the Quadlet unit files on the host and is mirrored into `/etc/proxnix/quadlets/` inside the guest.
 
 ## Recommended structure for a new app template
 
@@ -50,53 +52,39 @@ Create a folder like this in the repo:
 ```text
 containers/<app>/
   README.md
-  dropins/
+  quadlets/
     app.container
     app.network
     app.volume
-    support-files.nix
-  app-config.yaml
+    app-config.yaml
+  dropins/
+    support.nix
   init.sh
 ```
 
-Use the root files as the editable source of truth for humans.
-Use a `dropins/*.nix` file to materialize them inside the guest if the Quadlets need mounted files.
+Use the root files as the editable source of truth for humans. Quadlet unit files go to `/etc/containers/systemd/`; non-unit files are mirrored into the guest's `/etc/proxnix/quadlets/` config tree.
 
 ## How to handle config files
 
-Because proxnix only auto-links Quadlet file types from `dropins/`, arbitrary root files are **not** automatically copied into the guest.
+Because proxnix syncs the full `quadlets/` tree, app-owned config files can live beside the unit files on the host.
 
 Use this pattern:
 
-1. Keep human-editable config files in `containers/<app>/`.
-2. Add a `dropins/<app>-files.nix` module.
-3. In that module, write files into `/etc/<app>/...` with `environment.etc`.
-4. In Quadlets, mount those guest paths with `Volume=/etc/<app>/file:/path/in/container:ro`.
-
-Example pattern:
-
-```nix
-{ ... }:
-{
-  environment.etc."myapp/config.yaml" = {
-    mode = "0644";
-    text = ''
-      key: value
-    '';
-  };
-}
-```
+1. Keep human-editable config files in `containers/<app>/quadlets/`.
+2. Reference app-owned runtime config under `/etc/proxnix/quadlets/<app>/` in the guest.
+3. Track guest-side edits with `jj -R /etc/proxnix/quadlets status`.
+4. In Quadlets, mount those guest paths with `Volume=/etc/proxnix/quadlets/<app>/file:/path/in/container:ro`.
 
 Then in a Quadlet:
 
 ```ini
 [Container]
-Volume=/etc/myapp/config.yaml:/app/config.yaml:ro
+Volume=/etc/proxnix/quadlets/myapp/config.yaml:/app/config.yaml:ro
 ```
 
 ## Secrets model
 
-Secrets are managed on the Proxmox host with `proxnix-secrets` and arrive inside the guest as Podman secrets.
+Secrets are managed on the Proxmox host with `proxnix-secrets`. They are stored in SOPS YAML stores, staged into the guest at boot, and exposed to Quadlets through Podman's shell secret driver.
 
 Use secret names directly in Quadlets, for example:
 

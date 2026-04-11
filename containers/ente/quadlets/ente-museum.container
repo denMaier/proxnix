@@ -7,7 +7,7 @@ After=ente-postgres.service ente-pod.service ente-versitygw.service
 ContainerName=ente-museum
 Image=ghcr.io/ente-io/server:latest
 Pod=ente.pod
-Volume=/etc/ente/museum.yaml:/museum.yaml:ro
+Volume=/etc/proxnix/quadlets/museum.yaml:/museum.yaml:ro
 
 Environment=ENTE_DB_PASSWORD=
 Environment=ENTE_S3_B2_EU_CEN_KEY=

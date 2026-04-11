@@ -185,6 +185,10 @@ def nix_val(v):
         return 'null'
     return nix_str(str(v))
 
+def shell_quote(s):
+    """Return a single-quoted POSIX shell literal."""
+    return "'" + str(s).replace("'", "'\"'\"'") + "'"
+
 def nix_indent(text, spaces=2):
     return textwrap.indent(text, ' ' * spaces)
 
@@ -351,16 +355,18 @@ def secret_name(s):
     return s if isinstance(s, str) else s['name']
 
 
-def age_decrypt_line(name, outpath):
-    """Return a NixOS ExecStartPre string that decrypts one age secret.
+def secret_decrypt_line(name, outpath):
+    """Return a NixOS ExecStartPre string that materializes one proxnix secret.
 
     The leading '+' makes systemd run it as root regardless of the service's
-    User= setting, so it can read /etc/age/identity.txt (mode 600, root only).
+    User= setting, so it can read the staged SOPS store and age identities.
     The output file is written to the service's RuntimeDirectory.
     """
+    script = (
+        f'umask 077; /usr/local/bin/proxnix-secrets get {shell_quote(name)} > {shell_quote(outpath)}'
+    )
     return (
-        f'"+${{pkgs.age}}/bin/age --decrypt --identity /etc/age/identity.txt'
-        f' --output {outpath} /etc/secrets/{name}.age"'
+        f'"+${{pkgs.runtimeShell}} -c {nix_str(script)}"'
     )
 
 
@@ -373,13 +379,13 @@ def generate_user_nix_empty():
 
 
 def emit_service_secrets(lines, svcname, secrets):
-    """Emit tmpfiles + ExecStartPre for native-service age secrets.
+    """Emit tmpfiles + ExecStartPre for native-service proxnix secrets.
 
-    Each secret is decrypted from /etc/secrets/<name>.age into the service's
+    Each secret is extracted from the staged SOPS YAML store into the service's
     RuntimeDirectory (/run/<svcname>-secrets/<name>) at service-start time.
-    The '+' prefix on ExecStartPre runs the command as root so it can read
-    /etc/age/identity.txt (mode 600).  The output file lands in a tmpfs path
-    that is removed when the service stops.
+    The '+' prefix on ExecStartPre runs the command as root so it can read the
+    SOPS age identities. The output file lands in a tmpfs path that is removed
+    when the service stops.
 
     The service is responsible for pointing its config at these paths (e.g.
     services.immich.database.passwordFile). Do that in a dropin .nix file or
@@ -388,13 +394,13 @@ def emit_service_secrets(lines, svcname, secrets):
     if not secrets:
         return
     rtdir = f"/run/{svcname}-secrets"
-    lines.append(f"  # Age-encrypted secrets for {svcname}")
+    lines.append(f"  # Proxnix SOPS-backed secrets for {svcname}")
     lines.append(f'  systemd.tmpfiles.rules = [ "d {rtdir} 0700 root root -" ];')
     lines.append(f'  systemd.services."{svcname}".serviceConfig.ExecStartPre = [')
     for s in secrets:
         name    = secret_name(s)
         outpath = s.get('path', f'{rtdir}/{name}') if isinstance(s, dict) else f'{rtdir}/{name}'
-        lines.append(f"    {age_decrypt_line(name, outpath)}")
+        lines.append(f"    {secret_decrypt_line(name, outpath)}")
     lines.append("  ];")
     lines.append("")
 
@@ -422,7 +428,7 @@ def generate_user_nix_native(data):
       secrets:
         - name: <secret-name>
           path: /run/<name>-secrets/<secret-name>   # optional, default shown
-        → systemd.tmpfiles + ExecStartPre age decrypt
+        → systemd.tmpfiles + ExecStartPre proxnix secret extraction
     """
     services = data.get('services', {}) or {}
 

@@ -12,6 +12,7 @@ umask 022  # ensure files written into the container rootfs have sane default pe
 VMID="${LXC_NAME:-}"
 ROOTFS="${LXC_ROOTFS_MOUNT:-}"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SECRETS_GUEST_BIN="${PROXNIX_LIB_DIR}/proxnix-secrets-guest"
 COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 
 log() { echo "[proxnix-mount][${VMID}] $*" >&2; }
@@ -34,6 +35,8 @@ STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
+QUADLET_ROOT_DIR="${ROOTFS}/etc/proxnix/quadlets"
+QUADLET_SYSTEMD_DIR="${ROOTFS}/etc/containers/systemd"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
 KEYS_STAGE_DIR="${STAGE_DIR}/keys"
 META_DIR="${STAGE_DIR}/meta"
@@ -74,11 +77,20 @@ mkdir -p \
     "${ROOTFS}/etc/nixos/managed" \
     "${ROOTFS}/etc/nixos/managed/dropins" \
     "${ROOTFS}/etc/proxnix" \
+    "${ROOTFS}/etc/proxnix/secrets" \
+    "${QUADLET_ROOT_DIR}" \
     "${ROOTFS}/etc/secrets" \
-    "${ROOTFS}/etc/containers/systemd" \
+    "${ROOTFS}/usr/local/bin" \
+    "${QUADLET_SYSTEMD_DIR}" \
     "${ROOTFS}/etc/systemd/system.attached" \
     "${ROOTFS}/etc/systemd/system.attached/multi-user.target.wants"
-chmod 700 "${ROOTFS}/etc/secrets"
+chmod 700 "${ROOTFS}/etc/proxnix/secrets" "${ROOTFS}/etc/secrets"
+
+if [[ -f "$PROXNIX_SECRETS_GUEST_BIN" ]]; then
+    proxnix_write_if_changed "$PROXNIX_SECRETS_GUEST_BIN" "${ROOTFS}/usr/local/bin/proxnix-secrets" "755" >/dev/null || true
+else
+    log "WARNING: ${PROXNIX_SECRETS_GUEST_BIN} missing; run ./install.sh on this node"
+fi
 
 CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
 if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" \
@@ -95,8 +107,6 @@ if [[ $needs_managed_sync -eq 1 ]]; then
     rm -f \
         "${ROOTFS}/etc/nixos/base.nix" \
         "${ROOTFS}/etc/nixos/common.nix" \
-        "${ROOTFS}/etc/nixos/chezmoi.nix" \
-        "${ROOTFS}/etc/nixos/etckeeper.nix" \
         "${ROOTFS}/etc/nixos/proxmox.nix" \
         "${ROOTFS}/etc/nixos/user.nix"
     rm -rf "${ROOTFS}/etc/nixos/dropins"
@@ -121,6 +131,8 @@ STAMP_FILE="${STAMP_DIR}/apply-config-ran"
 CURRENT_HASH_FILE="/etc/proxnix/current-config-hash"
 APPLIED_HASH_FILE="/etc/proxnix/applied-config-hash"
 ROOT_CHANNEL_DIR="/nix/var/nix/profiles/per-user/root/channels/nixos"
+
+export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
 
 mkdir -p "$STAMP_DIR"
 
@@ -150,15 +162,26 @@ fi
 touch "$STAMP_FILE"
 trap '"'"'status=$?; if [ "$status" -ne 0 ]; then rm -f "$STAMP_FILE"; fi; exit "$status"'"'"' EXIT INT TERM
 
+if [ -z "${XDG_STATE_HOME:-}" ]; then
+    XDG_STATE_HOME="/root/.local/state"
+fi
+export XDG_STATE_HOME
+
 if [ -f /etc/set-environment ]; then
     # shellcheck disable=SC1091
+    # /etc/set-environment is written for login shells, which may rely on
+    # unset XDG variables. Temporarily relax nounset so sourcing cannot abort
+    # before the rebuild starts.
+    set +u
     . /etc/set-environment
+    set -u
 fi
 
 export NIX_PATH="nixpkgs=${ROOT_CHANNEL_DIR}:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels${NIX_PATH:+:$NIX_PATH}"
 
 echo "proxnix-apply-config: hash changed (${applied:-unset} -> ${current}), rebuilding..."
 /run/current-system/sw/bin/nixos-rebuild switch
+install -m 0644 "$CURRENT_HASH_FILE" "$APPLIED_HASH_FILE"
 trap - EXIT INT TERM
 echo "proxnix-apply-config: rebuild complete"
 ' "$PROXNIX_APPLY_CONFIG_RUNNER" "755"; then
@@ -213,30 +236,48 @@ if [[ -e "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-con
 fi
 
 if [[ -d "$QUADLET_DIR" ]]; then
+    find "$QUADLET_ROOT_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name .jj \
+        ! -name .git \
+        -exec rm -rf {} +
+    cp -a "${QUADLET_DIR}/." "$QUADLET_ROOT_DIR/"
+    find "$QUADLET_ROOT_DIR" -type f \
+        \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
+        -delete
+    chmod -R a+rX "$QUADLET_ROOT_DIR"
+
     while IFS= read -r -d '' f; do
         fname="$(basename "$f")"
-        dest="${ROOTFS}/etc/containers/systemd/${fname}"
+        systemd_dest="${QUADLET_SYSTEMD_DIR}/${fname}"
+        dest="$systemd_dest"
         if proxnix_write_if_changed "$f" "$dest" "644"; then
             log "Updated Quadlet drop-in: ${fname}"
         fi
-    done < <(find "$QUADLET_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+    done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \
+        \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
+        -print0 2>/dev/null)
+    log "Synced Quadlet config tree"
 fi
 
-proxnix_remove_missing_matching_files "$QUADLET_DIR" "${ROOTFS}/etc/containers/systemd" \
+proxnix_remove_missing_matching_files "$QUADLET_DIR" "$QUADLET_SYSTEMD_DIR" \
     \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) || true
 
 if [[ -d "$SECRETS_STAGE_DIR" ]]; then
-    while IFS= read -r -d '' f; do
-        secret_name="$(basename "$f")"
-        dest="${ROOTFS}/etc/secrets/${secret_name}"
-        if proxnix_write_if_changed "$f" "$dest" "400"; then
-            log "Updated secret: ${secret_name%.age}"
+    for secret_store in shared.sops.yaml container.sops.yaml; do
+        src="${SECRETS_STAGE_DIR}/${secret_store}"
+        dest="${ROOTFS}/etc/proxnix/secrets/${secret_store}"
+        if [[ -f "$src" ]]; then
+            if proxnix_write_if_changed "$src" "$dest" "400"; then
+                log "Updated secret store: ${secret_store}"
+            fi
+        else
+            rm -f "$dest"
         fi
-    done < <(find "$SECRETS_STAGE_DIR" -maxdepth 1 -type f -name '*.age' -print0 2>/dev/null)
+    done
 fi
 
-proxnix_remove_missing_matching_files "$SECRETS_STAGE_DIR" "${ROOTFS}/etc/secrets" \
-    \( -name '*.age' \) || true
+rm -f "${ROOTFS}/etc/containers/containers.conf.d/age-secrets.conf" 2>/dev/null || true
+find "${ROOTFS}/etc/secrets" -maxdepth 1 -type f -name '*.age' -delete 2>/dev/null || true
 
 
 python3 - "$ROOTFS" "$VMID" "$SECRETS_STAGE_DIR" <<'PYEOF'
@@ -249,17 +290,33 @@ from pathlib import Path
 rootfs = Path(sys.argv[1])
 vmid = sys.argv[2]
 secrets_dir = Path(sys.argv[3])
-live_names = {path.stem for path in secrets_dir.glob("*.age")} if secrets_dir.is_dir() else set()
+
+def top_level_keys(path: Path):
+    if not path.exists():
+        return set()
+    keys = set()
+    for line in path.read_text().splitlines():
+        if not line or line[0].isspace() or ":" not in line:
+            continue
+        key = line.split(":", 1)[0].strip()
+        if key and key != "sops":
+            keys.add(key)
+    return keys
+
+live_names = set()
+if secrets_dir.is_dir():
+    live_names.update(top_level_keys(secrets_dir / "shared.sops.yaml"))
+    live_names.update(top_level_keys(secrets_dir / "container.sops.yaml"))
 
 SECRETS_JSON = rootfs / "var/lib/containers/storage/secrets/secrets.json"
 IDS_DIR = rootfs / "etc/secrets/.ids"
 LABEL_KEY = "proxnix.managed"
 
 DRIVER_OPTS = {
-    "store": "/etc/age-secret-driver store",
-    "lookup": "/etc/age-secret-driver lookup",
-    "list": "/etc/age-secret-driver list",
-    "delete": "/etc/age-secret-driver delete",
+    "store": "/usr/local/bin/proxnix-secrets podman store",
+    "lookup": "/usr/local/bin/proxnix-secrets podman lookup",
+    "list": "/usr/local/bin/proxnix-secrets podman list",
+    "delete": "/usr/local/bin/proxnix-secrets podman delete",
 }
 
 def make_uuid(vmid: str, name: str) -> str:
@@ -357,10 +414,23 @@ STATE_VERSION="${STATE_VERSION:-25.05}"
 cat > "${ROOTFS}/root/proxnix-bootstrap.sh" << EOF
 #!/run/current-system/sw/bin/bash
 set -euo pipefail
-source /etc/set-environment
+export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
+if [ -z "${XDG_STATE_HOME:-}" ]; then
+    XDG_STATE_HOME="/root/.local/state"
+fi
+export XDG_STATE_HOME
+if [ -f /etc/set-environment ]; then
+    # shellcheck disable=SC1091
+    set +u
+    source /etc/set-environment
+    set -u
+fi
 nix-channel --add https://nixos.org/channels/nixos-${STATE_VERSION} nixos
 nix-channel --update
 /run/current-system/sw/bin/nixos-rebuild switch
+if [ -f /etc/proxnix/current-config-hash ]; then
+    install -m 0644 /etc/proxnix/current-config-hash /etc/proxnix/applied-config-hash
+fi
 EOF
 chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"
 

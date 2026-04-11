@@ -20,20 +20,17 @@
 #   /usr/local/lib/proxnix/yaml-to-nix.py       — local runtime helper
 #   /usr/local/lib/proxnix/nixos-proxnix-common.sh
 #                                               — shared hook helper
+#   /usr/local/lib/proxnix/proxnix-secrets-guest
+#                                               — helper injected into guests
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
 #   /etc/pve/proxnix/common.nix                 — shared operator baseline
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
-#   /etc/pve/proxnix/etckeeper.nix              — etckeeper module
 #   /etc/pve/proxnix/containers/                — per-container config + pubkeys
 #   /etc/pve/priv/proxnix/shared/               — shared encrypted secrets
 #   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
 #
-# proxnix-secrets (local workstation tool) has its own install instructions:
-#   cp proxnix-secrets ~/.local/bin/
-#   chmod +x ~/.local/bin/proxnix-secrets
-
 set -euo pipefail
 
 LXC_CONFIG_DIR="/usr/share/lxc/config"
@@ -137,6 +134,8 @@ action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-common.sh" \
            "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" "644"
+do_install "$SCRIPT_DIR/proxnix-secrets-guest" \
+           "$PROXNIX_LIB_DIR/proxnix-secrets-guest" "755"
 
 # ── Local admin helper ────────────────────────────────────────────────────────
 
@@ -167,12 +166,6 @@ else
     do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
     do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
-    do_install "$SCRIPT_DIR/etckeeper.nix"     "$NIXLXC_DIR/etckeeper.nix"
-    if [[ $DRY_RUN -eq 1 ]]; then
-        log "[dry-run] rm -f $NIXLXC_DIR/chezmoi.nix"
-    else
-        rm -f "$NIXLXC_DIR/chezmoi.nix"
-    fi
     do_mkdir "$NIXLXC_DIR/containers"
     do_mkdir "$NIXLXC_PRIV_DIR/shared"
     do_mkdir "$NIXLXC_PRIV_DIR/containers"
@@ -198,10 +191,12 @@ echo "       # Hostname/IP/gateway/DNS/SSH keys from the WebUI are mirrored"
 echo "       # into generated Nix on first boot."
 echo ""
 echo "  3. Optional: add per-container config under $NIXLXC_DIR/containers/<vmid>/"
-echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>/dropins"
+echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>/quadlets"
 echo "       # proxmox.yaml is optional — use it for search_domain or ssh_keys."
 echo "       # Add user.yaml only for native NixOS services."
-echo "       # Put Quadlet files in dropins/*.container, *.network, *.volume, ..."
+echo "       # Put Quadlet files and their app config under quadlets/."
+echo "       # Unit files go to /etc/containers/systemd; app config goes"
+echo "       # to /etc/proxnix/quadlets and is tracked with jj."
 echo ""
 echo "  4. Start the container — pre-start renders state, mount seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"
