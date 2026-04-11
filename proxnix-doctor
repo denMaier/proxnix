@@ -274,13 +274,13 @@ check_container() {
     fail "/etc/proxnix/vmid is '${guest_vmid:-unset}', expected '${vmid}'"
   fi
 
-  if pct exec "$vmid" -- test -f /usr/lib/systemd/system/proxnix-apply-config.service >/dev/null 2>&1; then
+  if pct exec "$vmid" -- test -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
     ok "proxnix-apply-config service present"
   else
     warn "proxnix-apply-config service missing"
   fi
 
-  if pct exec "$vmid" -- test -L /usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
+  if pct exec "$vmid" -- test -L /etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
     ok "proxnix-apply-config.service enabled"
   else
     warn "proxnix-apply-config.service not enabled"

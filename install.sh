@@ -202,7 +202,7 @@ echo "  4. Start the container — pre-start renders state, mount seeds /etc/nix
 echo "       pct start <vmid>"
 echo ""
 echo "       # The mount hook now installs a host-managed service under"
-echo "       # /usr/lib/systemd/system so activation runs automatically when"
+echo "       # /etc/systemd/system.attached so activation runs automatically when"
 echo "       # the managed config hash changes."
 echo "       # Watch it with:"
 echo "       pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b"

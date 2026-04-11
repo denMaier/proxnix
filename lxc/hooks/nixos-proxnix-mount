@@ -76,8 +76,8 @@ mkdir -p \
     "${ROOTFS}/etc/proxnix" \
     "${ROOTFS}/etc/secrets" \
     "${ROOTFS}/etc/containers/systemd" \
-    "${ROOTFS}/usr/lib/systemd/system" \
-    "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants"
+    "${ROOTFS}/etc/systemd/system.attached" \
+    "${ROOTFS}/etc/systemd/system.attached/multi-user.target.wants"
 chmod 700 "${ROOTFS}/etc/secrets"
 
 CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
@@ -164,7 +164,7 @@ echo "proxnix-apply-config: rebuild complete"
     log "Installed runtime rebuild runner"
 fi
 
-PROXNIX_APPLY_CONFIG_SERVICE="${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.service"
+PROXNIX_APPLY_CONFIG_SERVICE="${ROOTFS}/etc/systemd/system.attached/proxnix-apply-config.service"
 if proxnix_write_text_if_changed '[Unit]
 Description=Apply proxnix-managed NixOS config after boot
 Documentation=man:nixos-rebuild(8)
@@ -183,7 +183,7 @@ WantedBy=multi-user.target
     log "Installed runtime rebuild service"
 fi
 
-ln -sfn ../proxnix-apply-config.service "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
+ln -sfn ../proxnix-apply-config.service "${ROOTFS}/etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service"
 
 if [[ -e "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator"
@@ -197,6 +197,12 @@ if [[ -e "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-con
 fi
 if [[ -e "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.service"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
 fi
 if [[ -e "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer" ]]; then
     rm -f "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer"

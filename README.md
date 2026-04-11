@@ -15,7 +15,7 @@ Every time a managed container starts, two hooks run on the Proxmox host:
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
 
-Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service under `/usr/lib/systemd/system/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes.
+Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service under `/etc/systemd/system.attached/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes.
 
 ---
 
