@@ -25,7 +25,7 @@
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
 #   /etc/pve/proxnix/common.nix                 — shared operator baseline
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
-#   /etc/pve/proxnix/chezmoi.nix                — chezmoi module
+#   /etc/pve/proxnix/etckeeper.nix              — etckeeper module
 #   /etc/pve/proxnix/containers/                — per-container config + pubkeys
 #   /etc/pve/priv/proxnix/shared/               — shared encrypted secrets
 #   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
@@ -167,7 +167,12 @@ else
     do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
     do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
     do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
-    do_install "$SCRIPT_DIR/chezmoi.nix"       "$NIXLXC_DIR/chezmoi.nix"
+    do_install "$SCRIPT_DIR/etckeeper.nix"     "$NIXLXC_DIR/etckeeper.nix"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] rm -f $NIXLXC_DIR/chezmoi.nix"
+    else
+        rm -f "$NIXLXC_DIR/chezmoi.nix"
+    fi
     do_mkdir "$NIXLXC_DIR/containers"
     do_mkdir "$NIXLXC_PRIV_DIR/shared"
     do_mkdir "$NIXLXC_PRIV_DIR/containers"

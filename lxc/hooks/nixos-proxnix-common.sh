@@ -7,7 +7,7 @@ PROXNIX_SHARED_FILES=(
     configuration.nix
     base.nix
     common.nix
-    chezmoi.nix
+    etckeeper.nix
 )
 
 proxnix_stage_dir() {

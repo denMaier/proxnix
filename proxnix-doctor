@@ -160,7 +160,7 @@ check_host_files() {
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
     "$NIXLXC_DIR/configuration.nix" \
-    "$NIXLXC_DIR/chezmoi.nix" \
+    "$NIXLXC_DIR/etckeeper.nix" \
     "$NIXLXC_PRIV_DIR"
   do
     if [[ -e "$path" ]]; then
@@ -253,7 +253,7 @@ check_container() {
     /etc/nixos/configuration.nix \
     /etc/nixos/managed/base.nix \
     /etc/nixos/managed/common.nix \
-    /etc/nixos/managed/chezmoi.nix \
+    /etc/nixos/managed/etckeeper.nix \
     /etc/nixos/managed/proxmox.nix \
     /etc/nixos/managed/user.nix \
     /etc/proxnix/vmid \

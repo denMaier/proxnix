@@ -5,12 +5,11 @@
     <nixpkgs/nixos/modules/virtualisation/proxmox-lxc.nix>
   ];
 
-  # Enable chezmoi-based application config management on every LXC.
-  # Source state lives at /var/lib/chezmoi/source (persistent, back it up).
-  # Config root is /srv/config/<app>/.
+  # Enable etckeeper-backed tracking of guest-local /etc drift on every LXC.
+  # Generated proxnix files, volatile machine state, and secrets are ignored.
   # Override individual options in a dropin .nix if needed:
-  #   proxnix.chezmoi.bootstrapRepo = "git@github.com:you/configs.git";
-  proxnix.chezmoi.enable = true;
+  #   proxnix.etckeeper.remote = "git@github.com:you/container-etc.git";
+  proxnix.etckeeper.enable = true;
 
   # Shared cross-container operator baseline translated from the legacy
   # Debian/Ansible bootstrap: admin user, SSH hardening, journald caps,
@@ -240,7 +239,7 @@
 
      ── proxnix ───────────────────────────────────────────────────────────────
       Config files   /etc/nixos/configuration.nix
-                     /etc/nixos/managed/{base,common,chezmoi,proxmox,user}.nix
+                     /etc/nixos/managed/{base,common,etckeeper,proxmox,user}.nix
                      /etc/nixos/managed/dropins/*.nix
                      /etc/nixos/local.nix        optional local override
 
@@ -251,9 +250,9 @@
                     podman run --secret NAME …
                     (managed on host via proxnix-secrets; auto-registered here)
 
-     App config     cfg diff            review drift vs /srv/config/
-                    cfg apply           apply source state to /srv/config/
-                    cfg apply --dry-run preview without writing
+     /etc drift     etc status          review guest-local /etc changes
+                    etc diff            inspect pending diffs
+                    etc commit -m ...   save an operator snapshot
 
       Containers     podman ps -a
                      podman logs -f NAME

@@ -252,7 +252,7 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 | `proxnix/base.nix` | Shared baseline pushed into every container |
 | `proxnix/common.nix` | Admin user, SSH hardening, journald, timesyncd |
 | `proxnix/configuration.nix` | NixOS entrypoint (imports base + dropins) |
-| `proxnix/chezmoi.nix` | App-config management module |
+| `proxnix/etckeeper.nix` | `/etc` drift tracking module |
 | `proxnix/containers/<vmid>/proxmox.yaml` | Optional network extras and SSH keys |
 | `proxnix/containers/<vmid>/user.yaml` | Native NixOS service config |
 | `proxnix/containers/<vmid>/age_pubkey` | Container's age public key (written by `bootstrap.sh`) |
@@ -263,7 +263,9 @@ printf '$6$...' | proxnix-secrets set-shared common_admin_password_hash
 
 ### Inside each managed container
 
-`/etc/nixos/configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/` (`base.nix`, `common.nix`, `chezmoi.nix`, `proxmox.nix`, `user.nix`, `dropins/*.nix`). `/etc/nixos/local.nix` is the optional guest-local escape hatch.
+`/etc/nixos/configuration.nix` is host-managed and imports the read-only tree under `/etc/nixos/managed/` (`base.nix`, `common.nix`, `etckeeper.nix`, `proxmox.nix`, `user.nix`, `dropins/*.nix`). `/etc/nixos/local.nix` is the optional guest-local escape hatch.
+
+Each guest also gets an `etckeeper`-managed `/etc/.git` repo. Proxnix seeds a conservative `.gitignore`: rendered `/etc/nixos/managed` state, proxnix metadata, runtime networking files, host keys, age identities, and encrypted secret payloads stay out of Git; guest-local overrides such as `/etc/nixos/local.nix` and hand-edited service configs remain trackable. Use `etc status`, `etc diff`, `etc add`, and `etc commit -m "..."` inside the container.
 
 | Path | Purpose |
 |------|---------|

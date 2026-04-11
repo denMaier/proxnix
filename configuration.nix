@@ -14,7 +14,7 @@ let
     else [];
 in {
   imports = [
-    (managedDir + "/chezmoi.nix")
+    (managedDir + "/etckeeper.nix")
     (managedDir + "/base.nix")
     (managedDir + "/common.nix")
     (managedDir + "/proxmox.nix")

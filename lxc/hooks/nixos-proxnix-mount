@@ -96,6 +96,7 @@ if [[ $needs_managed_sync -eq 1 ]]; then
         "${ROOTFS}/etc/nixos/base.nix" \
         "${ROOTFS}/etc/nixos/common.nix" \
         "${ROOTFS}/etc/nixos/chezmoi.nix" \
+        "${ROOTFS}/etc/nixos/etckeeper.nix" \
         "${ROOTFS}/etc/nixos/proxmox.nix" \
         "${ROOTFS}/etc/nixos/user.nix"
     rm -rf "${ROOTFS}/etc/nixos/dropins"

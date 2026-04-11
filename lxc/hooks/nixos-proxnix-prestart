@@ -9,7 +9,7 @@
 # state under /run/proxnix/<vmid>/ for the matching mount hook to copy into the
 # mounted rootfs:
 #   rendered/configuration.nix
-#   rendered/managed/{base,common,chezmoi,proxmox,user}.nix
+#   rendered/managed/{base,common,etckeeper,proxmox,user}.nix
 #   rendered/managed/dropins/*.nix
 #   quadlet/*.{container,volume,network,pod,image,build}
 #   secrets/*.age
@@ -88,7 +88,7 @@ done
 cp "${NIXLXC_DIR}/configuration.nix" "${RENDERED_DIR}/configuration.nix"
 cp "${NIXLXC_DIR}/base.nix"          "${MANAGED_DIR}/base.nix"
 cp "${NIXLXC_DIR}/common.nix"        "${MANAGED_DIR}/common.nix"
-cp "${NIXLXC_DIR}/chezmoi.nix"       "${MANAGED_DIR}/chezmoi.nix"
+cp "${NIXLXC_DIR}/etckeeper.nix"     "${MANAGED_DIR}/etckeeper.nix"
 
 ARGS=("--out-dir" "$MANAGED_DIR")
 [[ -f "$PVE_CONF"                     ]] && ARGS+=("--pve-conf"     "$PVE_CONF")
