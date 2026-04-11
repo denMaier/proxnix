@@ -15,7 +15,7 @@ Every time a managed container starts, two hooks run on the Proxmox host:
 
 Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox container config and turned into a `proxmox.nix` by `yaml-to-nix.py`. You set these in the WebUI; proxnix mirrors them into Nix.
 
-Inside the container, a `proxnix-apply-config` unit runs `nixos-rebuild switch` automatically on restart whenever the managed config hash changes.
+Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service/timer under `/usr/lib/systemd/system/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes.
 
 ---
 
@@ -96,7 +96,7 @@ pct enter 100
 ~/proxnix-bootstrap.sh
 ```
 
-The script adds the correct nixos channel, updates it, and runs `nixos-rebuild switch`. After it completes the container is fully configured and subsequent config changes are applied automatically on restart.
+The script adds the correct nixos channel, updates it, and runs `nixos-rebuild switch`. After it completes the container is fully configured and subsequent config changes are applied automatically on the next container boot.
 
 If you get a permission error on the script, run it explicitly:
 ```bash
@@ -119,7 +119,7 @@ This reads the container's age public key and stores it on the host so you can e
 
 **Add/change a Podman workload:** edit the Quadlet file in `dropins/` on the host, restart the container.
 
-**Push a NixOS config change:** edit `user.yaml` or a dropin `.nix` file, then restart the container. For ad-hoc guest-only changes, put them in `/etc/nixos/local.nix` inside the container and run `nixos-rebuild switch` manually.
+**Push a NixOS config change:** edit `user.yaml` or a dropin `.nix` file, then restart the container. The next boot schedules one guarded `nixos-rebuild switch` automatically. For ad-hoc guest-only changes, put them in `/etc/nixos/local.nix` inside the container and run `nixos-rebuild switch` manually.
 
 **Health check:**
 ```bash

@@ -219,14 +219,16 @@
 
   # ── Config-drift reminder ─────────────────────────────────────────────────
   # Shown at every login when the managed config pushed by the pre-start hook
-  # differs from the last applied generation, so the operator knows to rebuild.
+  # differs from the last applied generation, so the operator knows the next
+  # container restart will auto-apply it or that they can rebuild manually.
   environment.etc."profile.d/proxnix-rebuild-hint.sh" = {
     mode = "0644";
     text = ''
       _current="$(cat /etc/proxnix/current-config-hash 2>/dev/null || true)"
       _applied="$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true)"
       if [ -n "$_current" ] && [ "$_current" != "$_applied" ]; then
-        printf '\n  proxnix: managed config has changed — run to apply:\n'
+        printf '\n  proxnix: managed config has changed — restart the container to auto-apply,\n'
+        printf '           or run manually:\n'
         printf '    nixos-rebuild switch\n\n'
       fi
       unset _current _applied
