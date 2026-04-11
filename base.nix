@@ -86,6 +86,11 @@ in {
     jjPackage
   ];
 
+  environment.variables = {
+    SOPS_AGE_KEY_FILE = "/etc/proxnix/secrets/age-keys.txt";
+    PROXNIX_GUEST_SECRET_DIR = "/etc/proxnix/secrets";
+  };
+
   # Ensure secret directories exist and generate an age keypair on first boot.
   # /etc/age/identity.txt — private key; never leaves the container
   # /etc/proxnix/secrets/ — staged SOPS YAML stores
@@ -97,6 +102,14 @@ in {
       ${pkgs.age}/bin/age-keygen -o /etc/age/identity.txt 2>/dev/null
       chmod 600 /etc/age/identity.txt
     fi
+    {
+      cat /etc/age/identity.txt
+      if [ -f /etc/age/shared_identity.txt ]; then
+        printf '\n'
+        cat /etc/age/shared_identity.txt
+      fi
+    } > /etc/proxnix/secrets/age-keys.txt
+    chmod 600 /etc/proxnix/secrets/age-keys.txt
   '';
 
   system.activationScripts.proxnix-quadlet-jj = ''
