@@ -280,10 +280,10 @@ check_container() {
     warn "proxnix-apply-config service missing"
   fi
 
-  if pct exec "$vmid" -- test -L /usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer >/dev/null 2>&1; then
-    ok "proxnix-apply-config.timer enabled"
+  if pct exec "$vmid" -- test -L /usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
+    ok "proxnix-apply-config.service enabled"
   else
-    warn "proxnix-apply-config.timer not enabled"
+    warn "proxnix-apply-config.service not enabled"
   fi
 
   local current_hash applied_hash

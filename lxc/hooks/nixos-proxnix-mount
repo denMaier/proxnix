@@ -77,7 +77,7 @@ mkdir -p \
     "${ROOTFS}/etc/secrets" \
     "${ROOTFS}/etc/containers/systemd" \
     "${ROOTFS}/usr/lib/systemd/system" \
-    "${ROOTFS}/usr/lib/systemd/system/timers.target.wants"
+    "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants"
 chmod 700 "${ROOTFS}/etc/secrets"
 
 CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
@@ -168,7 +168,7 @@ PROXNIX_APPLY_CONFIG_SERVICE="${ROOTFS}/usr/lib/systemd/system/proxnix-apply-con
 if proxnix_write_text_if_changed '[Unit]
 Description=Apply proxnix-managed NixOS config after boot
 Documentation=man:nixos-rebuild(8)
-After=multi-user.target network-online.target nss-lookup.target
+After=network-online.target nss-lookup.target
 Wants=network-online.target
 ConditionPathExists=/etc/proxnix/current-config-hash
 
@@ -177,27 +177,13 @@ Type=oneshot
 ExecStart=/etc/proxnix/proxnix-apply-config-runner
 StandardOutput=journal
 StandardError=journal
+[Install]
+WantedBy=multi-user.target
 ' "$PROXNIX_APPLY_CONFIG_SERVICE" "644"; then
     log "Installed runtime rebuild service"
 fi
 
-PROXNIX_APPLY_CONFIG_TIMER="${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer"
-if proxnix_write_text_if_changed '[Unit]
-Description=Schedule proxnix-managed NixOS config apply after boot
-
-[Timer]
-OnBootSec=2min
-AccuracySec=15s
-Unit=proxnix-apply-config.service
-Persistent=false
-
-[Install]
-WantedBy=timers.target
-' "$PROXNIX_APPLY_CONFIG_TIMER" "644"; then
-    log "Installed runtime rebuild timer"
-fi
-
-ln -sfn ../proxnix-apply-config.timer "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer"
+ln -sfn ../proxnix-apply-config.service "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
 
 if [[ -e "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator"
@@ -206,14 +192,17 @@ fi
 if [[ -e "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service"
 fi
-if [[ -e "${ROOTFS}/etc/systemd/system/proxnix-apply-config.timer" ]]; then
-    rm -f "${ROOTFS}/etc/systemd/system/proxnix-apply-config.timer"
-fi
 if [[ -e "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
 fi
 if [[ -e "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer"
 fi
 
 if [[ -d "$QUADLET_DIR" ]]; then
