@@ -10,7 +10,7 @@ If you just want to add a secret to a container and don't need the full explanat
 
 ```bash
 # 1. Make sure the container has been bootstrapped (age_pubkey exists)
-./bootstrap.sh <vmid>
+./bootstrap-guest-secrets.sh <vmid>
 
 # 2. Create a secret
 proxnix-secrets set <vmid> my_secret_name
@@ -50,7 +50,7 @@ proxnix-secrets set <vmid> <name>
 
 proxnix encrypts to:
 
-- the container's age public key from `/etc/pve/proxnix/containers/<vmid>/age_pubkey`
+- the container's SSH public key used as an `age` recipient from `/etc/pve/proxnix/containers/<vmid>/age_pubkey`
 - the cluster master recovery key from `/etc/pve/proxnix/master_age_pubkey`
 
 ### Shared store recipients
@@ -63,21 +63,21 @@ proxnix-secrets set-shared <name>
 
 proxnix encrypts to:
 
-- the shared age public key from `/etc/pve/proxnix/shared_age_pubkey`
+- the shared SSH public key used as an `age` recipient from `/etc/pve/proxnix/shared_age_pubkey`
 - the cluster master recovery key
 
 ## Bootstrap flow
 
 ### 1. The guest creates its own identity
 
-`base.nix` generates `/etc/age/identity.txt` on first boot if it does not already exist. The private key never leaves the container.
+`base.nix` generates `/etc/proxnix/secrets/identity` on first boot if it does not already exist. The private key never leaves the container.
 
 ### 2. The host records the public key
 
 Run:
 
 ```bash
-./bootstrap.sh <vmid>
+./bootstrap-guest-secrets.sh <vmid>
 ```
 
 This reads the public key from the running guest and stores it as `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
@@ -99,19 +99,19 @@ Host                                    Guest
     secrets.sops.yaml             ──►   /etc/proxnix/secrets/container.sops.yaml
                                         
 /etc/pve/priv/proxnix/                 
-  shared_age_identity.txt         ──►   /etc/age/shared_identity.txt
+  shared_age_identity.txt         ──►   /etc/proxnix/secrets/shared_identity
                                         
-(generated on guest)                    /etc/age/identity.txt
+(generated on guest)                    /etc/proxnix/secrets/identity
                                         
-                                        /etc/proxnix/secrets/age-keys.txt
+                                        /etc/proxnix/secrets/ssh-keys.txt
                                           (combined: guest identity + shared identity)
 ```
 
 The pre-start hook stages the encrypted YAML files into `/run/proxnix/<vmid>/secrets/`.
 
-The mount hook copies them into the guest and also deploys the shared age identity.
+The mount hook copies them into the guest and also deploys the shared SSH-backed age identity.
 
-The guest activation script combines the guest identity and shared identity into a single age key file at `/etc/proxnix/secrets/age-keys.txt`, which is what SOPS uses to decrypt.
+The guest activation script combines the guest identity and shared identity into a single SSH key file at `/etc/proxnix/secrets/ssh-keys.txt`, which is what SOPS uses to decrypt.
 
 ## Guest helper
 
@@ -190,4 +190,4 @@ proxnix-secrets rotate <vmid>
 proxnix-secrets rotate-shared
 ```
 
-That re-encrypts the existing store to the currently configured recipients. Use this after replacing a container's age identity or the master key.
+That re-encrypts the existing store to the currently configured recipients. Use this after replacing a container's SSH-backed age identity or the master key.

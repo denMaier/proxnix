@@ -97,10 +97,10 @@ pct restart <vmid>
 If it is missing, run:
 
 ```bash
-./bootstrap.sh <vmid>
+./bootstrap-guest-secrets.sh <vmid>
 ```
 
-If that fails with "identity.txt not found", the container hasn't completed its first NixOS rebuild yet. Run the bootstrap script inside the guest first:
+If that fails with "identity.pub not found", the container hasn't completed its first NixOS rebuild yet. Run the bootstrap script inside the guest first:
 
 ```bash
 pct enter <vmid>
@@ -121,13 +121,11 @@ EOF
 
 See [installation step 5](../getting-started/installation.md#step-5-configure-your-workstation).
 
-## `proxnix-secrets` says "age identity not found"
+## `proxnix-secrets` says "SSH identity not found"
 
 The identity file specified in `PROXNIX_IDENTITY` doesn't exist. Check the path in `~/.config/proxnix/config`.
 
-Default location: `~/.config/age/identity.txt`
-
-You can use an SSH private key (ed25519) instead:
+Default location:
 
 ```bash
 PROXNIX_IDENTITY=~/.ssh/id_ed25519

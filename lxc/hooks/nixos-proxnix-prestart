@@ -193,7 +193,8 @@ if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
     : > "${META_DIR}/bootstrap_done"
 fi
 
-# Stage the shared age identity if one exists — every container gets it.
+# Stage the shared SSH-backed age identity if one exists — every container gets
+# it.
 # chmod 644 explicitly: the source is mode 600 and chmod -R a+rX below uses
 # capital X which only sets execute on directories, leaving 600 files unreadable
 # by the mount hook (which runs as the container's subuid, not root).

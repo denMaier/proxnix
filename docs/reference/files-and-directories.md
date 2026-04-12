@@ -8,7 +8,8 @@ This page maps every important proxnix path by role.
 |------|---------|
 | `install.sh` | Installs local hooks, helpers, and shared cluster files |
 | `uninstall.sh` | Removes the local installation from a node |
-| `bootstrap.sh` | Records a guest age recipient on the host |
+| `bootstrap-guest-secrets.sh` | Records a guest SSH-backed age recipient on the host |
+| `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
 | `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
 | `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
@@ -33,12 +34,12 @@ This page maps every important proxnix path by role.
     └── <vmid>/
         ├── proxmox.yaml               optional extra PVE fields
         ├── user.yaml                  native service definitions
-        ├── age_pubkey                 guest age public key
+        ├── age_pubkey                 guest SSH public key used as an age recipient
         ├── dropins/                   extra Nix, services, scripts, Quadlets
         └── quadlets/                  main Podman workload tree
 
 /etc/pve/priv/proxnix/
-├── shared_age_identity.txt            shared age private key
+├── shared_age_identity.txt            shared SSH private key used as an age identity
 ├── shared/
 │   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
@@ -114,14 +115,15 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── applied-config-hash
 ├── proxnix-apply-config-runner
 ├── secrets/
-│   ├── age-keys.txt                   combined age identities
+│   ├── ssh-keys.txt                   combined SSH private keys used as age identities
 │   ├── shared.sops.yaml
 │   └── container.sops.yaml
 └── quadlets/                          jj-tracked app config mirror
 
-/etc/age/
-├── identity.txt                       container age private key
-└── shared_identity.txt                shared age private key
+/etc/proxnix/secrets/
+├── identity                           container SSH private key used as an age identity
+├── identity.pub                       container SSH public key used as an age recipient
+└── shared_identity                    shared SSH private key used as an age identity
 
 /etc/systemd/system.attached/
 ├── proxnix-apply-config.service

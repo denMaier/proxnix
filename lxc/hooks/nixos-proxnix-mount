@@ -444,13 +444,14 @@ else
     rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
 fi
 
-# Deploy the shared age identity — every container gets it when one exists.
+# Deploy the shared SSH-backed age identity — every container gets it when one
+# exists.
 if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
-    mkdir -p "${ROOTFS}/etc/age"
-    chmod 700 "${ROOTFS}/etc/age"
-    cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/age/shared_identity.txt"
-    chmod 600 "${ROOTFS}/etc/age/shared_identity.txt"
-    log "Deployed shared age identity"
+    mkdir -p "${ROOTFS}/etc/proxnix/secrets"
+    chmod 700 "${ROOTFS}/etc/proxnix/secrets"
+    cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/proxnix/secrets/shared_identity"
+    chmod 600 "${ROOTFS}/etc/proxnix/secrets/shared_identity"
+    log "Deployed shared SSH-backed age identity"
 fi
 
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"

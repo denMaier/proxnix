@@ -132,19 +132,19 @@ When you log in after bootstrap, you'll see:
 
 - The proxnix MOTD with managed paths and useful commands
 - A login summary showing IP, memory, disk, and Podman status
-- If secrets bootstrap hasn't been done yet, a reminder to run `./bootstrap.sh <vmid>` on the host
+- If secrets bootstrap hasn't been done yet, a reminder to run `./bootstrap-guest-secrets.sh <vmid>` on the host
 
 ## 5. Bootstrap secrets for the guest
 
-**Why:** On first boot, `base.nix` generates a unique age identity for the container at `/etc/age/identity.txt`. The private key never leaves the guest. This step reads the corresponding public key back to the host so you can encrypt secrets to this container.
+**Why:** On first boot, `base.nix` generates a unique SSH private key for the container at `/etc/proxnix/secrets/identity`. proxnix uses that key as an `age` identity. The private key never leaves the guest. This step reads the corresponding public key back to the host so you can encrypt secrets to this container.
 
 **Run this from the Proxmox host** (not from inside the guest):
 
 ```bash
-./bootstrap.sh 100
+./bootstrap-guest-secrets.sh 100
 ```
 
-This stores the guest's age public key at:
+This stores the guest's SSH age public key at:
 
 ```text
 /etc/pve/proxnix/containers/100/age_pubkey
@@ -153,8 +153,8 @@ This stores the guest's age public key at:
 Expected output:
 
 ```text
-Container 100 age public key:
-  age1abc...xyz
+Container 100 SSH age public key:
+  ssh-ed25519 AAAA...
 Stored at: /etc/pve/proxnix/containers/100/age_pubkey
 
 Master public key (/etc/pve/proxnix/master_age_pubkey):
@@ -164,7 +164,7 @@ Create or update a secret for this container:
   proxnix-secrets set 100 mysecret
 ```
 
-> **If this fails:** The container must have completed at least one boot with `base.nix` applied (step 4). If `/etc/age/identity.txt` doesn't exist inside the guest, the bootstrap hasn't run yet.
+> **If this fails:** The container must have completed at least one boot with `base.nix` applied (step 4). If `/etc/proxnix/secrets/identity.pub` doesn't exist inside the guest, the bootstrap hasn't run yet.
 
 After running this, restart the container so the pre-start hook sets the bootstrap marker:
 
@@ -176,7 +176,7 @@ The "Bootstrap pending" login reminder will disappear after this restart.
 
 ## 6. Add the first secret (optional)
 
-Now that the guest has an age public key, you can encrypt secrets to it:
+Now that the guest has an SSH age public key, you can encrypt secrets to it:
 
 ```bash
 # From your workstation (with proxnix-secrets configured)

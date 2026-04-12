@@ -23,9 +23,9 @@ Useful flag:
 |------|---------|
 | `--dry-run` | Preview what would be removed |
 
-### `./bootstrap.sh <vmid>`
+### `./bootstrap-guest-secrets.sh <vmid>`
 
-Read the guest's generated age public key and store it under `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
+Read the guest's generated SSH public key used as an `age` recipient and store it under `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
 
 **Prerequisites:** The container must have booted at least once with `base.nix` applied (i.e., after running `proxnix-bootstrap.sh` inside the guest).
 

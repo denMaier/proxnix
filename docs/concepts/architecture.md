@@ -78,7 +78,7 @@ Important stage subtrees:
 | `runtime/bin/` | Scripts from host `dropins/*.{sh,py}` |
 | `quadlet/` | Quadlet unit files and app config |
 | `secrets/` | Encrypted SOPS YAML stores |
-| `keys/` | Shared age identity (if configured) |
+| `keys/` | Shared SSH-backed age identity (if configured) |
 | `meta/` | Config hash, VMID, bootstrap marker |
 
 The pre-start hook copies the shared Nix files, runs `yaml-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
@@ -98,7 +98,7 @@ It copies the staged assets into places such as:
 | `quadlet/*.container` etc. | `/etc/containers/systemd/` |
 | `quadlet/` (full tree) | `/etc/proxnix/quadlets/` |
 | `secrets/*.sops.yaml` | `/etc/proxnix/secrets/` |
-| `keys/shared_identity.txt` | `/etc/age/shared_identity.txt` |
+| `keys/shared_identity.txt` | `/etc/proxnix/secrets/shared_identity` |
 
 It also installs a generated `proxnix-apply-config` service and runner inside the guest.
 

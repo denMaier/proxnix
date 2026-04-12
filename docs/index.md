@@ -25,8 +25,8 @@ Before using proxnix you should be comfortable with:
 You will need these tools installed on your **workstation** (the machine you manage secrets from):
 
 - `ssh` — to reach the Proxmox host
+- `ssh-keygen` — to generate SSH keys that `age` can use as recipients
 - `sops` — to encrypt and decrypt secret stores
-- `age` and `age-keygen` — for age key management
 - `python3` — used by the secrets helper
 
 ## Mental model

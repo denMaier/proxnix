@@ -7,8 +7,8 @@ This page covers installing proxnix on Proxmox cluster nodes, preparing the shar
 Use this checklist to make sure you don't miss anything. Each item is explained in detail below.
 
 - [ ] Run `./install.sh` on every Proxmox node
-- [ ] Store the master age recovery key
-- [ ] Initialize the shared age keypair (if using shared secrets)
+- [ ] Store the master SSH-backed age recovery key
+- [ ] Initialize the shared SSH-backed age keypair (if using shared secrets)
 - [ ] Set the admin user password hash as a shared secret
 - [ ] Configure your workstation for `proxnix-secrets`
 
@@ -57,9 +57,9 @@ On additional cluster nodes, run the same command. The installer skips recreatin
 
 Use `--dry-run` to preview what would be installed without writing anything.
 
-## Step 2: Store the master age recovery key
+## Step 2: Store the master SSH-backed age recovery key
 
-**Why:** The master key is included as an encryption recipient for every secret store (both per-container and shared). Without it, you cannot recover secrets if a container's age identity is lost.
+**Why:** The master key is included as an encryption recipient for every secret store (both per-container and shared). Without it, you cannot recover secrets if a container's SSH-backed age identity is lost.
 
 **When to skip:** Never. Always set up the master key.
 
@@ -67,11 +67,11 @@ Use `--dry-run` to preview what would be installed without writing anything.
 ssh-keygen -y -f ~/.ssh/id_ed25519 > /etc/pve/proxnix/master_age_pubkey
 ```
 
-You can use an existing SSH ed25519 key because `age` natively supports SSH recipients. If you prefer a dedicated age key, generate one with `age-keygen` and store the public key instead.
+Use an SSH ed25519 key here. proxnix standardizes on SSH keys used as `age` recipients so SOPS only needs one identity mode end to end.
 
 > **⚠️ Keep the corresponding private key safe.** If you lose the master private key, you lose the ability to decrypt any secret store that was encrypted to it.
 
-## Step 3: Initialize the shared age keypair
+## Step 3: Initialize the shared SSH-backed age keypair
 
 **Why:** Shared secrets are available in every container. They're useful for credentials that multiple services need, like the admin user password hash.
 
@@ -83,7 +83,7 @@ proxnix-secrets init-shared
 
 That creates:
 
-- `/etc/pve/priv/proxnix/shared_age_identity.txt` — private key, staged into every guest
+- `/etc/pve/priv/proxnix/shared_age_identity.txt` — SSH private key, staged into every guest
 - `/etc/pve/proxnix/shared_age_pubkey` — public key, used as encryption recipient
 
 ## Step 4: Set the admin user password hash
@@ -126,7 +126,7 @@ If the secret is not yet available (e.g., before the first secret bootstrap), th
 
 ## Step 5: Configure your workstation
 
-The `proxnix-secrets` command runs from your workstation (or any machine with SSH access to the Proxmox host). It needs to know how to reach the host and which age identity to use for SOPS operations.
+The `proxnix-secrets` command runs from your workstation (or any machine with SSH access to the Proxmox host). It needs to know how to reach the host and which SSH private key to use for SOPS operations.
 
 ### Create the config file
 
@@ -141,7 +141,7 @@ EOF
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `PROXNIX_HOST` | SSH target for the Proxmox host | *(required)* |
-| `PROXNIX_IDENTITY` | Path to your local age or SSH private key used by SOPS | `~/.config/age/identity.txt` |
+| `PROXNIX_IDENTITY` | Path to your local SSH private key used by SOPS | `~/.ssh/id_ed25519` |
 | `PROXNIX_DIR` | Shared config dir on the Proxmox host | `/etc/pve/proxnix` |
 | `PROXNIX_PRIV_DIR` | Private secret dir on the Proxmox host | `/etc/pve/priv/proxnix` |
 
@@ -150,8 +150,8 @@ EOF
 Make sure these are available in your `$PATH`:
 
 - `ssh`
+- `ssh-keygen`
 - `sops`
-- `age-keygen`
 - `python3`
 
 ### Verify it works
@@ -198,7 +198,7 @@ After completing all steps, your setup should look like this:
 ├── containers/                 ← per-container config (populated later)
 │
 /etc/pve/priv/proxnix/
-├── shared_age_identity.txt     ← shared private key (step 3)
+├── shared_age_identity.txt     ← shared SSH private key used as an age identity (step 3)
 ├── shared/
 │   └── secrets.sops.yaml       ← shared secrets including admin hash (step 4)
 ├── containers/                 ← per-container secrets (populated later)
