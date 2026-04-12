@@ -14,9 +14,8 @@ Here's what you'll do and why:
 | 2 | Create the host-side config directory | proxnix reads per-container config from here |
 | 3 | Start the container | Triggers the pre-start and mount hooks that seed NixOS config |
 | 4 | Bootstrap the NixOS channel | Fresh templates lack the root `nixos` channel needed for `nixos-rebuild` |
-| 5 | Bootstrap secrets for the guest | Records the guest's age public key so you can encrypt secrets to it |
-| 6 | Add the first secret (optional) | Demonstrates the secrets workflow |
-| 7 | Verify health | Confirms everything is wired up correctly |
+| 5 | Add the first secret (optional) | Demonstrates the secrets workflow |
+| 6 | Verify health | Confirms everything is wired up correctly |
 
 ## 1. Create the CT in Proxmox
 
@@ -132,51 +131,10 @@ When you log in after bootstrap, you'll see:
 
 - The proxnix MOTD with managed paths and useful commands
 - A login summary showing IP, memory, disk, and Podman status
-- If secrets bootstrap hasn't been done yet, a reminder to run `./bootstrap-guest-secrets.sh <vmid>` on the host
 
-## 5. Bootstrap secrets for the guest
+## 5. Add the first secret (optional)
 
-**Why:** On first boot, `base.nix` generates a unique SSH private key for the container at `/etc/proxnix/secrets/identity`. proxnix uses that key as an `age` identity. The private key never leaves the guest. This step reads the corresponding public key back to the host so you can encrypt secrets to this container.
-
-**Run this from the Proxmox host** (not from inside the guest):
-
-```bash
-./bootstrap-guest-secrets.sh 100
-```
-
-This stores the guest's SSH age public key at:
-
-```text
-/etc/pve/proxnix/containers/100/age_pubkey
-```
-
-Expected output:
-
-```text
-Container 100 SSH age public key:
-  ssh-ed25519 AAAA...
-Stored at: /etc/pve/proxnix/containers/100/age_pubkey
-
-Master public key (/etc/pve/proxnix/master_age_pubkey):
-  ssh-ed25519 AAAA...
-
-Create or update a secret for this container:
-  proxnix-secrets set 100 mysecret
-```
-
-> **If this fails:** The container must have completed at least one boot with `base.nix` applied (step 4). If `/etc/proxnix/secrets/identity.pub` doesn't exist inside the guest, the bootstrap hasn't run yet.
-
-After running this, restart the container so the pre-start hook sets the bootstrap marker:
-
-```bash
-pct restart 100
-```
-
-The "Bootstrap pending" login reminder will disappear after this restart.
-
-## 6. Add the first secret (optional)
-
-Now that the guest has an SSH age public key, you can encrypt secrets to it:
+proxnix now generates the per-container SSH-backed age keypair on the host automatically, so you can encrypt secrets to the container immediately:
 
 ```bash
 # From your workstation (with proxnix-secrets configured)
@@ -200,7 +158,7 @@ proxnix-secrets ls
 proxnix-secrets get mysecret
 ```
 
-## 7. Verify health
+## 6. Verify health
 
 From the Proxmox host:
 
@@ -222,12 +180,14 @@ Expected output for a healthy container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   OK    container config dir present: /etc/pve/proxnix/containers/100
+  OK    host age recipient present: /etc/pve/proxnix/containers/100/age_pubkey
+  OK    guest container age identity present
   ...
   OK    guest file present: /etc/nixos/configuration.nix
   OK    guest file present: /etc/nixos/managed/base.nix
   ...
   OK    applied managed config hash matches current hash
-  OK    bootstrap marker present
+  OK    host identity marker present
 
 Summary: 0 fail(s), 0 warning(s)
 ```

@@ -44,9 +44,9 @@ Useful flag:
 
 ### `./bootstrap-guest-secrets.sh <vmid>`
 
-Read the guest's generated SSH public key used as an `age` recipient and store it under `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
+Legacy repair helper. For older/manual containers, read the guest SSH public key used as an `age` recipient and store it under `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
 
-**Prerequisites:** The container must have booted at least once with `base.nix` applied (i.e., after running `proxnix-bootstrap.sh` inside the guest).
+New containers created by `proxnix-create-lxc` do not need this step because proxnix now generates the per-container keypair on the host.
 
 ### `proxnix-doctor <vmid>`
 
@@ -143,8 +143,10 @@ Sample output for `proxnix-doctor`:
   INFO  state: running
   OK    guest file present: /etc/nixos/configuration.nix
   OK    guest file present: /etc/nixos/managed/base.nix
+  OK    host age recipient present: /etc/pve/proxnix/containers/100/age_pubkey
+  OK    guest container age identity present
   OK    applied managed config hash matches current hash
-  OK    bootstrap marker present
+  OK    host identity marker present
 
 Summary: 0 fail(s), 0 warning(s)
 ```

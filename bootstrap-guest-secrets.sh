@@ -1,13 +1,10 @@
 #!/bin/bash
-# bootstrap-guest-secrets.sh — Extract and store the guest SSH public key used
-# as an age recipient for a NixOS LXC container.
+# bootstrap-guest-secrets.sh — Legacy helper for storing a container SSH public
+# key used as an age recipient for a NixOS LXC container.
 #
-# The SSH keypair is generated idempotently by the base.nix activation script
-# on first boot, so the private key never transits through the Proxmox host.
-# This script merely reads the public key out of the running container and
-# stores it on the host so you can use it to encrypt secrets.
-#
-# Run this once after the container has booted with base.nix applied.
+# New proxnix containers use host-generated per-container keys, so this script
+# is no longer needed during the normal creation flow. It remains available as a
+# repair helper for legacy containers or manual imports.
 #
 # Usage:
 #   ./bootstrap-guest-secrets.sh <vmid>
@@ -30,10 +27,16 @@ if [[ ! -d "$CONTAINER_DIR" ]]; then
   exit 1
 fi
 
-if ! PUBKEY="$(pct exec "$VMID" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$GUEST_PUBKEY_FILE" 2>/dev/null | tr -d '\r\n')"; then
+if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
+  PUBKEY="$(cat "${CONTAINER_DIR}/age_pubkey" | tr -d '\r\n')"
+  echo "Container ${VMID} already has a host-managed SSH age public key:"
+  echo "  ${PUBKEY}"
+  echo "Stored at: ${CONTAINER_DIR}/age_pubkey"
+  echo ""
+elif ! PUBKEY="$(pct exec "$VMID" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$GUEST_PUBKEY_FILE" 2>/dev/null | tr -d '\r\n')"; then
   echo "ERROR: ${GUEST_PUBKEY_FILE} not found inside container ${VMID}."
-  echo "       Make sure the container has booted at least once with base.nix"
-  echo "       applied (the activation script generates the keypair on first boot)."
+  echo "       For new containers, proxnix now creates host-managed keys automatically."
+  echo "       This legacy helper is only needed for older/manual containers."
   exit 1
 fi
 

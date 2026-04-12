@@ -97,14 +97,13 @@ pct restart <vmid>
 If it is missing, run:
 
 ```bash
-./bootstrap-guest-secrets.sh <vmid>
+/usr/local/sbin/proxnix-create-lxc --vmid <vmid> --hostname <name> --no-start
 ```
 
-If that fails with "identity.pub not found", the container hasn't completed its first NixOS rebuild yet. Run the bootstrap script inside the guest first:
+For legacy/manual containers, you can still use:
 
 ```bash
-pct enter <vmid>
-/root/proxnix-bootstrap.sh
+./bootstrap-guest-secrets.sh <vmid>
 ```
 
 ## `proxnix-secrets` says "PROXNIX_HOST not set"

@@ -73,6 +73,11 @@ fi
 
 KEYS_STAGE_DIR="${STAGE_DIR}/keys"
 
+if ! proxnix_ensure_container_age_identity "$VMID"; then
+    log "ERROR: failed to ensure host-generated container age identity"
+    exit 1
+fi
+
 cleanup_stage
 mkdir -p \
     "$MANAGED_DROPIN_DIR" \
@@ -189,8 +194,20 @@ chmod 0644 "${META_DIR}/current-config-hash"
 printf '%s' "$VMID" > "${META_DIR}/vmid"
 chmod 0644 "${META_DIR}/vmid"
 
-if [[ -f "${CONTAINER_DIR}/age_pubkey" ]]; then
+if [[ -f "$(proxnix_container_age_pubkey_path "$VMID")" ]]; then
     : > "${META_DIR}/bootstrap_done"
+fi
+
+CONTAINER_IDENTITY_PATH="$(proxnix_container_age_identity_path "$VMID")"
+if [[ -f "$CONTAINER_IDENTITY_PATH" ]]; then
+    cp "$CONTAINER_IDENTITY_PATH" "${KEYS_STAGE_DIR}/identity"
+    chmod 644 "${KEYS_STAGE_DIR}/identity"
+fi
+
+CONTAINER_PUBKEY_PATH="$(proxnix_container_age_pubkey_path "$VMID")"
+if [[ -f "$CONTAINER_PUBKEY_PATH" ]]; then
+    cp "$CONTAINER_PUBKEY_PATH" "${KEYS_STAGE_DIR}/identity.pub"
+    chmod 644 "${KEYS_STAGE_DIR}/identity.pub"
 fi
 
 # Stage the shared SSH-backed age identity if one exists — every container gets

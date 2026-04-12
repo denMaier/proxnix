@@ -159,24 +159,29 @@ in {
     PROXNIX_GUEST_SECRET_DIR = "/etc/proxnix/secrets";
   };
 
-  # Ensure secret directories exist and generate an SSH-backed age keypair on
-  # first boot.
-  # /etc/proxnix/secrets/identity     — private key; never leaves the container
-  # /etc/proxnix/secrets/identity.pub — public recipient copied back to the host
+  # Ensure secret directories exist and combine the host-staged per-container
+  # SSH-backed age identity with the optional shared identity.
+  # /etc/proxnix/secrets/identity     — private key staged by the Proxmox host
+  # /etc/proxnix/secrets/identity.pub — matching public recipient
   # /etc/proxnix/secrets/ — staged SOPS YAML stores
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
   system.activationScripts.age-setup = ''
     mkdir -p /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
     chmod 700 /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
-    if [ ! -f /etc/proxnix/secrets/identity ]; then
-      ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N "" -f /etc/proxnix/secrets/identity >/dev/null
+    if [ -f /etc/proxnix/secrets/identity ]; then
       chmod 600 /etc/proxnix/secrets/identity
+    fi
+    if [ -f /etc/proxnix/secrets/identity.pub ]; then
       chmod 644 /etc/proxnix/secrets/identity.pub
     fi
     {
-      cat /etc/proxnix/secrets/identity
+      if [ -f /etc/proxnix/secrets/identity ]; then
+        cat /etc/proxnix/secrets/identity
+      fi
       if [ -f /etc/proxnix/secrets/shared_identity ]; then
-        printf '\n'
+        if [ -f /etc/proxnix/secrets/identity ]; then
+          printf '\n'
+        fi
         cat /etc/proxnix/secrets/shared_identity
       fi
     } > /etc/proxnix/secrets/ssh-keys.txt
@@ -258,24 +263,6 @@ in {
         "$(cat /etc/proxnix/vmid 2>/dev/null || hostname)"
 
       unset _ip _mem _disk _podman_state _podman_count _podman_names _podman_containers
-    '';
-  };
-
-  # ── Bootstrap reminder ────────────────────────────────────────────────────
-  # Shown at every login until bootstrap-guest-secrets.sh has been run on the
-  # Proxmox host.
-  # The pre-start hook writes /etc/secrets/.bootstrap_done once age_pubkey
-  # exists for this container, at which point this block is silent.
-  environment.etc."profile.d/proxnix-bootstrap-hint.sh" = {
-    mode = "0644";
-    text = ''
-      if [ ! -f /etc/secrets/.bootstrap_done ]; then
-        vmid="$(cat /etc/proxnix/vmid 2>/dev/null || true)"
-        [ -n "$vmid" ] || vmid="$(hostname)"
-        printf '\n  Bootstrap pending — run on the Proxmox host:\n'
-        printf '    ./bootstrap-guest-secrets.sh %s\n' "$vmid"
-        printf '  Then restart the container to enable secrets.\n\n'
-      fi
     '';
   };
 

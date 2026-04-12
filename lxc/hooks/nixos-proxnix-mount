@@ -444,6 +444,18 @@ else
     rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
 fi
 
+if [[ -f "${KEYS_STAGE_DIR}/identity" ]]; then
+    mkdir -p "${ROOTFS}/etc/proxnix/secrets"
+    chmod 700 "${ROOTFS}/etc/proxnix/secrets"
+    cp "${KEYS_STAGE_DIR}/identity" "${ROOTFS}/etc/proxnix/secrets/identity"
+    chmod 600 "${ROOTFS}/etc/proxnix/secrets/identity"
+    if [[ -f "${KEYS_STAGE_DIR}/identity.pub" ]]; then
+        cp "${KEYS_STAGE_DIR}/identity.pub" "${ROOTFS}/etc/proxnix/secrets/identity.pub"
+        chmod 644 "${ROOTFS}/etc/proxnix/secrets/identity.pub"
+    fi
+    log "Deployed host-generated container age identity"
+fi
+
 # Deploy the shared SSH-backed age identity — every container gets it when one
 # exists.
 if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then

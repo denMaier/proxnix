@@ -3,6 +3,7 @@
 NIXLXC_DIR="/etc/pve/proxnix"
 NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
 PROXNIX_STAGE_BASE_DIR="/run/proxnix"
+PROXNIX_SSH_KEYGEN_BIN="${PROXNIX_SSH_KEYGEN_BIN:-/usr/bin/ssh-keygen}"
 PROXNIX_SHARED_FILES=(
     configuration.nix
     base.nix
@@ -12,6 +13,58 @@ PROXNIX_SHARED_FILES=(
 proxnix_stage_dir() {
     local vmid="$1"
     printf '%s/%s' "$PROXNIX_STAGE_BASE_DIR" "$vmid"
+}
+
+proxnix_container_dir() {
+    local vmid="$1"
+    printf '%s/containers/%s' "$NIXLXC_DIR" "$vmid"
+}
+
+proxnix_container_priv_dir() {
+    local vmid="$1"
+    printf '%s/containers/%s' "$NIXLXC_PRIV_DIR" "$vmid"
+}
+
+proxnix_container_age_pubkey_path() {
+    local vmid="$1"
+    printf '%s/age_pubkey' "$(proxnix_container_dir "$vmid")"
+}
+
+proxnix_container_age_identity_path() {
+    local vmid="$1"
+    printf '%s/age_identity.txt' "$(proxnix_container_priv_dir "$vmid")"
+}
+
+proxnix_ensure_container_age_identity() {
+    local vmid="$1"
+    local container_dir container_priv_dir pubkey_path identity_path tmpdir
+
+    container_dir="$(proxnix_container_dir "$vmid")"
+    container_priv_dir="$(proxnix_container_priv_dir "$vmid")"
+    pubkey_path="$(proxnix_container_age_pubkey_path "$vmid")"
+    identity_path="$(proxnix_container_age_identity_path "$vmid")"
+
+    mkdir -p "$container_dir" "$container_priv_dir"
+
+    if [[ -f "$pubkey_path" ]]; then
+        return 0
+    fi
+
+    if [[ -f "$identity_path" ]]; then
+        "${PROXNIX_SSH_KEYGEN_BIN}" -y -f "$identity_path" > "$pubkey_path"
+        chmod 0644 "$pubkey_path"
+        return 0
+    fi
+
+    tmpdir="$(mktemp -d /tmp/proxnix-age-identity.XXXXXX)"
+    trap 'rm -rf "$tmpdir"' RETURN
+    "${PROXNIX_SSH_KEYGEN_BIN}" -q -t ed25519 -N "" -f "${tmpdir}/identity" >/dev/null
+    cp "${tmpdir}/identity" "$identity_path"
+    chmod 0600 "$identity_path"
+    cp "${tmpdir}/identity.pub" "$pubkey_path"
+    chmod 0644 "$pubkey_path"
+    rm -rf "$tmpdir"
+    trap - RETURN
 }
 
 proxnix_write_if_changed() {

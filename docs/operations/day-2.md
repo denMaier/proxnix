@@ -97,7 +97,7 @@ Sample output for a healthy container:
 [ct 100]
   OK    ostype=nixos
   OK    applied managed config hash matches current hash
-  OK    bootstrap marker present
+  OK    host identity marker present
 
 Summary: 0 fail(s), 0 warning(s)
 ```

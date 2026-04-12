@@ -9,7 +9,7 @@ This page maps every important proxnix path by role.
 | `install.sh` | Installs local hooks, helpers, and shared cluster files |
 | `uninstall.sh` | Removes the local installation from a node |
 | `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
-| `bootstrap-guest-secrets.sh` | Host-side helper that records the guest age recipient on the node |
+| `bootstrap-guest-secrets.sh` | Legacy host-side helper for older/manual containers |
 | `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
 | `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `install.sh` |
@@ -36,7 +36,7 @@ This page maps every important proxnix path by role.
     └── <vmid>/
         ├── proxmox.yaml               optional extra PVE fields
         ├── user.yaml                  native service definitions
-        ├── age_pubkey                 guest SSH public key used as an age recipient
+        ├── age_pubkey                 host-managed SSH public key used as an age recipient
         ├── dropins/                   extra Nix, services, scripts, Quadlets
         └── quadlets/                  main Podman workload tree
 
@@ -46,6 +46,7 @@ This page maps every important proxnix path by role.
 │   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
     └── <vmid>/
+        ├── age_identity.txt          host-managed container SSH private key used as an age identity
         └── secrets.sops.yaml         per-container encrypted secrets
 ```
 
@@ -66,7 +67,7 @@ This page maps every important proxnix path by role.
 └── proxnix-secrets-guest              helper injected into guests
 
 /usr/local/sbin/
-├── bootstrap-guest-secrets.sh         guest age recipient bootstrap
+├── bootstrap-guest-secrets.sh         legacy guest age recipient bootstrap
 ├── proxnix-create-lxc                 CT creation helper
 └── proxnix-doctor                     health check tool
 ```
@@ -93,11 +94,13 @@ Created by the pre-start hook, consumed by the mount hook:
 │   ├── shared.sops.yaml
 │   └── container.sops.yaml
 ├── keys/
+│   ├── identity
+│   ├── identity.pub
 │   └── shared_identity.txt
 └── meta/
     ├── current-config-hash
     ├── vmid
-    └── bootstrap_done
+    └── bootstrap_done              host identity staged marker
 ```
 
 ## Managed paths inside the guest
@@ -125,8 +128,8 @@ Created by the pre-start hook, consumed by the mount hook:
 └── quadlets/                          jj-tracked app config mirror
 
 /etc/proxnix/secrets/
-├── identity                           container SSH private key used as an age identity
-├── identity.pub                       container SSH public key used as an age recipient
+├── identity                           host-staged container SSH private key used as an age identity
+├── identity.pub                       matching container SSH public key used as an age recipient
 └── shared_identity                    shared SSH private key used as an age identity
 
 /etc/systemd/system.attached/

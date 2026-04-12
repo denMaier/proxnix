@@ -350,13 +350,19 @@ check_container() {
   fi
 
   if [[ -f "${cdir}/age_pubkey" ]]; then
-    if guest_test "$vmid" -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
-      ok "bootstrap marker present"
+    ok "host age recipient present: ${cdir}/age_pubkey"
+    if guest_test "$vmid" -f /etc/proxnix/secrets/identity >/dev/null 2>&1; then
+      ok "guest container age identity present"
     else
-      warn "host has age_pubkey but guest bootstrap marker is missing; restart the container"
+      warn "host has age_pubkey but guest container age identity is missing; restart the container"
+    fi
+    if guest_test "$vmid" -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
+      ok "host identity marker present"
+    else
+      warn "host identity marker missing; restart the container"
     fi
   else
-    info "age bootstrap not completed yet"
+    fail "host age recipient missing: ${cdir}/age_pubkey"
   fi
 
   if [[ "$mode" == "quadlet-dropins" ]]; then
