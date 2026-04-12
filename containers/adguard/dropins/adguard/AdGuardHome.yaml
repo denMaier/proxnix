@@ -5,7 +5,7 @@ http:
   address: 0.0.0.0:3000
   session_ttl: 720h
 users:
-  - name: denis
+  - name: admin
     password: __PROXNIX_ADGUARD_ADMIN_PASSWORD_HASH__
 auth_attempts: 5
 block_auth_min: 15
@@ -151,48 +151,6 @@ filtering:
   parental_block_host: family-block.dns.adguard.com
   safebrowsing_block_host: standard-block.dns.adguard.com
   rewrites:
-    - domain: backlab.example-network.top
-      answer: 192.0.2.21
-      enabled: true
-    - domain: elitelab.example-network.top
-      answer: 192.0.2.23
-      enabled: true
-    - domain: optilab.example-network.top
-      answer: 192.0.2.24
-      enabled: true
-    - domain: thinklab.example-network.top
-      answer: 192.0.2.13
-      enabled: true
-    - domain: "*.example-network.top"
-      answer: 192.0.2.10
-      enabled: true
-    - domain: example-network.top
-      answer: 192.0.2.10
-      enabled: true
-    - domain: "*.maieretal.de"
-      answer: 192.0.2.10
-      enabled: true
-    - domain: prox.example-network.top
-      answer: 192.0.2.23
-      enabled: true
-    - domain: prox.example-network.top
-      answer: 192.0.2.24
-      enabled: true
-    - domain: backlab.maieretal.de
-      answer: 192.0.2.21
-      enabled: true
-    - domain: elitelab.maieretal.de
-      answer: 192.0.2.23
-      enabled: true
-    - domain: optilab.maieretal.de
-      answer: 192.0.2.24
-      enabled: true
-    - domain: thinklab.maieretal.de
-      answer: 192.0.2.13
-      enabled: true
-    - domain: proxyconfig.maieretal.de
-      answer: proxy-auto-config-f0x.pages.dev
-      enabled: true
   safe_fs_patterns:
     - /opt/AdGuardHome/userfilters/*
   safebrowsing_cache_size: 1048576

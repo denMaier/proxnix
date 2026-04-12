@@ -1,11 +1,11 @@
-# Native nixpkgs deployments for AI agents
+# Native NixOS deployments for AI agents
 
 This file is the quick reference for generating **native NixOS service configs** in proxnix.
 Use it instead of scanning the repo.
 
 ## Decision rule
 
-Choose a **native nixpkgs deployment** when the app should run as a NixOS service from nixpkgs rather than as a Podman container.
+Choose a **native NixOS deployment** when the app should run as a NixOS service from nixpkgs rather than as a Podman container.
 
 In this mode, the primary input is `user.yaml`.
 
@@ -16,8 +16,7 @@ In this mode, the primary input is `user.yaml`.
 - `runtime: native`
 - `services:` entries for native NixOS services
 
-It does **not** support container definitions.
-If the app is containerized, use Quadlets in `dropins/` instead.
+It does **not** support container definitions. If the app is containerized, use Quadlets, preferably under `quadlets/`.
 
 ## Where files go
 
@@ -159,8 +158,8 @@ When asked to generate a native deployment, produce:
 
 - Do not define containers in `user.yaml`
 - Do not hardcode secrets in YAML or Nix
-- Do not reach for Quadlets if a clean nixpkgs module already exists and the user asked for native deployment
-- Do not edit `/etc/nixos/local.nix` for generated host-managed configs
+- Do not reach for Quadlets if a clean NixOS module already exists and the user asked for a native deployment
+- Do not treat `/etc/nixos/local.nix` as the place for host-managed generated config
 
 ## Minimal checklist
 

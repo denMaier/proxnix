@@ -12,25 +12,25 @@ Do **not** put container definitions in `user.yaml`.
 
 ## Where files go
 
-For a target container VMID, host-side files live at:
+For a target container VMID, host-side files usually live at:
 
-- `/etc/pve/proxnix/containers/<vmid>/dropins/`
-- `/etc/pve/proxnix/containers/<vmid>/quadlets/`
+- `/etc/pve/proxnix/containers/<vmid>/quadlets/` for the main Quadlet workload tree
+- `/etc/pve/proxnix/containers/<vmid>/dropins/` for optional NixOS integration (`*.nix`), attached units, or small supporting scripts
 - optional `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`
 - optional `/etc/pve/proxnix/containers/<vmid>/user.yaml` only for native services, not containers
 
-Inside this repo, app templates can live under:
+Inside this repo, app templates should usually live under:
 
 - `containers/<app>/quadlets/`
-- `containers/<app>/dropins/` for NixOS `.nix` fragments
+- optional `containers/<app>/dropins/` for NixOS `.nix` fragments
 - `containers/<app>/README.md`
-- app-specific config files at the root of that app folder
+- app-specific config files beside the Quadlets when they should be mirrored into the guest
 
 The existing Ente example follows this pattern.
 
-## Accepted drop-in file types
+## Accepted file types
 
-These files in `quadlets/` are copied directly into `/etc/containers/systemd/` inside the guest:
+These files in `quadlets/` are copied into `/etc/containers/systemd/` inside the guest, and the full `quadlets/` tree is mirrored to `/etc/proxnix/quadlets/`:
 
 - `*.container`
 - `*.volume`
@@ -39,11 +39,14 @@ These files in `quadlets/` are copied directly into `/etc/containers/systemd/` i
 - `*.image`
 - `*.build`
 
-These files in `dropins/` are imported into NixOS as extra modules:
+These files in `dropins/` are used for host-managed integration around the container workload:
 
-- `*.nix`
+- `*.nix` — imported into NixOS as extra modules
+- `*.service` — attached under `/etc/systemd/system.attached/`
+- `*.sh`, `*.py` — copied to `/usr/local/bin/`
+- optional top-level Quadlet unit files — useful only for small supporting units
 
-Use `*.nix` drop-ins only for NixOS integration. App-specific support config belongs beside the Quadlet unit files on the host and is mirrored into `/etc/proxnix/quadlets/` inside the guest.
+Use `dropins/` for integration glue. Put the main container workload and its nearby config in `quadlets/`.
 
 ## Recommended structure for a new app template
 
@@ -62,7 +65,7 @@ containers/<app>/
   init.sh
 ```
 
-Use the root files as the editable source of truth for humans. Quadlet unit files go to `/etc/containers/systemd/`; non-unit files are mirrored into the guest's `/etc/proxnix/quadlets/` config tree.
+Quadlet unit files go to `/etc/containers/systemd/`; nearby config files are mirrored into the guest's `/etc/proxnix/quadlets/` tree.
 
 Use fully qualified image names in Quadlets. Prefer `docker.io/library/nginx:latest` over `nginx:latest`, and `docker.io/homeassistant/home-assistant:stable` over `homeassistant/home-assistant:stable`. This avoids registry-search ambiguity during rebuilds and restarts.
 
@@ -72,12 +75,12 @@ Because proxnix syncs the full `quadlets/` tree, app-owned config files can live
 
 Use this pattern:
 
-1. Keep human-editable config files in `containers/<app>/quadlets/`.
-2. Reference app-owned runtime config under `/etc/proxnix/quadlets/<app>/` in the guest.
-3. Track guest-side edits with `jj -R /etc/proxnix/quadlets status`.
-4. In Quadlets, mount those guest paths with `Volume=/etc/proxnix/quadlets/<app>/file:/path/in/container:ro`.
+1. Keep declarative app config in `containers/<app>/quadlets/`.
+2. Reference it under `/etc/proxnix/quadlets/...` in the guest.
+3. Mount it into the container read-only.
+4. Keep writable app state under `/var/lib/<app>/...` inside the guest.
 
-For writable app state, default to `/var/lib/<app>/...` inside the guest. Use `/etc/<app>` for native service config and `/opt/<app>` only for manually managed binaries or assets. That mirrors the toolkit's service-user convention while keeping proxnix's host-side source of truth under `/etc/pve/proxnix/containers/<vmid>/`.
+Track guest-side drift with `jj -R /etc/proxnix/quadlets status` when needed.
 
 Then in a Quadlet:
 
@@ -118,17 +121,17 @@ The common pattern is:
 When asked to generate a new container deployment, produce:
 
 - `containers/<app>/README.md`
-- `containers/<app>/dropins/*.container`
-- any needed `*.network`, `*.volume`, `*.pod`
-- `containers/<app>/dropins/<app>-files.nix` if mounted config files are needed
-- root config files like YAML, TOML, or helper scripts in `containers/<app>/`
-- a short secrets section listing exact secret names to create
+- `containers/<app>/quadlets/*.container`
+- any needed `*.network`, `*.volume`, `*.pod`, `*.image`, or `*.build`
+- optional `containers/<app>/dropins/*.nix` if the workload needs extra NixOS integration
+- config files or helper scripts beside the Quadlets when they should be mirrored into `/etc/proxnix/quadlets/`
+- a short secrets section listing the exact secret names to create
 
 ## What not to do
 
 - Do not put container workloads under `user.yaml`
 - Do not invent extra proxnix plumbing unless explicitly asked
-- Do not assume arbitrary non-dropin files are copied into the guest
+- Do not assume files outside `quadlets/` are mirrored into the guest unless a drop-in type explicitly supports it
 - Do not inline secrets into repo files
 - Do not disable Podman unless the user explicitly wants a native-only container
 
@@ -136,8 +139,8 @@ When asked to generate a new container deployment, produce:
 
 Before finishing a container app config, verify:
 
-- all containers are raw Quadlet files in `dropins/`
-- mounted config files are created via a `*.nix` drop-in
+- the main workload is expressed as raw Quadlet files in `quadlets/`
+- any extra NixOS integration lives in `dropins/*.nix`
 - secrets are named and documented
 - ports, pods, networks, and volumes are explicit
 - the output matches the `containers/<app>/` template layout

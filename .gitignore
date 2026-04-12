@@ -3,3 +3,6 @@ __pycache__/
 .DS_Store
 .tmp-proxnix-test-*/
 master_age_pubkey
+.env
+.env.*
+*.local
