@@ -127,7 +127,7 @@ in {
         lazyjournal
         yazi #probably superfile soon, but currently to much hassle (flake or override)
         lazydocker
-        snitch
+        pkgs.unstable.snitch
         gdu
       ];
       description = lib.mdDoc ''

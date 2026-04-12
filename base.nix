@@ -63,6 +63,15 @@ in {
     <nixpkgs/nixos/modules/virtualisation/proxmox-lxc.nix>
   ];
 
+  nixpkgs.overlays = [
+    (final: prev: {
+      unstable = import <nixpkgs-unstable> {
+        inherit (prev) config;
+        inherit (prev.stdenv.hostPlatform) system;
+      };
+    })
+  ];
+
   # Shared cross-container operator baseline translated from the legacy
   # Debian/Ansible bootstrap: admin user, SSH hardening, journald caps,
   # timesync, swappiness, and a few convenience packages.

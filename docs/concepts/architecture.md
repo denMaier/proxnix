@@ -112,7 +112,7 @@ Inside the guest, proxnix stores two hashes:
 At boot, the generated runner compares them.
 
 - If the hash is unchanged, it exits immediately
-- If the root nix channel is still missing, it asks you to run `/root/proxnix-bootstrap.sh`
+- If the root channels are missing, it adds them automatically and updates them once
 - If the hash changed, it runs `nixos-rebuild switch` once for that boot and records the applied hash
 
 ## Persistent state and experimentation

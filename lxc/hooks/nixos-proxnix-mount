@@ -170,18 +170,28 @@ PROXNIX_APPLY_CONFIG_RUNNER="${ROOTFS}/etc/proxnix/proxnix-apply-config-runner"
 if proxnix_write_text_if_changed '#!/bin/sh
 set -eu
 
+SYSTEM_BIN="/run/current-system/sw/bin"
+MKDIR_BIN="${SYSTEM_BIN}/mkdir"
+TOUCH_BIN="${SYSTEM_BIN}/touch"
+TR_BIN="${SYSTEM_BIN}/tr"
+GREP_BIN="${SYSTEM_BIN}/grep"
+INSTALL_BIN="${SYSTEM_BIN}/install"
+NIX_CHANNEL_BIN="${SYSTEM_BIN}/nix-channel"
+NIXOS_REBUILD_BIN="${SYSTEM_BIN}/nixos-rebuild"
+RM_BIN="${SYSTEM_BIN}/rm"
+
 STAMP_DIR="/run/proxnix"
 STAMP_FILE="${STAMP_DIR}/apply-config-ran"
 CURRENT_HASH_FILE="/etc/proxnix/current-config-hash"
 APPLIED_HASH_FILE="/etc/proxnix/applied-config-hash"
 ROOT_CHANNEL_DIR="/nix/var/nix/profiles/per-user/root/channels/nixos"
 
-export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
+export PATH="${SYSTEM_BIN}:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
 
-mkdir -p "$STAMP_DIR"
+"$MKDIR_BIN" -p "$STAMP_DIR"
 
-current="$(tr -d "\r\n" < "$CURRENT_HASH_FILE" 2>/dev/null || true)"
-applied="$(tr -d "\r\n" < "$APPLIED_HASH_FILE" 2>/dev/null || true)"
+current="$("$TR_BIN" -d "\r\n" < "$CURRENT_HASH_FILE" 2>/dev/null || true)"
+applied="$("$TR_BIN" -d "\r\n" < "$APPLIED_HASH_FILE" 2>/dev/null || true)"
 
 if [ -z "$current" ]; then
     echo "proxnix-apply-config: no current config hash, skipping"
@@ -198,13 +208,8 @@ if [ -e "$STAMP_FILE" ]; then
     exit 0
 fi
 
-if [ ! -d "$ROOT_CHANNEL_DIR" ]; then
-    echo "proxnix-apply-config: nixpkgs channel missing; run /root/proxnix-bootstrap.sh once"
-    exit 0
-fi
-
-touch "$STAMP_FILE"
-trap '"'"'status=$?; if [ "$status" -ne 0 ]; then rm -f "$STAMP_FILE"; fi; exit "$status"'"'"' EXIT INT TERM
+"$TOUCH_BIN" "$STAMP_FILE"
+trap '"'"'status=$?; if [ "$status" -ne 0 ]; then "$RM_BIN" -f "$STAMP_FILE"; fi; exit "$status"'"'"' EXIT INT TERM
 
 if [ -z "${XDG_STATE_HOME:-}" ]; then
     XDG_STATE_HOME="/root/.local/state"
@@ -221,11 +226,20 @@ if [ -f /etc/set-environment ]; then
     set -u
 fi
 
+if [ ! -d "$ROOT_CHANNEL_DIR" ] || [ ! -d /nix/var/nix/profiles/per-user/root/channels/nixpkgs-unstable ]; then
+    state_version="$("$GREP_BIN" -oP '"'"'system\.stateVersion\s*=\s*"\K[^"]+'"'"' /etc/nixos/configuration.nix 2>/dev/null || true)"
+    state_version="${state_version:-25.05}"
+    echo "proxnix-apply-config: bootstrapping root channels for NixOS ${state_version}"
+    "$NIX_CHANNEL_BIN" --add "https://nixos.org/channels/nixos-${state_version}" nixos
+    "$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixpkgs-unstable nixpkgs-unstable
+    "$NIX_CHANNEL_BIN" --update
+fi
+
 export NIX_PATH="nixpkgs=${ROOT_CHANNEL_DIR}:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels${NIX_PATH:+:$NIX_PATH}"
 
 echo "proxnix-apply-config: hash changed (${applied:-unset} -> ${current}), rebuilding..."
-/run/current-system/sw/bin/nixos-rebuild switch
-install -m 0644 "$CURRENT_HASH_FILE" "$APPLIED_HASH_FILE"
+"$NIXOS_REBUILD_BIN" switch
+"$INSTALL_BIN" -m 0644 "$CURRENT_HASH_FILE" "$APPLIED_HASH_FILE"
 trap - EXIT INT TERM
 echo "proxnix-apply-config: rebuild complete"
 ' "$PROXNIX_APPLY_CONFIG_RUNNER" "755"; then
@@ -471,7 +485,10 @@ STATE_VERSION="${STATE_VERSION:-25.05}"
 cat > "${ROOTFS}/root/proxnix-bootstrap.sh" << EOF
 #!/run/current-system/sw/bin/bash
 set -euo pipefail
-export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
+SYSTEM_BIN="/run/current-system/sw/bin"
+INSTALL_BIN="${SYSTEM_BIN}/install"
+NIX_CHANNEL_BIN="${SYSTEM_BIN}/nix-channel"
+NIXOS_REBUILD_BIN="${SYSTEM_BIN}/nixos-rebuild"
 if [ -z "${XDG_STATE_HOME:-}" ]; then
     XDG_STATE_HOME="/root/.local/state"
 fi
@@ -482,11 +499,12 @@ if [ -f /etc/set-environment ]; then
     source /etc/set-environment
     set -u
 fi
-nix-channel --add https://nixos.org/channels/nixos-${STATE_VERSION} nixos
-nix-channel --update
-/run/current-system/sw/bin/nixos-rebuild switch
+"$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixos-${STATE_VERSION} nixos
+"$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixpkgs-unstable nixpkgs-unstable
+"$NIX_CHANNEL_BIN" --update
+"$NIXOS_REBUILD_BIN" switch
 if [ -f /etc/proxnix/current-config-hash ]; then
-    install -m 0644 /etc/proxnix/current-config-hash /etc/proxnix/applied-config-hash
+    "$INSTALL_BIN" -m 0644 /etc/proxnix/current-config-hash /etc/proxnix/applied-config-hash
 fi
 EOF
 chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"

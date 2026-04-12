@@ -95,39 +95,46 @@ At this point proxnix has already:
 1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/`
 2. Run the **mount hook** — copied that rendered config into the guest's `/etc/nixos/`
 3. Installed the `proxnix-apply-config` service inside the guest
-4. Generated the `proxnix-bootstrap.sh` script in `/root/`
+4. Generated the `proxnix-bootstrap.sh` script in `/root/` as a fallback recovery helper
 
-The guest is now running with a seeded NixOS configuration, but it hasn't been built yet.
+The guest now starts bootstrapping and applying the rendered NixOS configuration automatically on first boot.
 
-## 4. Bootstrap the NixOS channel
+## 4. Wait for the automatic first boot apply
 
-**Why:** The stock NixOS Proxmox template does not ship with the root `nixos` channel configured. Without it, `nixos-rebuild switch` cannot evaluate the configuration. This step is needed only once per container.
+**Why:** The stock NixOS Proxmox template does not ship with the root channels configured. proxnix now seeds them automatically before the first `nixos-rebuild switch`.
 
-Enter the guest and run the generated bootstrap script:
+Watch the service from the host:
+
+```bash
+pct exec 100 -- journalctl -u proxnix-apply-config.service -b -f
+```
+
+On first boot the service:
+
+1. Adds the NixOS channel matching the system's `stateVersion`
+2. Adds the `nixpkgs-unstable` channel for packages exposed via `pkgs.unstable`
+3. Runs `nix-channel --update`
+4. Runs `nixos-rebuild switch` to apply the full proxnix-managed configuration
+5. Records the applied config hash so future boots skip unnecessary rebuilds
+
+**This will take several minutes** on the first run while Nix downloads and builds packages.
+
+If the automatic apply fails, check:
+
+- Is there enough RAM? (at least 2 GB)
+- Does the container have internet access? (`ping 1.1.1.1`)
+- Can DNS resolve? (`ping nixos.org`)
+
+You can retry manually inside the guest if needed:
 
 ```bash
 pct enter 100
 /root/proxnix-bootstrap.sh
 ```
 
-This script:
-
-1. Adds the NixOS channel matching the system's `stateVersion`
-2. Runs `nix-channel --update`
-3. Runs `nixos-rebuild switch` to apply the full proxnix-managed configuration
-4. Records the applied config hash so future boots skip unnecessary rebuilds
-
-**This will take several minutes** on the first run while Nix downloads and builds packages.
-
-If the script fails, check:
-
-- Is there enough RAM? (at least 2 GB)
-- Does the container have internet access? (`ping 1.1.1.1`)
-- Can DNS resolve? (`ping nixos.org`)
-
 ### What you should see when done
 
-When you log in after bootstrap, you'll see:
+When you log in after the first boot apply finishes, you'll see:
 
 - The proxnix MOTD with managed paths and useful commands
 - A login summary showing IP, memory, disk, and Podman status

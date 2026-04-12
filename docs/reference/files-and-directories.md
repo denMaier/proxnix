@@ -146,7 +146,7 @@ Created by the pre-start hook, consumed by the mount hook:
 └── secrets.json                       Podman secret registry
 
 /root/
-└── proxnix-bootstrap.sh              one-time channel bootstrap
+└── proxnix-bootstrap.sh              manual recovery helper for first rebuild
 ```
 
 ## Workstation paths

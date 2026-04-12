@@ -27,21 +27,26 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 ---
 
-## `proxnix-apply-config` says the nixpkgs channel is missing
+## Automatic first rebuild does not finish
 
-This is expected on the first boot of a fresh NixOS Proxmox template.
-
-Inside the guest, run:
+Check the first-boot apply service log:
 
 ```bash
+pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b
+```
+
+If you need to retry manually inside the guest:
+
+```bash
+pct enter <vmid>
 /root/proxnix-bootstrap.sh
 ```
 
-## First rebuild fails during bootstrap
+## First rebuild fails during automatic bootstrap
 
 Check the CT memory allocation. Nix evaluation needs at least **2 GB RAM** for the initial `nixos-rebuild switch`.
 
-Increase memory in the Proxmox WebUI, then restart and re-run the bootstrap.
+Increase memory in the Proxmox WebUI, then restart and re-run the recovery helper.
 
 ## Admin user cannot use `sudo`
 
