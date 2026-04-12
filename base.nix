@@ -26,6 +26,8 @@ let
     printf '  Files:       /etc/nixos/configuration.nix\n'
     printf '               /etc/nixos/managed/{base,common,proxmox,user}.nix\n'
     printf '               /etc/nixos/managed/dropins/*.nix\n'
+    printf '               host dropins/*.service -> /etc/systemd/system.attached/\n'
+    printf '               host dropins/*.{sh,py} -> /usr/local/bin/\n'
     printf '  Local hook:  /etc/nixos/local.nix\n'
     if [ -n "$current" ] && [ "$current" != "$applied" ]; then
       printf '  State:       changed; restart the CT or run nixos-rebuild switch\n\n'
@@ -33,24 +35,26 @@ let
       printf '  State:       applied\n\n'
     fi
 
-    printf 'Quadlets and app state\n'
-    printf '  Units:       /etc/containers/systemd\n'
-    printf '  Config:      /etc/proxnix/quadlets\n'
-    printf '  Writable:    /var/lib/<app>/...\n'
-    printf '  Images:      use fully qualified names, for example docker.io/library/nginx:latest\n\n'
+    printf 'Workloads\n'
+    printf '  Quadlet units  /etc/containers/systemd\n'
+    printf '  App config     /etc/proxnix/quadlets\n'
+    printf '  Writable data  /var/lib/<app>/...\n'
+    printf '  Images         use fully qualified names, e.g. docker.io/library/nginx:latest\n\n'
 
     printf 'Useful commands\n'
-    printf '  proxnix-doctor %s\n' "$vmid"
-    printf '  nixos-rebuild switch\n'
-    printf '  podman ps -a\n'
-    printf '  podman logs -f NAME\n'
+    printf '  proxnix-help    this screen with live status\n'
+    printf '  proxnix-doctor  %s\n' "$vmid"
+    printf '  nixos-rebuild   switch\n'
+    printf '  podman ps       -a\n'
+    printf '  podman logs     -f NAME\n'
     printf '  podman auto-update --dry-run\n'
-    printf '  systemctl status podman-NAME.service\n'
-    printf '  jj -R /etc/proxnix/quadlets status\n\n'
+    printf '  systemctl       status podman-NAME.service\n'
+    printf '  jj              -R /etc/proxnix/quadlets status\n\n'
 
     printf 'Secrets\n'
-    printf '  podman secret ls\n'
-    printf '  podman run --secret NAME ...\n'
+    printf '  proxnix-secrets ls\n'
+    printf '  proxnix-secrets get NAME\n'
+    printf '  proxnix-secrets set NAME\n'
     printf '  native services read staged secrets from /run/<service>-secrets\n\n'
 
   '';
@@ -292,35 +296,39 @@ in {
   # ── Message of the day ────────────────────────────────────────────────────
   users.motd = ''
 
-     ── proxnix ───────────────────────────────────────────────────────────────
-      Config files   /etc/nixos/configuration.nix
-                     /etc/nixos/managed/{base,common,proxmox,user}.nix
-                     /etc/nixos/managed/dropins/*.nix
-                     /etc/nixos/local.nix        optional local override
+    proxnix
+    ========
 
-     Quadlets       /etc/proxnix/quadlets         jj-tracked config files
-                    /etc/containers/systemd       Quadlet unit files
+    Managed config
+      /etc/nixos/configuration.nix
+      /etc/nixos/managed/{base,common,proxmox,user}.nix
+      /etc/nixos/managed/dropins/*.nix
+      host dropins/*.service -> /etc/systemd/system.attached/
+      host dropins/*.{sh,py} -> /usr/local/bin/
+      /etc/nixos/local.nix  optional local override
 
-     Help           proxnix-help                  paths, commands, current state
+    Workloads
+      /etc/containers/systemd    Quadlet units
+      /etc/proxnix/quadlets      jj-tracked app config
 
-      Rebuild        run manually when managed config hash changes:
-                     nixos-rebuild switch
+    Secrets
+      proxnix-secrets ls
+      proxnix-secrets get NAME
+      proxnix-secrets set NAME
 
-     Secrets        podman secret ls
-                    podman run --secret NAME …
-                    (managed on host via proxnix-secrets; auto-registered here)
+    Live state
+      proxnix-help               full status and commands
+      proxnix-doctor VMID        host-side health check
+      nixos-rebuild switch       apply managed config
 
-     /etc drift     etc status          review guest-local /etc changes
-                    etc diff            inspect pending diffs
-                    etc commit -m ...   save an operator snapshot
+    Containers
+      podman ps -a
+      podman logs -f NAME
+      podman auto-update --dry-run
+      systemctl status podman-NAME.service
 
-     Containers     podman ps -a
-                     podman logs -f NAME
-                     podman auto-update --dry-run
-                     systemctl status podman-NAME.service
-
-     Nix            nix-collect-garbage -d          remove old generations
-                    nixos-rebuild list-generations
-    ──────────────────────────────────────────────────────────────────────────
+    Maintenance
+      nix-collect-garbage -d
+      nixos-rebuild list-generations
   '';
 }

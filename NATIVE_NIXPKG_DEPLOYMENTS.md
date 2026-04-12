@@ -25,12 +25,16 @@ For a target container VMID, host-side files live at:
 
 - `/etc/pve/proxnix/containers/<vmid>/user.yaml`
 - `/etc/pve/proxnix/containers/<vmid>/dropins/*.nix`
+- `/etc/pve/proxnix/containers/<vmid>/dropins/*.service`
+- `/etc/pve/proxnix/containers/<vmid>/dropins/*.{sh,py}`
 - optional `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`
 
 Inside the guest, proxnix generates and imports:
 
 - `/etc/nixos/managed/user.nix` from `user.yaml`
 - `/etc/nixos/managed/dropins/*.nix` from host `dropins/*.nix`
+- `/etc/systemd/system.attached/*.service` from host `dropins/*.service`
+- `/usr/local/bin/*.{sh,py}` from host `dropins/*.{sh,py}`
 - `/etc/nixos/local.nix` as an optional guest-only escape hatch
 
 ## `user.yaml` schema

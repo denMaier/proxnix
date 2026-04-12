@@ -11,6 +11,8 @@
 #   rendered/configuration.nix
 #   rendered/managed/{base,common,proxmox,user}.nix
 #   rendered/managed/dropins/*.nix
+#   runtime/systemd/*.service
+#   runtime/bin/*.{sh,py}
 #   quadlet/                             recursive Quadlet source tree
 #   secrets/{container,shared}.sops.yaml
 #   meta/{current-config-hash,vmid,proxnix-apply-config.service}
@@ -50,6 +52,9 @@ RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
 MANAGED_DROPIN_DIR="${MANAGED_DIR}/dropins"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
+RUNTIME_DIR="${STAGE_DIR}/runtime"
+RUNTIME_SYSTEMD_DIR="${RUNTIME_DIR}/systemd"
+RUNTIME_BIN_DIR="${RUNTIME_DIR}/bin"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
 META_DIR="${STAGE_DIR}/meta"
 PVE_CONF="/etc/pve/lxc/${VMID}.conf"
@@ -72,6 +77,8 @@ cleanup_stage
 mkdir -p \
     "$MANAGED_DROPIN_DIR" \
     "$QUADLET_DIR" \
+    "$RUNTIME_SYSTEMD_DIR" \
+    "$RUNTIME_BIN_DIR" \
     "$SECRETS_STAGE_DIR" \
     "$KEYS_STAGE_DIR" \
     "$META_DIR"
@@ -112,6 +119,12 @@ if [[ -d "$DROPIN_DIR" ]]; then
         case "$fname" in
             *.nix)
                 cp "$f" "${MANAGED_DROPIN_DIR}/${fname}"
+                ;;
+            *.service)
+                cp "$f" "${RUNTIME_SYSTEMD_DIR}/${fname}"
+                ;;
+            *.sh|*.py)
+                cp "$f" "${RUNTIME_BIN_DIR}/${fname}"
                 ;;
             *.container|*.volume|*.network|*.pod|*.image|*.build)
                 cp "$f" "${QUADLET_DIR}/${fname}"

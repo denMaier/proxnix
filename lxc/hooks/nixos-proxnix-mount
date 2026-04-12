@@ -35,6 +35,9 @@ STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
+RUNTIME_DIR="${STAGE_DIR}/runtime"
+RUNTIME_SYSTEMD_DIR="${RUNTIME_DIR}/systemd"
+RUNTIME_BIN_DIR="${RUNTIME_DIR}/bin"
 QUADLET_ROOT_DIR="${ROOTFS}/etc/proxnix/quadlets"
 QUADLET_SYSTEMD_DIR="${ROOTFS}/etc/containers/systemd"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
@@ -117,6 +120,47 @@ else
     log "Managed NixOS config unchanged (hash ${DESIRED_CONFIG_HASH})"
 fi
 proxnix_write_text_if_changed "${DESIRED_CONFIG_HASH}" "${ROOTFS}/etc/proxnix/current-config-hash" "644" >/dev/null || true
+
+SYSTEMD_MANIFEST="${ROOTFS}/etc/proxnix/managed-systemd-attached.list"
+BIN_MANIFEST="${ROOTFS}/etc/proxnix/managed-local-bin.list"
+
+if [[ -f "$SYSTEMD_MANIFEST" ]]; then
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        if [[ ! -f "${RUNTIME_SYSTEMD_DIR}/${name}" ]]; then
+            rm -f "${ROOTFS}/etc/systemd/system.attached/${name}"
+        fi
+    done < "$SYSTEMD_MANIFEST"
+fi
+
+current_systemd_manifest=""
+if [[ -d "$RUNTIME_SYSTEMD_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        name="$(basename "$f")"
+        proxnix_write_if_changed "$f" "${ROOTFS}/etc/systemd/system.attached/${name}" "644" >/dev/null || true
+        current_systemd_manifest+="${name}"$'\n'
+    done < <(find "$RUNTIME_SYSTEMD_DIR" -maxdepth 1 -type f -name '*.service' -print0 2>/dev/null | sort -z)
+fi
+proxnix_write_text_if_changed "$current_systemd_manifest" "$SYSTEMD_MANIFEST" "644" >/dev/null || true
+
+if [[ -f "$BIN_MANIFEST" ]]; then
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        if [[ ! -f "${RUNTIME_BIN_DIR}/${name}" ]]; then
+            rm -f "${ROOTFS}/usr/local/bin/${name}"
+        fi
+    done < "$BIN_MANIFEST"
+fi
+
+current_bin_manifest=""
+if [[ -d "$RUNTIME_BIN_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        name="$(basename "$f")"
+        proxnix_write_if_changed "$f" "${ROOTFS}/usr/local/bin/${name}" "755" >/dev/null || true
+        current_bin_manifest+="${name}"$'\n'
+    done < <(find "$RUNTIME_BIN_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
+fi
+proxnix_write_text_if_changed "$current_bin_manifest" "$BIN_MANIFEST" "644" >/dev/null || true
 
 if [[ -f "${META_DIR}/vmid" ]]; then
     proxnix_write_if_changed "${META_DIR}/vmid" "${ROOTFS}/etc/proxnix/vmid" "644" >/dev/null || true
