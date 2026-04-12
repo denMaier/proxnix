@@ -1,0 +1,407 @@
+#!/bin/bash
+# proxnix-create-lxc — Create a Proxmox NixOS LXC prepared for proxnix.
+#
+# Run on a Proxmox host as root. This helper intentionally does not install
+# proxnix; it only verifies that an existing proxnix install is healthy enough
+# to manage the new container.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_NAME="${0##*/}"
+
+pick_bin() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ID_BIN=""
+MKDIR_BIN=""
+PCT_BIN=""
+PVEVERSION_BIN=""
+PVESH_BIN=""
+
+init_bins() {
+  ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
+  MKDIR_BIN="$(pick_bin /usr/bin/mkdir /bin/mkdir)" || die "mkdir not found"
+  PCT_BIN="$(pick_bin /usr/sbin/pct /usr/bin/pct)" || die "pct not found — is this a Proxmox host?"
+  PVEVERSION_BIN="$(pick_bin /usr/sbin/pveversion /usr/bin/pveversion)" || die "pveversion not found — is this a Proxmox host?"
+  PVESH_BIN="$(pick_bin /usr/bin/pvesh /usr/sbin/pvesh || true)"
+}
+
+VMID=""
+HOSTNAME=""
+TEMPLATE=""
+STORAGE=""
+DISK="8"
+MEMORY="2048"
+SWAP="512"
+CORES="2"
+BRIDGE="vmbr0"
+IP_CONFIG="dhcp"
+GATEWAY=""
+SSH_PUBLIC_KEYS=""
+UNPRIVILEGED="1"
+ENABLE_NESTING=0
+START_AFTER_CREATE=0
+CREATE_CONFIG_DIR=1
+DRY_RUN=0
+ASSUME_YES=0
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+info() {
+  echo "  $*"
+}
+
+usage() {
+  printf '%s\n' \
+    "Usage:" \
+    "  ${SELF_NAME} [options]" \
+    "" \
+    "Required:" \
+    "  --vmid ID                 Numeric container VMID" \
+    "  --hostname NAME           Container hostname" \
+    "  --template STORAGE:FILE   Proxmox LXC template reference" \
+    "  --storage STORAGE         Rootfs storage name used with --disk" \
+    "" \
+    "Optional:" \
+    "  --disk GB                 Rootfs size in GB (default: ${DISK})" \
+    "  --memory MB               RAM in MB (default: ${MEMORY})" \
+    "  --swap MB                 Swap in MB (default: ${SWAP})" \
+    "  --cores N                 CPU cores (default: ${CORES})" \
+    "  --bridge NAME             Network bridge (default: ${BRIDGE})" \
+    "  --ip CIDR|dhcp            IP config for net0 (default: ${IP_CONFIG})" \
+    "  --gw ADDRESS              Gateway for static IP config" \
+    "  --ssh-public-keys PATH    SSH public keys file for the CT root account" \
+    "  --unprivileged 0|1        Create privileged or unprivileged CT (default: ${UNPRIVILEGED})" \
+    "  --nesting                 Enable features: nesting=1" \
+    "  --start                   Start the CT after creation" \
+    "  --no-config-dir           Skip creating /etc/pve/proxnix/containers/<vmid>/" \
+    "  --dry-run                 Print the commands without running them" \
+    "  --yes                     Skip the confirmation prompt" \
+    "  --help                    Show this help" \
+    "" \
+    "Examples:" \
+    "  ${SELF_NAME} \\" \
+    "    --vmid 120 \\" \
+    "    --hostname nixos-media \\" \
+    "    --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \\" \
+    "    --storage local-lvm \\" \
+    "    --disk 16 \\" \
+    "    --memory 4096 \\" \
+    "    --cores 4 \\" \
+    "    --nesting \\" \
+    "    --start"
+}
+
+prompt_if_empty() {
+  local var_name="$1" prompt="$2" default="${3:-}"
+  local value="${!var_name}"
+
+  if [[ -n "$value" ]]; then
+    return
+  fi
+
+  if [[ -n "$default" ]]; then
+    read -r -p "$prompt [$default]: " value
+    value="${value:-$default}"
+  else
+    read -r -p "$prompt: " value
+  fi
+
+  printf -v "$var_name" '%s' "$value"
+}
+
+next_vmid_default() {
+  if [[ -n "$PVESH_BIN" ]]; then
+    "$PVESH_BIN" get /cluster/nextid 2>/dev/null || true
+  fi
+}
+
+resolve_doctor() {
+  if [[ -x /usr/local/sbin/proxnix-doctor ]]; then
+    printf '%s\n' /usr/local/sbin/proxnix-doctor
+    return
+  fi
+
+  if [[ -x "${SCRIPT_DIR}/proxnix-doctor" ]]; then
+    printf '%s\n' "${SCRIPT_DIR}/proxnix-doctor"
+    return
+  fi
+
+  die "proxnix-doctor is not available. Install proxnix separately before using this helper."
+}
+
+run_proxnix_check() {
+  local doctor_bin
+  doctor_bin="$(resolve_doctor)"
+
+  echo ""
+  echo "Checking proxnix installation..."
+  if ! "$doctor_bin" --host-only; then
+    die "proxnix host checks failed. This helper does not install proxnix; fix the existing install and re-run."
+  fi
+}
+
+validate_inputs() {
+  [[ "$VMID" =~ ^[0-9]+$ ]] || die "--vmid must be numeric"
+  [[ -n "$HOSTNAME" ]] || die "--hostname is required"
+  [[ -n "$TEMPLATE" ]] || die "--template is required"
+  [[ -n "$STORAGE" ]] || die "--storage is required"
+  [[ "$DISK" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--disk must be a size in GB"
+  [[ "$MEMORY" =~ ^[0-9]+$ ]] || die "--memory must be numeric"
+  [[ "$SWAP" =~ ^[0-9]+$ ]] || die "--swap must be numeric"
+  [[ "$CORES" =~ ^[0-9]+$ ]] || die "--cores must be numeric"
+  [[ "$UNPRIVILEGED" == "0" || "$UNPRIVILEGED" == "1" ]] || die "--unprivileged must be 0 or 1"
+  [[ -z "$GATEWAY" || "$IP_CONFIG" != "dhcp" ]] || die "--gw requires a static --ip value"
+
+  if [[ -n "$SSH_PUBLIC_KEYS" && ! -f "$SSH_PUBLIC_KEYS" ]]; then
+    die "--ssh-public-keys file not found: $SSH_PUBLIC_KEYS"
+  fi
+
+  if [[ -e "/etc/pve/lxc/${VMID}.conf" ]]; then
+    die "container VMID ${VMID} already exists"
+  fi
+}
+
+build_net0() {
+  local net0="name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}"
+  if [[ -n "$GATEWAY" ]]; then
+    net0="${net0},gw=${GATEWAY}"
+  fi
+  printf '%s\n' "$net0"
+}
+
+print_plan() {
+  echo ""
+  echo "proxnix NixOS LXC plan"
+  echo "======================"
+  info "VMID:           ${VMID}"
+  info "Hostname:       ${HOSTNAME}"
+  info "Template:       ${TEMPLATE}"
+  info "Rootfs:         ${STORAGE}:${DISK}"
+  info "Memory / swap:  ${MEMORY} / ${SWAP} MB"
+  info "Cores:          ${CORES}"
+  info "Bridge:         ${BRIDGE}"
+  info "IP config:      ${IP_CONFIG}"
+  [[ -n "$GATEWAY" ]] && info "Gateway:        ${GATEWAY}"
+  info "Unprivileged:   ${UNPRIVILEGED}"
+  info "Nesting:        ${ENABLE_NESTING}"
+  info "Create config:  ${CREATE_CONFIG_DIR}"
+  info "Start after:    ${START_AFTER_CREATE}"
+  [[ -n "$SSH_PUBLIC_KEYS" ]] && info "SSH keys:       ${SSH_PUBLIC_KEYS}"
+  [[ $DRY_RUN -eq 1 ]] && info "Mode:           dry-run"
+}
+
+confirm_plan() {
+  local answer
+  [[ $ASSUME_YES -eq 1 ]] && return
+
+  echo ""
+  read -r -p "Create this NixOS container? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) die "aborted by user" ;;
+  esac
+}
+
+run_cmd() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '+'
+    printf ' %q' "$@"
+    printf '\n'
+    return
+  fi
+
+  "$@"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --vmid)
+        VMID="${2:?missing value for --vmid}"
+        shift 2
+        ;;
+      --hostname)
+        HOSTNAME="${2:?missing value for --hostname}"
+        shift 2
+        ;;
+      --template)
+        TEMPLATE="${2:?missing value for --template}"
+        shift 2
+        ;;
+      --storage)
+        STORAGE="${2:?missing value for --storage}"
+        shift 2
+        ;;
+      --disk)
+        DISK="${2:?missing value for --disk}"
+        shift 2
+        ;;
+      --memory)
+        MEMORY="${2:?missing value for --memory}"
+        shift 2
+        ;;
+      --swap)
+        SWAP="${2:?missing value for --swap}"
+        shift 2
+        ;;
+      --cores)
+        CORES="${2:?missing value for --cores}"
+        shift 2
+        ;;
+      --bridge)
+        BRIDGE="${2:?missing value for --bridge}"
+        shift 2
+        ;;
+      --ip)
+        IP_CONFIG="${2:?missing value for --ip}"
+        shift 2
+        ;;
+      --gw)
+        GATEWAY="${2:?missing value for --gw}"
+        shift 2
+        ;;
+      --ssh-public-keys)
+        SSH_PUBLIC_KEYS="${2:?missing value for --ssh-public-keys}"
+        shift 2
+        ;;
+      --unprivileged)
+        UNPRIVILEGED="${2:?missing value for --unprivileged}"
+        shift 2
+        ;;
+      --nesting)
+        ENABLE_NESTING=1
+        shift
+        ;;
+      --start)
+        START_AFTER_CREATE=1
+        shift
+        ;;
+      --no-config-dir)
+        CREATE_CONFIG_DIR=0
+        shift
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      --yes)
+        ASSUME_YES=1
+        shift
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+prompt_for_missing_values() {
+  local default_vmid
+  default_vmid="$(next_vmid_default)"
+
+  prompt_if_empty VMID "VMID" "$default_vmid"
+  prompt_if_empty HOSTNAME "Hostname"
+  prompt_if_empty TEMPLATE "Template (storage:vztmpl/file.tar.xz)"
+  prompt_if_empty STORAGE "Rootfs storage"
+  prompt_if_empty DISK "Disk size in GB" "$DISK"
+  prompt_if_empty MEMORY "Memory in MB" "$MEMORY"
+  prompt_if_empty SWAP "Swap in MB" "$SWAP"
+  prompt_if_empty CORES "CPU cores" "$CORES"
+  prompt_if_empty BRIDGE "Bridge" "$BRIDGE"
+  prompt_if_empty IP_CONFIG "IP config (dhcp or CIDR)" "$IP_CONFIG"
+
+  if [[ "$IP_CONFIG" != "dhcp" ]]; then
+    prompt_if_empty GATEWAY "Gateway"
+  fi
+}
+
+create_container() {
+  local net0
+  local -a pct_create_cmd
+
+  net0="$(build_net0)"
+  pct_create_cmd=(
+    "$PCT_BIN" create "$VMID" "$TEMPLATE"
+    --ostype nixos
+    --hostname "$HOSTNAME"
+    --rootfs "${STORAGE}:${DISK}"
+    --memory "$MEMORY"
+    --swap "$SWAP"
+    --cores "$CORES"
+    --net0 "$net0"
+    --unprivileged "$UNPRIVILEGED"
+  )
+
+  if [[ -n "$SSH_PUBLIC_KEYS" ]]; then
+    pct_create_cmd+=(--ssh-public-keys "$SSH_PUBLIC_KEYS")
+  fi
+
+  if [[ $ENABLE_NESTING -eq 1 ]]; then
+    pct_create_cmd+=(--features nesting=1)
+  fi
+
+  run_cmd "${pct_create_cmd[@]}"
+}
+
+create_host_side_dirs() {
+  [[ $CREATE_CONFIG_DIR -eq 1 ]] || return
+  run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/quadlets"
+  run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/dropins"
+}
+
+start_container_if_requested() {
+  [[ $START_AFTER_CREATE -eq 1 ]] || return
+  run_cmd "$PCT_BIN" start "$VMID"
+}
+
+print_next_steps() {
+  echo ""
+  echo "Done."
+  echo ""
+  echo "Next steps:"
+  echo "  1. Bootstrap the guest after its first boot:"
+  echo "       pct enter ${VMID}"
+  echo "       /root/proxnix-bootstrap.sh"
+  echo ""
+  echo "  2. Record the guest age recipient on the host:"
+  echo "       ${SCRIPT_DIR}/bootstrap-guest-secrets.sh ${VMID}"
+  echo ""
+  echo "  3. Re-run health checks:"
+  echo "       $(resolve_doctor) ${VMID}"
+}
+
+main() {
+  parse_args "$@"
+  init_bins
+  [[ "$("$ID_BIN" -u)" -eq 0 ]] || die "must be run as root"
+  [[ -x "$PVEVERSION_BIN" ]] || die "pveversion not found — is this a Proxmox host?"
+  [[ -x "$PCT_BIN" ]] || die "pct not found — is this a Proxmox host?"
+  prompt_for_missing_values
+  validate_inputs
+  run_proxnix_check
+  print_plan
+  confirm_plan
+  create_container
+  create_host_side_dirs
+  start_container_if_requested
+  print_next_steps
+}
+
+main "$@"

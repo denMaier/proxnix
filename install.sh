@@ -22,6 +22,7 @@
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
 #                                               — helper injected into guests
+#   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
 #   /etc/pve/proxnix/base.nix                   — shared NixOS base config
@@ -141,6 +142,7 @@ do_install "$SCRIPT_DIR/proxnix-secrets-guest" \
 
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
+do_install "$SCRIPT_DIR/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
 # Cleans up stale /run/proxnix/<vmid>/ dirs every 15 min for stopped/deleted
@@ -184,7 +186,8 @@ echo ""
 echo "  1b. Initialize the shared keypair (if you plan to use shared secrets):"
 echo "       proxnix-secrets init-shared"
 echo ""
-echo "  2. Create a NixOS CT in the Proxmox WebUI (or pct create):"
+echo "  2. Create a NixOS CT in the Proxmox WebUI, with pct create, or with:"
+echo "       proxnix-create-lxc"
 echo "       # Ensure ostype=nixos so the proxnix hook is auto-included."
 echo "       # If you plan to use Podman, also enable features: nesting=1."
 echo "       # Hostname/IP/gateway/DNS/SSH keys from the WebUI are mirrored"

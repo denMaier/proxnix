@@ -6,6 +6,7 @@
 # Usage:
 #   proxnix-doctor <vmid> [<vmid> ...]
 #   proxnix-doctor --all
+#   proxnix-doctor --host-only
 #
 # Exit codes:
 #   0  all checks passed
@@ -21,6 +22,44 @@ LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
 NIXOS_CURRENT_SYSTEM_BIN="/run/current-system/sw/bin"
+SELF_NAME="${0##*/}"
+
+pick_bin() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ID_BIN=""
+PVEVERSION_BIN=""
+PCT_BIN=""
+SED_BIN=""
+HEAD_BIN=""
+TR_BIN=""
+GREP_BIN=""
+FIND_BIN=""
+BASENAME_BIN=""
+SORT_BIN=""
+AWK_BIN=""
+
+init_bins() {
+  ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
+  PVEVERSION_BIN="$(pick_bin /usr/sbin/pveversion /usr/bin/pveversion)" || die "pveversion not found — is this a Proxmox host?"
+  PCT_BIN="$(pick_bin /usr/sbin/pct /usr/bin/pct)" || die "pct not found — is this a Proxmox host?"
+  SED_BIN="$(pick_bin /usr/bin/sed /bin/sed)" || die "sed not found"
+  HEAD_BIN="$(pick_bin /usr/bin/head /bin/head)" || die "head not found"
+  TR_BIN="$(pick_bin /usr/bin/tr /bin/tr)" || die "tr not found"
+  GREP_BIN="$(pick_bin /usr/bin/grep /bin/grep)" || die "grep not found"
+  FIND_BIN="$(pick_bin /usr/bin/find /bin/find)" || die "find not found"
+  BASENAME_BIN="$(pick_bin /usr/bin/basename /bin/basename)" || die "basename not found"
+  SORT_BIN="$(pick_bin /usr/bin/sort /bin/sort)" || die "sort not found"
+  AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
+}
 
 warns=0
 fails=0
@@ -31,11 +70,11 @@ die() {
 }
 
 usage() {
-  cat >&2 <<EOF
-Usage:
-  $(basename "$0") <vmid> [<vmid> ...]
-  $(basename "$0") --all
-EOF
+  printf '%s\n' \
+    "Usage:" \
+    "  ${SELF_NAME} <vmid> [<vmid> ...]" \
+    "  ${SELF_NAME} --all" \
+    "  ${SELF_NAME} --host-only" >&2
   exit 2
 }
 
@@ -47,17 +86,17 @@ fail()    { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 
 guest_cat() {
   local vmid="$1" path="$2"
-  pct exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$path"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$path"
 }
 
 guest_test() {
   local vmid="$1" flag="$2" path="$3"
-  pct exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/test" "$flag" "$path"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/test" "$flag" "$path"
 }
 
 conf_value() {
   local conf="$1" key="$2"
-  sed -n "s/^${key}: //p" "$conf" | head -n1
+  "$SED_BIN" -n "s/^${key}: //p" "$conf" | "$HEAD_BIN" -n1
 }
 
 user_yaml_mode() {
@@ -67,9 +106,9 @@ user_yaml_mode() {
     return
   fi
   local runtime
-  runtime="$(sed -n 's/^[[:space:]]*runtime:[[:space:]]*//p' "$user_yaml" | head -n1 | tr -d '"' | tr -d "'")"
+  runtime="$("$SED_BIN" -n 's/^[[:space:]]*runtime:[[:space:]]*//p' "$user_yaml" | "$HEAD_BIN" -n1 | "$TR_BIN" -d '"' | "$TR_BIN" -d "'")"
 
-  if grep -Eq '^[[:space:]]*containers:[[:space:]]*$' "$user_yaml"; then
+  if "$GREP_BIN" -Eq '^[[:space:]]*containers:[[:space:]]*$' "$user_yaml"; then
     printf 'legacy-container'
     return
   fi
@@ -82,7 +121,7 @@ user_yaml_mode() {
       printf 'legacy-container'
       ;;
     "")
-      if grep -Eq '^[[:space:]]*services:[[:space:]]*$' "$user_yaml"; then
+      if "$GREP_BIN" -Eq '^[[:space:]]*services:[[:space:]]*$' "$user_yaml"; then
         printf 'native'
       else
         printf 'empty'
@@ -98,9 +137,9 @@ has_quadlet_dropins() {
   local dropin_dir="$1"
   [[ -d "$dropin_dir" ]] || return 1
 
-  find "$dropin_dir" -maxdepth 1 -type f \
+  "$FIND_BIN" "$dropin_dir" -maxdepth 1 -type f \
     \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
-    | grep -q .
+    | "$GREP_BIN" -q .
 }
 
 check_guest_quadlet_dropins() {
@@ -112,14 +151,14 @@ check_guest_quadlet_dropins() {
   while IFS= read -r -d '' host_file; do
     found=1
     local base guest_file
-    base="$(basename "$host_file")"
+    base="$("$BASENAME_BIN" "$host_file")"
     guest_file="/etc/containers/systemd/${base}"
     if guest_test "$vmid" -f "$guest_file" >/dev/null 2>&1; then
       ok "guest Quadlet present: $guest_file"
     else
       fail "guest Quadlet missing: $guest_file"
     fi
-  done < <(find "$dropin_dir" -maxdepth 1 -type f \
+  done < <("$FIND_BIN" "$dropin_dir" -maxdepth 1 -type f \
     \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
     -print0 2>/dev/null)
 
@@ -157,8 +196,8 @@ workload_mode() {
 
 check_host_files() {
   heading "host"
-  [[ "$(id -u)" -eq 0 ]] || die "must run as root on the Proxmox host"
-  command -v pveversion >/dev/null 2>&1 || die "pveversion not found — is this a Proxmox host?"
+  [[ "$("$ID_BIN" -u)" -eq 0 ]] || die "must run as root on the Proxmox host"
+  [[ -x "$PVEVERSION_BIN" ]] || die "pveversion not found — is this a Proxmox host?"
 
   for path in \
     "$LXC_CONFIG_DIR/nixos.common.conf" \
@@ -247,12 +286,12 @@ check_container() {
     *) info "workload mode: baseline only" ;;
   esac
 
-  if ! command -v pct >/dev/null 2>&1; then
+  if [[ ! -x "$PCT_BIN" ]]; then
     fail "pct not found"
     return
   fi
 
-  state="$(pct status "$vmid" 2>/dev/null | awk '{print $2}')"
+  state="$("$PCT_BIN" status "$vmid" 2>/dev/null | "$AWK_BIN" '{print $2}')"
   if [[ -z "$state" ]]; then
     fail "could not determine container state with pct status"
     return
@@ -282,7 +321,7 @@ check_container() {
   done
 
   local guest_vmid
-  guest_vmid="$(guest_cat "$vmid" /etc/proxnix/vmid 2>/dev/null | tr -d '\r\n' || true)"
+  guest_vmid="$(guest_cat "$vmid" /etc/proxnix/vmid 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
   if [[ "$guest_vmid" == "$vmid" ]]; then
     ok "/etc/proxnix/vmid matches VMID"
   else
@@ -302,8 +341,8 @@ check_container() {
   fi
 
   local current_hash applied_hash
-  current_hash="$(guest_cat "$vmid" /etc/proxnix/current-config-hash 2>/dev/null | tr -d '\r\n' || true)"
-  applied_hash="$(guest_cat "$vmid" /etc/proxnix/applied-config-hash 2>/dev/null | tr -d '\r\n' || true)"
+  current_hash="$(guest_cat "$vmid" /etc/proxnix/current-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
+  applied_hash="$(guest_cat "$vmid" /etc/proxnix/applied-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
   if [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
     ok "applied managed config hash matches current hash"
   else
@@ -333,19 +372,35 @@ check_container() {
 
 main() {
   local targets=()
+  local host_only=0
 
   if [[ $# -eq 0 ]]; then
     usage
   fi
 
-  if [[ "${1:-}" == "--all" ]]; then
-    mapfile -t targets < <(command find /etc/pve/lxc -maxdepth 1 -name '*.conf' -type f -exec basename {} .conf \; | sort -n)
+  if [[ "${1:-}" == "--host-only" ]]; then
+    host_only=1
+  elif [[ "${1:-}" == "--all" ]]; then
+    init_bins
+    mapfile -t targets < <("$FIND_BIN" /etc/pve/lxc -maxdepth 1 -name '*.conf' -type f -exec "$BASENAME_BIN" {} .conf \; | "$SORT_BIN" -n)
     [[ ${#targets[@]} -gt 0 ]] || die "no LXC configs found under /etc/pve/lxc"
   else
     targets=("$@")
   fi
 
+  [[ -n "$ID_BIN" ]] || init_bins
   check_host_files
+  if (( host_only == 1 )); then
+    printf '\nSummary: %d fail(s), %d warning(s)\n' "$fails" "$warns"
+    if (( fails > 0 )); then
+      exit 2
+    fi
+    if (( warns > 0 )); then
+      exit 1
+    fi
+    exit 0
+  fi
+
   for vmid in "${targets[@]}"; do
     check_container "$vmid"
   done

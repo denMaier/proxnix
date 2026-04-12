@@ -42,6 +42,9 @@ proxnix-doctor --all
 
 # Check multiple specific containers
 proxnix-doctor 100 101 102
+
+# Check only the local proxnix installation on this node
+proxnix-doctor --host-only
 ```
 
 Exit codes:
@@ -51,6 +54,35 @@ Exit codes:
 | 0 | All checks passed |
 | 1 | Warnings found, no hard failures |
 | 2 | One or more hard failures |
+
+`--host-only` is useful for automation that needs to verify a node has the proxnix hooks, helpers, and shared files in place before creating or starting a container.
+
+### `proxnix-create-lxc`
+
+Create a NixOS LXC on a Proxmox host that is ready for proxnix management.
+
+This helper:
+
+- checks the existing proxnix install by calling `proxnix-doctor --host-only`
+- creates the CT with `ostype=nixos`
+- optionally enables `features: nesting=1`
+- optionally creates `/etc/pve/proxnix/containers/<vmid>/{quadlets,dropins}`
+- never attempts to install proxnix itself
+
+Example:
+
+```bash
+proxnix-create-lxc \
+  --vmid 120 \
+  --hostname nixos-media \
+  --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \
+  --storage local-lvm \
+  --disk 16 \
+  --memory 4096 \
+  --cores 4 \
+  --nesting \
+  --start
+```
 
 Sample output:
 
@@ -113,7 +145,7 @@ proxnix-secrets set-shared <name>       # create or update a shared secret
 Both commands prompt interactively for the secret value (with confirmation). You can also pipe a value:
 
 ```bash
-echo -n "myvalue" | proxnix-secrets set <vmid> <name>
+printf %s "myvalue" | proxnix-secrets set <vmid> <name>
 ```
 
 ### Removing

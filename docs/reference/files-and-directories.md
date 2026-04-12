@@ -11,6 +11,7 @@ This page maps every important proxnix path by role.
 | `bootstrap-guest-secrets.sh` | Records a guest SSH-backed age recipient on the host |
 | `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
 | `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
+| `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
 | `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
 | `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
@@ -64,6 +65,7 @@ This page maps every important proxnix path by role.
 └── proxnix-secrets-guest              helper injected into guests
 
 /usr/local/sbin/
+├── proxnix-create-lxc                 CT creation helper
 └── proxnix-doctor                     health check tool
 ```
 
