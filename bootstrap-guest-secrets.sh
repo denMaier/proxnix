@@ -22,6 +22,7 @@ NIXLXC_DIR="/etc/pve/proxnix"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 MASTER_PUBKEY_FILE="${NIXLXC_DIR}/master_age_pubkey"
 GUEST_PUBKEY_FILE="/etc/proxnix/secrets/identity.pub"
+NIXOS_CURRENT_SYSTEM_BIN="/run/current-system/sw/bin"
 
 if [[ ! -d "$CONTAINER_DIR" ]]; then
   echo "ERROR: ${CONTAINER_DIR} does not exist."
@@ -29,14 +30,12 @@ if [[ ! -d "$CONTAINER_DIR" ]]; then
   exit 1
 fi
 
-if ! pct exec "$VMID" -- test -f "$GUEST_PUBKEY_FILE" 2>/dev/null; then
+if ! PUBKEY="$(pct exec "$VMID" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$GUEST_PUBKEY_FILE" 2>/dev/null | tr -d '\r\n')"; then
   echo "ERROR: ${GUEST_PUBKEY_FILE} not found inside container ${VMID}."
   echo "       Make sure the container has booted at least once with base.nix"
   echo "       applied (the activation script generates the keypair on first boot)."
   exit 1
 fi
-
-PUBKEY="$(pct exec "$VMID" -- cat "$GUEST_PUBKEY_FILE" | tr -d '\r\n')"
 
 if [[ -z "$PUBKEY" ]]; then
   echo "ERROR: Could not read public key from container ${VMID}."

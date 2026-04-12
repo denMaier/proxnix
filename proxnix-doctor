@@ -20,6 +20,7 @@ LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
+NIXOS_CURRENT_SYSTEM_BIN="/run/current-system/sw/bin"
 
 warns=0
 fails=0
@@ -43,6 +44,16 @@ ok()      { printf '  OK    %s\n' "$1"; }
 info()    { printf '  INFO  %s\n' "$1"; }
 warn()    { printf '  WARN  %s\n' "$1"; warns=$((warns + 1)); }
 fail()    { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+
+guest_cat() {
+  local vmid="$1" path="$2"
+  pct exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$path"
+}
+
+guest_test() {
+  local vmid="$1" flag="$2" path="$3"
+  pct exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/test" "$flag" "$path"
+}
 
 conf_value() {
   local conf="$1" key="$2"
@@ -103,7 +114,7 @@ check_guest_quadlet_dropins() {
     local base guest_file
     base="$(basename "$host_file")"
     guest_file="/etc/containers/systemd/${base}"
-    if pct exec "$vmid" -- test -f "$guest_file" >/dev/null 2>&1; then
+    if guest_test "$vmid" -f "$guest_file" >/dev/null 2>&1; then
       ok "guest Quadlet present: $guest_file"
     else
       fail "guest Quadlet missing: $guest_file"
@@ -263,7 +274,7 @@ check_container() {
     /etc/proxnix/current-config-hash \
     /usr/local/bin/proxnix-secrets
   do
-    if pct exec "$vmid" -- test -f "$guest_file" >/dev/null 2>&1; then
+    if guest_test "$vmid" -f "$guest_file" >/dev/null 2>&1; then
       ok "guest file present: $guest_file"
     else
       fail "guest file missing: $guest_file"
@@ -271,28 +282,28 @@ check_container() {
   done
 
   local guest_vmid
-  guest_vmid="$(pct exec "$vmid" -- cat /etc/proxnix/vmid 2>/dev/null | tr -d '\r\n' || true)"
+  guest_vmid="$(guest_cat "$vmid" /etc/proxnix/vmid 2>/dev/null | tr -d '\r\n' || true)"
   if [[ "$guest_vmid" == "$vmid" ]]; then
     ok "/etc/proxnix/vmid matches VMID"
   else
     fail "/etc/proxnix/vmid is '${guest_vmid:-unset}', expected '${vmid}'"
   fi
 
-  if pct exec "$vmid" -- test -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
+  if guest_test "$vmid" -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
     ok "proxnix-apply-config service present"
   else
     warn "proxnix-apply-config service missing"
   fi
 
-  if pct exec "$vmid" -- test -L /etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
+  if guest_test "$vmid" -L /etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
     ok "proxnix-apply-config.service enabled"
   else
     warn "proxnix-apply-config.service not enabled"
   fi
 
   local current_hash applied_hash
-  current_hash="$(pct exec "$vmid" -- cat /etc/proxnix/current-config-hash 2>/dev/null | tr -d '\r\n' || true)"
-  applied_hash="$(pct exec "$vmid" -- cat /etc/proxnix/applied-config-hash 2>/dev/null | tr -d '\r\n' || true)"
+  current_hash="$(guest_cat "$vmid" /etc/proxnix/current-config-hash 2>/dev/null | tr -d '\r\n' || true)"
+  applied_hash="$(guest_cat "$vmid" /etc/proxnix/applied-config-hash 2>/dev/null | tr -d '\r\n' || true)"
   if [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
     ok "applied managed config hash matches current hash"
   else
@@ -300,7 +311,7 @@ check_container() {
   fi
 
   if [[ -f "${cdir}/age_pubkey" ]]; then
-    if pct exec "$vmid" -- test -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
+    if guest_test "$vmid" -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
       ok "bootstrap marker present"
     else
       warn "host has age_pubkey but guest bootstrap marker is missing; restart the container"
@@ -312,7 +323,7 @@ check_container() {
   if [[ "$mode" == "quadlet-dropins" ]]; then
     check_guest_quadlet_dropins "$vmid" "$dropin_dir"
     check_guest_quadlet_dropins "$vmid" "$quadlet_dir"
-    if pct exec "$vmid" -- test -d /etc/proxnix/quadlets/.jj >/dev/null 2>&1; then
+    if guest_test "$vmid" -d /etc/proxnix/quadlets/.jj >/dev/null 2>&1; then
       ok "guest Quadlet source is jj-tracked: /etc/proxnix/quadlets"
     else
       warn "guest Quadlet source is not jj-tracked yet: /etc/proxnix/quadlets"
