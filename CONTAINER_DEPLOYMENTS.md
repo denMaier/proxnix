@@ -64,6 +64,8 @@ containers/<app>/
 
 Use the root files as the editable source of truth for humans. Quadlet unit files go to `/etc/containers/systemd/`; non-unit files are mirrored into the guest's `/etc/proxnix/quadlets/` config tree.
 
+Use fully qualified image names in Quadlets. Prefer `docker.io/library/nginx:latest` over `nginx:latest`, and `docker.io/homeassistant/home-assistant:stable` over `homeassistant/home-assistant:stable`. This avoids registry-search ambiguity during rebuilds and restarts.
+
 ## How to handle config files
 
 Because proxnix syncs the full `quadlets/` tree, app-owned config files can live beside the unit files on the host.
@@ -74,6 +76,8 @@ Use this pattern:
 2. Reference app-owned runtime config under `/etc/proxnix/quadlets/<app>/` in the guest.
 3. Track guest-side edits with `jj -R /etc/proxnix/quadlets status`.
 4. In Quadlets, mount those guest paths with `Volume=/etc/proxnix/quadlets/<app>/file:/path/in/container:ro`.
+
+For writable app state, default to `/var/lib/<app>/...` inside the guest. Use `/etc/<app>` for native service config and `/opt/<app>` only for manually managed binaries or assets. That mirrors the toolkit's service-user convention while keeping proxnix's host-side source of truth under `/etc/pve/proxnix/containers/<vmid>/`.
 
 Then in a Quadlet:
 
@@ -101,13 +105,13 @@ Do not hardcode secrets into Nix or checked-in YAML.
 
 Base proxnix enables Podman by default.
 If the workload uses Podman, the Proxmox CT should have `features: nesting=1`.
-
 The common pattern is:
 
 - define a `*.network` file when the stack needs its own bridge network
 - define `*.volume` files for persistent Podman volumes
 - define a `*.pod` when multiple containers share ports and localhost behavior
 - attach app containers either to the pod or the network directly
+- add `AutoUpdate=registry` only when the image tag is intentionally tracking updates; check with `podman auto-update --dry-run` before applying
 
 ## What to generate for a new containerized app
 

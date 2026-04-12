@@ -17,6 +17,8 @@ Network config (hostname, IP, gateway, DNS, SSH keys) is read from the Proxmox c
 
 Inside the container, the mount hook installs a host-managed `proxnix-apply-config` service under `/etc/systemd/system.attached/`. It runs `nixos-rebuild switch` once per boot when the managed config hash changes. Podman is enabled only when top-level Quadlet unit files are present.
 
+Login shells show a small dynamic proxnix summary with IP, memory, disk, Podman state, and running containers. Run `proxnix-help` inside the guest for the fuller path and command reference.
+
 ---
 
 ## Install (Proxmox host, run as root)
@@ -120,6 +122,8 @@ This reads the container's age public key and stores it on the host so you can e
 **Change network config / SSH keys:** edit the container in the WebUI (or `proxmox.yaml` for extras), restart the container.
 
 **Add/change a Podman workload:** edit files under `quadlets/` on the host, restart the container. Inside the guest, proxnix puts Quadlet unit files directly into `/etc/containers/systemd`, while non-unit app config is mirrored into `/etc/proxnix/quadlets` and tracked with `jj`.
+
+Use fully qualified image names in Quadlets, such as `docker.io/library/nginx:latest`, so service restarts do not depend on registry search behavior. Writable app state should usually live under `/var/lib/<app>/...`; app config mirrored by proxnix should stay under `/etc/proxnix/quadlets/<app>/`.
 
 **Push a NixOS config change:** edit `user.yaml` or a dropin `.nix` file, then restart the container. The next boot schedules one guarded `nixos-rebuild switch` automatically. For ad-hoc guest-only changes, put them in `/etc/nixos/local.nix` inside the container and run `nixos-rebuild switch` manually.
 

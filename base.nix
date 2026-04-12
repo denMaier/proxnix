@@ -2,6 +2,58 @@
 
 let
   jjPackage = if pkgs ? jujutsu then pkgs.jujutsu else pkgs.jj;
+  proxnixHelp = pkgs.writeShellScriptBin "proxnix-help" ''
+    set -u
+
+    vmid="$(cat /etc/proxnix/vmid 2>/dev/null || hostname)"
+    current="$(cat /etc/proxnix/current-config-hash 2>/dev/null || true)"
+    applied="$(cat /etc/proxnix/applied-config-hash 2>/dev/null || true)"
+    ip_addr="$(ip -4 addr show scope global 2>/dev/null | awk '/inet / { sub(/\/.*/, "", $2); print $2; exit }')"
+    mem="$(free -h 2>/dev/null | awk '/^Mem:/ { print $3 " / " $2 }')"
+    disk="$(df -h / 2>/dev/null | awk 'NR == 2 { print $3 " / " $2 " (" $5 ")" }')"
+    fs_type="$(stat -f -c %T / 2>/dev/null || true)"
+
+    printf '\nproxnix help\n'
+    printf '============\n\n'
+    printf 'Container\n'
+    printf '  VMID/host:   %s\n' "$vmid"
+    [ -z "$ip_addr" ] || printf '  IP:          %s\n' "$ip_addr"
+    [ -z "$mem" ] || printf '  Memory:      %s\n' "$mem"
+    [ -z "$disk" ] || printf '  Disk:        %s\n' "$disk"
+    printf '  Root FS:     %s\n\n' "''${fs_type:-unknown}"
+
+    printf 'Managed config\n'
+    printf '  Files:       /etc/nixos/configuration.nix\n'
+    printf '               /etc/nixos/managed/{base,common,proxmox,user}.nix\n'
+    printf '               /etc/nixos/managed/dropins/*.nix\n'
+    printf '  Local hook:  /etc/nixos/local.nix\n'
+    if [ -n "$current" ] && [ "$current" != "$applied" ]; then
+      printf '  State:       changed; restart the CT or run nixos-rebuild switch\n\n'
+    else
+      printf '  State:       applied\n\n'
+    fi
+
+    printf 'Quadlets and app state\n'
+    printf '  Units:       /etc/containers/systemd\n'
+    printf '  Config:      /etc/proxnix/quadlets\n'
+    printf '  Writable:    /var/lib/<app>/...\n'
+    printf '  Images:      use fully qualified names, for example docker.io/library/nginx:latest\n\n'
+
+    printf 'Useful commands\n'
+    printf '  proxnix-doctor %s\n' "$vmid"
+    printf '  nixos-rebuild switch\n'
+    printf '  podman ps -a\n'
+    printf '  podman logs -f NAME\n'
+    printf '  podman auto-update --dry-run\n'
+    printf '  systemctl status podman-NAME.service\n'
+    printf '  jj -R /etc/proxnix/quadlets status\n\n'
+
+    printf 'Secrets\n'
+    printf '  podman secret ls\n'
+    printf '  podman run --secret NAME ...\n'
+    printf '  native services read staged secrets from /run/<service>-secrets\n\n'
+
+  '';
 in {
   imports = [
     <nixpkgs/nixos/modules/virtualisation/proxmox-lxc.nix>
@@ -41,6 +93,14 @@ in {
   programs.bash.interactiveShellInit = ''
     [ -f /etc/set-environment ] && . /etc/set-environment
   '';
+
+  environment.shellAliases = {
+    ll = "ls -alF";
+    la = "ls -A";
+    l = "ls -CF";
+    dps = "podman ps";
+    dpsa = "podman ps -a";
+  };
 
   # These mount units don't exist inside an unprivileged LXC container
   systemd.suppressedSystemUnits = [
@@ -84,6 +144,7 @@ in {
     pkgs.sops
     pkgs.python3Minimal
     jjPackage
+    proxnixHelp
   ];
 
   environment.variables = {
@@ -139,11 +200,55 @@ in {
     '';
   };
 
-  # Podman with Docker-compat socket and container DNS
+  # Podman with Docker-compat socket and container DNS.
   virtualisation.podman = {
     enable = true;
     dockerCompat = true;
     defaultNetwork.settings.dns_enabled = true;
+  };
+
+  # State-aware login summary inspired by debian-lxc-container-toolkit's
+  # dynamic MOTD, but kept Nix-native and read-only. `proxnix-help` prints the
+  # longer command/path reference on demand.
+  environment.etc."profile.d/proxnix-login-summary.sh" = {
+    mode = "0644";
+    text = ''
+      case "$-" in
+        *i*) ;;
+        *) return 0 2>/dev/null || exit 0 ;;
+      esac
+
+      [ -z "''${PROXNIX_LOGIN_SUMMARY_SHOWN:-}" ] || return 0 2>/dev/null || exit 0
+      export PROXNIX_LOGIN_SUMMARY_SHOWN=1
+
+      _ip="$(ip -4 addr show scope global 2>/dev/null | awk '/inet / { sub(/\/.*/, "", $2); print $2; exit }')"
+      _mem="$(free -h 2>/dev/null | awk '/^Mem:/ { print $3 " / " $2 }')"
+      _disk="$(df -h / 2>/dev/null | awk 'NR == 2 { print $3 " / " $2 " (" $5 ")" }')"
+      _podman_state="not enabled"
+      _podman_containers=""
+
+      if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+        _podman_state="ready"
+        _podman_count="$(podman ps --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')"
+        _podman_names="$(podman ps --format '{{.Names}}' 2>/dev/null | paste -sd ', ' -)"
+        _podman_containers="''${_podman_count:-0} running"
+        [ -z "$_podman_names" ] || _podman_containers="$_podman_containers: $_podman_names"
+      elif command -v podman >/dev/null 2>&1; then
+        _podman_state="installed, not responding"
+      fi
+
+      printf '\n  proxnix status\n'
+      [ -z "$_ip" ] || printf '    IP:       %s\n' "$_ip"
+      [ -z "$_mem" ] || printf '    Memory:   %s\n' "$_mem"
+      [ -z "$_disk" ] || printf '    Disk:     %s\n' "$_disk"
+      printf '    Podman:   %s\n' "$_podman_state"
+      [ -z "$_podman_containers" ] || printf '    Running:  %s\n' "$_podman_containers"
+
+      printf '    Commands: proxnix-help | proxnix-doctor %s | podman ps -a\n\n' \
+        "$(cat /etc/proxnix/vmid 2>/dev/null || hostname)"
+
+      unset _ip _mem _disk _podman_state _podman_count _podman_names _podman_containers
+    '';
   };
 
   # ── Bootstrap reminder ────────────────────────────────────────────────────
@@ -193,6 +298,8 @@ in {
      Quadlets       /etc/proxnix/quadlets         jj-tracked config files
                     /etc/containers/systemd       Quadlet unit files
 
+     Help           proxnix-help                  paths, commands, current state
+
       Rebuild        run manually when managed config hash changes:
                      nixos-rebuild switch
 
@@ -204,8 +311,9 @@ in {
                     etc diff            inspect pending diffs
                     etc commit -m ...   save an operator snapshot
 
-      Containers     podman ps -a
+     Containers     podman ps -a
                      podman logs -f NAME
+                     podman auto-update --dry-run
                      systemctl status podman-NAME.service
 
      Nix            nix-collect-garbage -d          remove old generations
