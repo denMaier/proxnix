@@ -222,6 +222,22 @@ in {
     defaultNetwork.settings.dns_enabled = true;
   };
 
+  virtualisation.containers.storage.settings = {
+    storage = {
+      driver = "overlay";
+      graphroot = "/var/lib/containers/storage";
+      runroot = "/run/containers/storage";
+
+      options = {
+        disable-volatile = true;
+        overlay = {
+          mount_program = "${pkgs.fuse-overlayfs}/bin/fuse-overlayfs";
+          mountopt = "nodev";
+        };
+      };
+    };
+  };
+
   # State-aware login summary inspired by debian-lxc-container-toolkit's
   # dynamic MOTD, but kept Nix-native and read-only. `proxnix-help` prints the
   # longer command/path reference on demand.
