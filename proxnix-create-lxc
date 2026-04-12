@@ -25,14 +25,22 @@ ID_BIN=""
 MKDIR_BIN=""
 PCT_BIN=""
 PVEVERSION_BIN=""
+PVEAM_BIN=""
+PVESM_BIN=""
 PVESH_BIN=""
+AWK_BIN=""
+STAT_BIN=""
 
 init_bins() {
   ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
   MKDIR_BIN="$(pick_bin /usr/bin/mkdir /bin/mkdir)" || die "mkdir not found"
   PCT_BIN="$(pick_bin /usr/sbin/pct /usr/bin/pct)" || die "pct not found — is this a Proxmox host?"
   PVEVERSION_BIN="$(pick_bin /usr/sbin/pveversion /usr/bin/pveversion)" || die "pveversion not found — is this a Proxmox host?"
+  PVEAM_BIN="$(pick_bin /usr/sbin/pveam /usr/bin/pveam)" || die "pveam not found — is this a Proxmox host?"
+  PVESM_BIN="$(pick_bin /usr/sbin/pvesm /usr/bin/pvesm)" || die "pvesm not found — is this a Proxmox host?"
   PVESH_BIN="$(pick_bin /usr/bin/pvesh /usr/sbin/pvesh || true)"
+  AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
+  STAT_BIN="$(pick_bin /usr/bin/stat /bin/stat)" || die "stat not found"
 }
 
 resolve_bootstrap_guest_secrets() {
@@ -85,10 +93,11 @@ usage() {
     "Required:" \
     "  --vmid ID                 Numeric container VMID" \
     "  --hostname NAME           Container hostname" \
-    "  --template STORAGE:FILE   Proxmox LXC template reference" \
     "  --storage STORAGE         Rootfs storage name used with --disk" \
     "" \
     "Optional:" \
+    "  --template STORAGE:FILE   Proxmox LXC template reference" \
+    "                            (omit to auto-detect the newest local NixOS template)" \
     "  --disk GB                 Rootfs size in GB (default: ${DISK})" \
     "  --memory MB               RAM in MB (default: ${MEMORY})" \
     "  --swap MB                 Swap in MB (default: ${SWAP})" \
@@ -109,13 +118,15 @@ usage() {
     "  ${SELF_NAME} \\" \
     "    --vmid 120 \\" \
     "    --hostname nixos-media \\" \
-    "    --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \\" \
     "    --storage local-lvm \\" \
     "    --disk 16 \\" \
     "    --memory 4096 \\" \
     "    --cores 4 \\" \
     "    --nesting \\" \
-    "    --start"
+    "    --start" \
+    "" \
+    "  # Override the auto-detected template when needed:" \
+    "  ${SELF_NAME} --vmid 121 --hostname nixos-alt --template local:vztmpl/nixos-custom.tar.xz --storage local-lvm"
 }
 
 prompt_if_empty() {
@@ -140,6 +151,80 @@ next_vmid_default() {
   if [[ -n "$PVESH_BIN" ]]; then
     "$PVESH_BIN" get /cluster/nextid 2>/dev/null || true
   fi
+}
+
+normalize_template_volid() {
+  local storage="$1" candidate="$2"
+
+  if [[ "$candidate" == *:* ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  candidate="${candidate##*/}"
+  printf '%s:vztmpl/%s\n' "$storage" "$candidate"
+}
+
+file_mtime() {
+  local path="$1"
+  local mtime
+
+  mtime="$("$STAT_BIN" -c '%Y' "$path" 2>/dev/null || true)"
+  if [[ -n "$mtime" ]]; then
+    printf '%s\n' "$mtime"
+    return
+  fi
+
+  mtime="$("$STAT_BIN" -f '%m' "$path" 2>/dev/null || true)"
+  if [[ -n "$mtime" ]]; then
+    printf '%s\n' "$mtime"
+    return
+  fi
+
+  printf '0\n'
+}
+
+detect_latest_template() {
+  local storage candidate volid path mtime
+  local best_volid="" best_mtime="-1"
+
+  while IFS= read -r storage; do
+    [[ -n "$storage" ]] || continue
+
+    while IFS= read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      case "${candidate,,}" in
+        *nixos*.tar.*) ;;
+        *) continue ;;
+      esac
+
+      volid="$(normalize_template_volid "$storage" "$candidate")"
+      path="$("$PVESM_BIN" path "$volid" 2>/dev/null || true)"
+      if [[ -n "$path" && -f "$path" ]]; then
+        mtime="$(file_mtime "$path")"
+      else
+        mtime="0"
+      fi
+
+      if (( mtime > best_mtime )); then
+        best_volid="$volid"
+        best_mtime="$mtime"
+      elif (( mtime == best_mtime )) && [[ -n "$best_volid" && "$volid" > "$best_volid" ]]; then
+        best_volid="$volid"
+      fi
+    done < <("$PVEAM_BIN" list "$storage" 2>/dev/null | "$AWK_BIN" 'NR>1 { print $1 }')
+  done < <("$PVESM_BIN" status --content vztmpl 2>/dev/null | "$AWK_BIN" 'NR>1 { print $1 }')
+
+  [[ -n "$best_volid" ]] || die "could not auto-detect a local NixOS template; pass --template explicitly or download one first"
+  printf '%s\n' "$best_volid"
+}
+
+auto_detect_template_if_needed() {
+  case "$TEMPLATE" in
+    ""|auto|latest)
+      TEMPLATE="$(detect_latest_template)"
+      ;;
+  esac
 }
 
 resolve_doctor() {
@@ -170,7 +255,6 @@ run_proxnix_check() {
 validate_inputs() {
   [[ "$VMID" =~ ^[0-9]+$ ]] || die "--vmid must be numeric"
   [[ -n "$HOSTNAME" ]] || die "--hostname is required"
-  [[ -n "$TEMPLATE" ]] || die "--template is required"
   [[ -n "$STORAGE" ]] || die "--storage is required"
   [[ "$DISK" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--disk must be a size in GB"
   [[ "$MEMORY" =~ ^[0-9]+$ ]] || die "--memory must be numeric"
@@ -332,7 +416,6 @@ prompt_for_missing_values() {
 
   prompt_if_empty VMID "VMID" "$default_vmid"
   prompt_if_empty HOSTNAME "Hostname"
-  prompt_if_empty TEMPLATE "Template (storage:vztmpl/file.tar.xz)"
   prompt_if_empty STORAGE "Rootfs storage"
   prompt_if_empty DISK "Disk size in GB" "$DISK"
   prompt_if_empty MEMORY "Memory in MB" "$MEMORY"
@@ -410,6 +493,7 @@ main() {
   [[ "$("$ID_BIN" -u)" -eq 0 ]] || die "must be run as root"
   [[ -x "$PVEVERSION_BIN" ]] || die "pveversion not found — is this a Proxmox host?"
   [[ -x "$PCT_BIN" ]] || die "pct not found — is this a Proxmox host?"
+  auto_detect_template_if_needed
   prompt_for_missing_values
   validate_inputs
   run_proxnix_check

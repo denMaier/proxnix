@@ -20,7 +20,7 @@ Here's what you'll do and why:
 
 ## 1. Create the CT in Proxmox
 
-Use a NixOS Proxmox LXC template from Hydra and create the container in the Proxmox WebUI. If you prefer a guided shell flow, run `proxnix-create-lxc` on the Proxmox host; it validates the local proxnix install first, then creates the CT without attempting to install proxnix for you.
+Use a NixOS Proxmox LXC template from Hydra and create the container in the Proxmox WebUI. If you prefer a guided shell flow, run `proxnix-create-lxc` on the Proxmox host; it validates the local proxnix install first, auto-detects the newest local NixOS template by default, and creates the CT without attempting to install proxnix for you.
 
 **Resource requirements:**
 

@@ -83,6 +83,7 @@ Create a NixOS LXC on a Proxmox host that is ready for proxnix management.
 This helper:
 
 - checks the existing proxnix install by calling `proxnix-doctor --host-only`
+- auto-detects the newest local NixOS template when `--template` is omitted
 - creates the CT with `ostype=nixos`
 - optionally enables `features: nesting=1`
 - optionally creates `/etc/pve/proxnix/containers/<vmid>/{quadlets,dropins}`
@@ -94,7 +95,6 @@ Example:
 proxnix-create-lxc \
   --vmid 120 \
   --hostname nixos-media \
-  --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \
   --storage local-lvm \
   --disk 16 \
   --memory 4096 \
@@ -109,7 +109,6 @@ After running `install.sh` once on a node, use the installed local helper direct
 /usr/local/sbin/proxnix-create-lxc \
   --vmid 120 \
   --hostname nixos-media \
-  --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \
   --storage local-lvm \
   --disk 16 \
   --memory 4096 \
@@ -119,6 +118,7 @@ After running `install.sh` once on a node, use the installed local helper direct
 ```
 
 That helper is localized by `install.sh`, so creating additional containers does not require re-downloading the repository.
+Pass `--template ...` only when you want to override the auto-detected newest local NixOS template.
 
 Sample output for `proxnix-doctor`:
 
