@@ -26,7 +26,7 @@ Use a NixOS Proxmox LXC template from Hydra and create the container in the Prox
 
 - **RAM:** Set at least **2 GB**. Nix evaluation during bootstrap needs this much memory. You can lower it after the first successful rebuild.
 - **Disk:** 8 GB minimum for a basic NixOS system; more for workloads
-- **Features:** Enable `nesting=1` if you plan to use Podman/Quadlet workloads
+- **Features:** `proxnix-create-lxc` always enables `nesting=1` for NixOS CTs
 
 After creation, confirm that Proxmox recognized it as NixOS:
 

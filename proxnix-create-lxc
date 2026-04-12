@@ -118,7 +118,7 @@ usage() {
     "  --gw ADDRESS              Gateway for static IP config" \
     "  --ssh-public-keys PATH    SSH public keys file for the CT root account" \
     "  --unprivileged 0|1        Create privileged or unprivileged CT (default: ${UNPRIVILEGED})" \
-    "  --nesting                 Enable features: nesting=1" \
+    "  --nesting                 Deprecated; nesting=1 is always enabled for NixOS" \
     "  --start                   Start the CT after creation" \
     "  --no-config-dir           Skip creating /etc/pve/proxnix/containers/<vmid>/" \
     "  --dry-run                 Print the commands without running them" \
@@ -132,7 +132,6 @@ usage() {
     "    --disk 16 \\" \
     "    --memory 4096 \\" \
     "    --cores 4 \\" \
-    "    --nesting \\" \
     "    --start" \
     "" \
     "  # Override the auto-detected template/storage when needed:" \
@@ -317,6 +316,32 @@ validate_inputs() {
   fi
 }
 
+verify_container_created() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    return
+  fi
+
+  [[ -f "/etc/pve/lxc/${VMID}.conf" ]] || die "pct create returned successfully, but /etc/pve/lxc/${VMID}.conf was not created"
+}
+
+verify_host_side_dirs() {
+  [[ $DRY_RUN -eq 1 ]] && return
+  [[ $CREATE_CONFIG_DIR -eq 1 ]] || return
+
+  [[ -d "/etc/pve/proxnix/containers/${VMID}/quadlets" ]] || die "host-side quadlets dir was not created for VMID ${VMID}"
+  [[ -d "/etc/pve/proxnix/containers/${VMID}/dropins" ]] || die "host-side dropins dir was not created for VMID ${VMID}"
+}
+
+verify_container_started() {
+  local state
+
+  [[ $DRY_RUN -eq 1 ]] && return
+  [[ $START_AFTER_CREATE -eq 1 ]] || return
+
+  state="$("$PCT_BIN" status "$VMID" 2>/dev/null | "$AWK_BIN" '{print $2}')"
+  [[ "$state" == "running" ]] || die "container ${VMID} was created, but failed to start"
+}
+
 build_net0() {
   local net0="name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}"
   if [[ -n "$GATEWAY" ]]; then
@@ -346,7 +371,7 @@ print_plan() {
   info "IP config:      ${IP_CONFIG}"
   [[ -n "$GATEWAY" ]] && info "Gateway:        ${GATEWAY}"
   info "Unprivileged:   ${UNPRIVILEGED}"
-  info "Nesting:        ${ENABLE_NESTING}"
+  info "Nesting:        1 (always enabled)"
   info "Create config:  ${CREATE_CONFIG_DIR}"
   info "Start after:    ${START_AFTER_CREATE}"
   [[ -n "$SSH_PUBLIC_KEYS" ]] && info "SSH keys:       ${SSH_PUBLIC_KEYS}"
@@ -501,22 +526,29 @@ create_container() {
     pct_create_cmd+=(--ssh-public-keys "$SSH_PUBLIC_KEYS")
   fi
 
-  if [[ $ENABLE_NESTING -eq 1 ]]; then
-    pct_create_cmd+=(--features nesting=1)
-  fi
+  pct_create_cmd+=(--features nesting=1)
 
+  msg_info "Creating container ${VMID}"
   run_cmd "${pct_create_cmd[@]}"
+  verify_container_created
+  msg_ok "Created container ${VMID}"
 }
 
 create_host_side_dirs() {
   [[ $CREATE_CONFIG_DIR -eq 1 ]] || return
+  msg_info "Creating proxnix config directories for ${VMID}"
   run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/quadlets"
   run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/dropins"
+  verify_host_side_dirs
+  msg_ok "Created host-side proxnix directories for ${VMID}"
 }
 
 start_container_if_requested() {
   [[ $START_AFTER_CREATE -eq 1 ]] || return
+  msg_info "Starting container ${VMID}"
   run_cmd "$PCT_BIN" start "$VMID"
+  verify_container_started
+  msg_ok "Started container ${VMID}"
 }
 
 print_next_steps() {

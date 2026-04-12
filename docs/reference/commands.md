@@ -86,7 +86,7 @@ This helper:
 - auto-detects the newest local NixOS template when `--template` is omitted
 - auto-detects a rootdir-capable storage when `--storage` is omitted
 - creates the CT with `ostype=nixos`
-- optionally enables `features: nesting=1`
+- always enables `features: nesting=1`
 - optionally creates `/etc/pve/proxnix/containers/<vmid>/{quadlets,dropins}`
 - never attempts to install proxnix itself
 
@@ -99,7 +99,6 @@ proxnix-create-lxc \
   --disk 16 \
   --memory 4096 \
   --cores 4 \
-  --nesting \
   --start
 ```
 
@@ -112,7 +111,6 @@ After running `install.sh` once on a node, use the installed local helper direct
   --disk 16 \
   --memory 4096 \
   --cores 4 \
-  --nesting \
   --start
 ```
 
