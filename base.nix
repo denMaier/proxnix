@@ -92,6 +92,9 @@ in {
   # without affecting normal SSH logins (double-sourcing is harmless).
   programs.bash.interactiveShellInit = ''
     [ -f /etc/set-environment ] && . /etc/set-environment
+    case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
+    case ":$PATH:" in *:/usr/local/sbin:*) ;; *) PATH="$PATH:/usr/local/sbin" ;; esac
+    export PATH
   '';
 
   environment.shellAliases = {
