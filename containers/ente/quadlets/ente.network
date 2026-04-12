@@ -1,6 +1,0 @@
-[Unit]
-Description=Ente network
-
-[Network]
-NetworkName=ente
-Driver=bridge

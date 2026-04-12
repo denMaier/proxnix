@@ -125,8 +125,10 @@ in {
         curl
         cacert
         lazyjournal
-        yazi
-        oxker
+        yazi #probably superfile soon, but currently to much hassle (flake or override)
+        lazydocker
+        snitch
+        gdu
       ];
       description = lib.mdDoc ''
         Convenience packages installed on every proxnix-managed LXC as part of

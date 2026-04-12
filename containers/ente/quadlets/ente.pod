@@ -5,7 +5,6 @@ After=network-online.target
 
 [Pod]
 PodName=ente
-Network=ente.network
 PublishPort=8080:8080
 PublishPort=3000:3000
 PublishPort=3002:3002
