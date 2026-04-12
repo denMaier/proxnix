@@ -75,10 +75,20 @@ START_AFTER_CREATE=0
 CREATE_CONFIG_DIR=1
 DRY_RUN=0
 ASSUME_YES=0
+TEMPLATE_AUTO=0
+STORAGE_AUTO=0
 
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+msg_info() {
+  printf ' → %s\n' "$*"
+}
+
+msg_ok() {
+  printf ' ✓ %s\n' "$*"
 }
 
 info() {
@@ -93,11 +103,12 @@ usage() {
     "Required:" \
     "  --vmid ID                 Numeric container VMID" \
     "  --hostname NAME           Container hostname" \
-    "  --storage STORAGE         Rootfs storage name used with --disk" \
     "" \
     "Optional:" \
     "  --template STORAGE:FILE   Proxmox LXC template reference" \
     "                            (omit to auto-detect the newest local NixOS template)" \
+    "  --storage STORAGE         Rootfs storage name used with --disk" \
+    "                            (omit to auto-detect a rootdir-capable storage)" \
     "  --disk GB                 Rootfs size in GB (default: ${DISK})" \
     "  --memory MB               RAM in MB (default: ${MEMORY})" \
     "  --swap MB                 Swap in MB (default: ${SWAP})" \
@@ -118,14 +129,13 @@ usage() {
     "  ${SELF_NAME} \\" \
     "    --vmid 120 \\" \
     "    --hostname nixos-media \\" \
-    "    --storage local-lvm \\" \
     "    --disk 16 \\" \
     "    --memory 4096 \\" \
     "    --cores 4 \\" \
     "    --nesting \\" \
     "    --start" \
     "" \
-    "  # Override the auto-detected template when needed:" \
+    "  # Override the auto-detected template/storage when needed:" \
     "  ${SELF_NAME} --vmid 121 --hostname nixos-alt --template local:vztmpl/nixos-custom.tar.xz --storage local-lvm"
 }
 
@@ -215,7 +225,7 @@ detect_latest_template() {
     done < <("$PVEAM_BIN" list "$storage" 2>/dev/null | "$AWK_BIN" 'NR>1 { print $1 }')
   done < <("$PVESM_BIN" status --content vztmpl 2>/dev/null | "$AWK_BIN" 'NR>1 { print $1 }')
 
-  [[ -n "$best_volid" ]] || die "could not auto-detect a local NixOS template; pass --template explicitly or download one first"
+  [[ -n "$best_volid" ]] || die "could not auto-detect a local NixOS template; pass --template explicitly or download one first with pveam"
   printf '%s\n' "$best_volid"
 }
 
@@ -223,6 +233,41 @@ auto_detect_template_if_needed() {
   case "$TEMPLATE" in
     ""|auto|latest)
       TEMPLATE="$(detect_latest_template)"
+      TEMPLATE_AUTO=1
+      ;;
+  esac
+}
+
+detect_rootfs_storage() {
+  local storage candidate
+  local -a storages=()
+
+  while IFS= read -r storage; do
+    [[ -n "$storage" ]] || continue
+    storages+=("$storage")
+  done < <("$PVESM_BIN" status --content rootdir 2>/dev/null | "$AWK_BIN" 'NR>1 && $3 == "active" { print $1 }')
+
+  if [[ ${#storages[@]} -eq 0 ]]; then
+    die "could not auto-detect a rootdir-capable active storage; pass --storage explicitly"
+  fi
+
+  for candidate in local-lvm local-zfs; do
+    for storage in "${storages[@]}"; do
+      if [[ "$storage" == "$candidate" ]]; then
+        printf '%s\n' "$storage"
+        return
+      fi
+    done
+  done
+
+  printf '%s\n' "${storages[0]}"
+}
+
+auto_detect_storage_if_needed() {
+  case "$STORAGE" in
+    ""|auto|latest)
+      STORAGE="$(detect_rootfs_storage)"
+      STORAGE_AUTO=1
       ;;
   esac
 }
@@ -281,13 +326,20 @@ build_net0() {
 }
 
 print_plan() {
+  local template_display storage_display
+
+  template_display="$TEMPLATE"
+  storage_display="$STORAGE"
+  [[ $TEMPLATE_AUTO -eq 1 ]] && template_display="${template_display} (auto)"
+  [[ $STORAGE_AUTO -eq 1 ]] && storage_display="${storage_display} (auto)"
+
   echo ""
   echo "proxnix NixOS LXC plan"
   echo "======================"
   info "VMID:           ${VMID}"
   info "Hostname:       ${HOSTNAME}"
-  info "Template:       ${TEMPLATE}"
-  info "Rootfs:         ${STORAGE}:${DISK}"
+  info "Template:       ${template_display}"
+  info "Rootfs:         ${storage_display}:${DISK}"
   info "Memory / swap:  ${MEMORY} / ${SWAP} MB"
   info "Cores:          ${CORES}"
   info "Bridge:         ${BRIDGE}"
@@ -416,7 +468,6 @@ prompt_for_missing_values() {
 
   prompt_if_empty VMID "VMID" "$default_vmid"
   prompt_if_empty HOSTNAME "Hostname"
-  prompt_if_empty STORAGE "Rootfs storage"
   prompt_if_empty DISK "Disk size in GB" "$DISK"
   prompt_if_empty MEMORY "Memory in MB" "$MEMORY"
   prompt_if_empty SWAP "Swap in MB" "$SWAP"
@@ -493,9 +544,17 @@ main() {
   [[ "$("$ID_BIN" -u)" -eq 0 ]] || die "must be run as root"
   [[ -x "$PVEVERSION_BIN" ]] || die "pveversion not found — is this a Proxmox host?"
   [[ -x "$PCT_BIN" ]] || die "pct not found — is this a Proxmox host?"
+  msg_info "Checking proxnix installation and local Proxmox defaults"
+  auto_detect_storage_if_needed
   auto_detect_template_if_needed
   prompt_for_missing_values
   validate_inputs
+  if [[ $STORAGE_AUTO -eq 1 ]]; then
+    msg_ok "Using rootfs storage: ${STORAGE}"
+  fi
+  if [[ $TEMPLATE_AUTO -eq 1 ]]; then
+    msg_ok "Using newest local NixOS template: ${TEMPLATE}"
+  fi
   run_proxnix_check
   print_plan
   confirm_plan
