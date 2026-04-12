@@ -75,6 +75,8 @@ do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 action "Local admin helper"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
+do_rm "$PROXNIX_SBIN_DIR/bootstrap-guest-secrets.sh"
+do_rm "$PROXNIX_SBIN_DIR/proxnix-create-lxc"
 
 action "GC timer"
 if [[ $DRY_RUN -eq 0 ]]; then

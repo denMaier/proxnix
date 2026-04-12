@@ -13,6 +13,25 @@ Useful flags:
 | `--dry-run` | Preview what would be installed without writing anything |
 | `--force-shared` | Overwrite shared pmxcfs content even if it already exists |
 
+### `remote/codeberg-install.sh`
+
+Curl-friendly wrapper for `install.sh`. It downloads a repo archive from Codeberg into a temporary directory and then executes the real `install.sh` from that checkout.
+
+Typical usage after publishing your own repo copy:
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)"
+
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)" -- --dry-run
+```
+
+You can also override the archive source without editing the wrapper:
+
+```bash
+PROXNIX_REPO_ARCHIVE_URL=https://codeberg.org/<owner>/<repo>/archive/main.tar.gz \
+  bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)"
+```
+
 ### `./uninstall.sh`
 
 Remove proxnix's per-node assets from the current Proxmox node. Leaves shared cluster data intact.
@@ -84,7 +103,24 @@ proxnix-create-lxc \
   --start
 ```
 
-Sample output:
+After running `install.sh` once on a node, use the installed local helper directly:
+
+```bash
+/usr/local/sbin/proxnix-create-lxc \
+  --vmid 120 \
+  --hostname nixos-media \
+  --template local:vztmpl/nixos-system-x86_64-linux.tar.xz \
+  --storage local-lvm \
+  --disk 16 \
+  --memory 4096 \
+  --cores 4 \
+  --nesting \
+  --start
+```
+
+That helper is localized by `install.sh`, so creating additional containers does not require re-downloading the repository.
+
+Sample output for `proxnix-doctor`:
 
 ```text
 [host]

@@ -8,10 +8,11 @@ This page maps every important proxnix path by role.
 |------|---------|
 | `install.sh` | Installs local hooks, helpers, and shared cluster files |
 | `uninstall.sh` | Removes the local installation from a node |
-| `bootstrap-guest-secrets.sh` | Records a guest SSH-backed age recipient on the host |
 | `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
+| `bootstrap-guest-secrets.sh` | Host-side helper that records the guest age recipient on the node |
 | `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
 | `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
+| `remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `install.sh` |
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
 | `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
 | `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
@@ -65,6 +66,7 @@ This page maps every important proxnix path by role.
 └── proxnix-secrets-guest              helper injected into guests
 
 /usr/local/sbin/
+├── bootstrap-guest-secrets.sh         guest age recipient bootstrap
 ├── proxnix-create-lxc                 CT creation helper
 └── proxnix-doctor                     health check tool
 ```

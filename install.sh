@@ -22,6 +22,7 @@
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
 #                                               — helper injected into guests
+#   /usr/local/sbin/bootstrap-guest-secrets.sh  — guest age recipient bootstrap
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
@@ -142,6 +143,8 @@ do_install "$SCRIPT_DIR/proxnix-secrets-guest" \
 
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
+do_install "$SCRIPT_DIR/bootstrap-guest-secrets.sh" \
+           "$PROXNIX_SBIN_DIR/bootstrap-guest-secrets.sh" "755"
 do_install "$SCRIPT_DIR/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────

@@ -35,6 +35,20 @@ init_bins() {
   PVESH_BIN="$(pick_bin /usr/bin/pvesh /usr/sbin/pvesh || true)"
 }
 
+resolve_bootstrap_guest_secrets() {
+  if [[ -x /usr/local/sbin/bootstrap-guest-secrets.sh ]]; then
+    printf '%s\n' /usr/local/sbin/bootstrap-guest-secrets.sh
+    return
+  fi
+
+  if [[ -x "${SCRIPT_DIR}/bootstrap-guest-secrets.sh" ]]; then
+    printf '%s\n' "${SCRIPT_DIR}/bootstrap-guest-secrets.sh"
+    return
+  fi
+
+  printf '%s\n' bootstrap-guest-secrets.sh
+}
+
 VMID=""
 HOSTNAME=""
 TEMPLATE=""
@@ -372,6 +386,9 @@ start_container_if_requested() {
 }
 
 print_next_steps() {
+  local bootstrap_guest_secrets
+  bootstrap_guest_secrets="$(resolve_bootstrap_guest_secrets)"
+
   echo ""
   echo "Done."
   echo ""
@@ -381,7 +398,7 @@ print_next_steps() {
   echo "       /root/proxnix-bootstrap.sh"
   echo ""
   echo "  2. Record the guest age recipient on the host:"
-  echo "       ${SCRIPT_DIR}/bootstrap-guest-secrets.sh ${VMID}"
+  echo "       ${bootstrap_guest_secrets} ${VMID}"
   echo ""
   echo "  3. Re-run health checks:"
   echo "       $(resolve_doctor) ${VMID}"
