@@ -71,7 +71,7 @@ GATEWAY=""
 SSH_PUBLIC_KEYS=""
 UNPRIVILEGED="1"
 ENABLE_NESTING=0
-START_AFTER_CREATE=0
+START_AFTER_CREATE=1
 CREATE_CONFIG_DIR=1
 DRY_RUN=0
 ASSUME_YES=0
@@ -119,7 +119,8 @@ usage() {
     "  --ssh-public-keys PATH    SSH public keys file for the CT root account" \
     "  --unprivileged 0|1        Create privileged or unprivileged CT (default: ${UNPRIVILEGED})" \
     "  --nesting                 Deprecated; nesting=1 is always enabled for NixOS" \
-    "  --start                   Start the CT after creation" \
+    "  --start                   Start the CT after creation (default)" \
+    "  --no-start                Create the CT but do not start it" \
     "  --no-config-dir           Skip creating /etc/pve/proxnix/containers/<vmid>/" \
     "  --dry-run                 Print the commands without running them" \
     "  --yes                     Skip the confirmation prompt" \
@@ -462,6 +463,10 @@ parse_args() {
         ;;
       --start)
         START_AFTER_CREATE=1
+        shift
+        ;;
+      --no-start)
+        START_AFTER_CREATE=0
         shift
         ;;
       --no-config-dir)

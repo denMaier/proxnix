@@ -87,6 +87,7 @@ This helper:
 - auto-detects a rootdir-capable storage when `--storage` is omitted
 - creates the CT with `ostype=nixos`
 - always enables `features: nesting=1`
+- starts the CT by default after creating it
 - optionally creates `/etc/pve/proxnix/containers/<vmid>/{quadlets,dropins}`
 - never attempts to install proxnix itself
 
@@ -116,6 +117,7 @@ After running `install.sh` once on a node, use the installed local helper direct
 
 That helper is localized by `install.sh`, so creating additional containers does not require re-downloading the repository.
 Pass `--template ...` or `--storage ...` only when you want to override the auto-detected defaults.
+Pass `--no-start` only when you explicitly want to create the CT without booting it yet.
 
 Sample output for `proxnix-doctor`:
 
