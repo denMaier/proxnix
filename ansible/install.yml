@@ -1,0 +1,102 @@
+---
+- name: Install proxnix on Proxmox nodes
+  hosts: "{{ proxnix_target_hosts | default('proxmox') }}"
+  become: true
+  gather_facts: false
+
+  vars:
+    proxnix_repo_root: "{{ playbook_dir }}/.."
+    proxnix_lxc_config_dir: /usr/share/lxc/config
+    proxnix_lxc_hooks_dir: /usr/share/lxc/hooks
+    proxnix_lib_dir: /usr/local/lib/proxnix
+    proxnix_sbin_dir: /usr/local/sbin
+    proxnix_systemd_unit_dir: /etc/systemd/system
+    proxnix_data_dir: /var/lib/proxnix
+    proxnix_private_dir: /var/lib/proxnix/private
+    proxnix_directories:
+      - path: "{{ proxnix_lib_dir }}"
+        mode: "0755"
+      - path: "{{ proxnix_data_dir }}"
+        mode: "0755"
+      - path: "{{ proxnix_private_dir }}"
+        mode: "0700"
+      - path: "{{ proxnix_data_dir }}/containers"
+        mode: "0755"
+      - path: "{{ proxnix_private_dir }}/shared"
+        mode: "0700"
+      - path: "{{ proxnix_private_dir }}/containers"
+        mode: "0700"
+    proxnix_installed_files:
+      - src: "{{ proxnix_repo_root }}/lxc/config/nixos.common.conf"
+        dest: "{{ proxnix_lxc_config_dir }}/nixos.common.conf"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/lxc/config/nixos.userns.conf"
+        dest: "{{ proxnix_lxc_config_dir }}/nixos.userns.conf"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/lxc/hooks/nixos-proxnix-prestart"
+        dest: "{{ proxnix_lxc_hooks_dir }}/nixos-proxnix-prestart"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/lxc/hooks/nixos-proxnix-mount"
+        dest: "{{ proxnix_lxc_hooks_dir }}/nixos-proxnix-mount"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/yaml-to-nix.py"
+        dest: "{{ proxnix_lib_dir }}/yaml-to-nix.py"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/lxc/hooks/nixos-proxnix-common.sh"
+        dest: "{{ proxnix_lib_dir }}/nixos-proxnix-common.sh"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/proxnix-secrets-guest"
+        dest: "{{ proxnix_lib_dir }}/proxnix-secrets-guest"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/proxnix-doctor"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-doctor"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/proxnix-create-lxc"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-create-lxc"
+        mode: "0755"
+      - src: "{{ proxnix_repo_root }}/systemd/proxnix-gc.service"
+        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.service"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/systemd/proxnix-gc.timer"
+        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.timer"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/base.nix"
+        dest: "{{ proxnix_data_dir }}/base.nix"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/common.nix"
+        dest: "{{ proxnix_data_dir }}/common.nix"
+        mode: "0644"
+      - src: "{{ proxnix_repo_root }}/configuration.nix"
+        dest: "{{ proxnix_data_dir }}/configuration.nix"
+        mode: "0644"
+
+  pre_tasks:
+    - name: Verify the target is a Proxmox host
+      ansible.builtin.command: pveversion
+      changed_when: false
+
+  tasks:
+    - name: Ensure proxnix-managed directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop: "{{ proxnix_directories }}"
+
+    - name: Install proxnix files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop: "{{ proxnix_installed_files }}"
+
+    - name: Enable proxnix GC timer
+      ansible.builtin.systemd:
+        name: proxnix-gc.timer
+        enabled: true
+        state: started
+        daemon_reload: true

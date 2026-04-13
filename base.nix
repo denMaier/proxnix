@@ -172,7 +172,6 @@ in {
   # Ensure secret directories exist and combine the host-staged per-container
   # SSH-backed age identity with the optional shared identity.
   # /etc/proxnix/secrets/identity     — private key staged by the Proxmox host
-  # /etc/proxnix/secrets/identity.pub — matching public recipient
   # /etc/proxnix/secrets/ — staged SOPS YAML stores
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
   system.activationScripts.age-setup = ''
@@ -180,9 +179,6 @@ in {
     chmod 700 /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
     if [ -f /etc/proxnix/secrets/identity ]; then
       chmod 600 /etc/proxnix/secrets/identity
-    fi
-    if [ -f /etc/proxnix/secrets/identity.pub ]; then
-      chmod 644 /etc/proxnix/secrets/identity.pub
     fi
     {
       if [ -f /etc/proxnix/secrets/identity ]; then

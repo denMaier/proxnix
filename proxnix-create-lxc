@@ -30,7 +30,6 @@ PVESM_BIN=""
 PVESH_BIN=""
 AWK_BIN=""
 STAT_BIN=""
-COMMON_LIB=""
 
 init_bins() {
   ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
@@ -42,33 +41,6 @@ init_bins() {
   PVESH_BIN="$(pick_bin /usr/bin/pvesh /usr/sbin/pvesh || true)"
   AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
   STAT_BIN="$(pick_bin /usr/bin/stat /bin/stat)" || die "stat not found"
-  if [[ -f /usr/local/lib/proxnix/nixos-proxnix-common.sh ]]; then
-    COMMON_LIB="/usr/local/lib/proxnix/nixos-proxnix-common.sh"
-  elif [[ -f "${SCRIPT_DIR}/lxc/hooks/nixos-proxnix-common.sh" ]]; then
-    COMMON_LIB="${SCRIPT_DIR}/lxc/hooks/nixos-proxnix-common.sh"
-  else
-    die "nixos-proxnix-common.sh not found"
-  fi
-}
-
-resolve_bootstrap_guest_secrets() {
-  if [[ -x /usr/local/sbin/bootstrap-guest-secrets.sh ]]; then
-    printf '%s\n' /usr/local/sbin/bootstrap-guest-secrets.sh
-    return
-  fi
-
-  if [[ -x "${SCRIPT_DIR}/bootstrap-guest-secrets.sh" ]]; then
-    printf '%s\n' "${SCRIPT_DIR}/bootstrap-guest-secrets.sh"
-    return
-  fi
-
-  printf '%s\n' bootstrap-guest-secrets.sh
-}
-
-ensure_container_age_identity() {
-  # shellcheck source=/dev/null
-  source "$COMMON_LIB"
-  proxnix_ensure_container_age_identity "$VMID"
 }
 
 VMID=""
@@ -562,13 +534,6 @@ create_host_side_dirs() {
   msg_ok "Created host-side proxnix directories for ${VMID}"
 }
 
-create_host_side_identity() {
-  [[ $DRY_RUN -eq 1 ]] && return
-  msg_info "Ensuring host-generated container age identity for ${VMID}"
-  ensure_container_age_identity
-  msg_ok "Container ${VMID} age recipient ready on host"
-}
-
 start_container_if_requested() {
   [[ $START_AFTER_CREATE -eq 1 ]] || return
   msg_info "Starting container ${VMID}"
@@ -589,7 +554,8 @@ print_next_steps() {
   echo ""
   echo "  2. Add or update secrets for this container at any time:"
   echo "       proxnix-secrets set ${VMID} mysecret"
-  echo "       # restart the CT after changing secrets so proxnix stages them"
+  echo "       proxnix-publish"
+  echo "       # restart the CT after publishing updated relay state"
   echo ""
   echo "  3. Re-run health checks:"
   echo "       $(resolve_doctor) ${VMID}"
@@ -617,7 +583,6 @@ main() {
   confirm_plan
   create_container
   create_host_side_dirs
-  create_host_side_identity
   start_container_if_requested
   print_next_steps
 }

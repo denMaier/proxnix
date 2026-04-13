@@ -93,46 +93,57 @@ pct restart <vmid>
 
 ## Secrets cannot be encrypted for a container
 
-`proxnix-secrets set <vmid> ...` needs the container public recipient at:
+`proxnix-secrets set <vmid> ...` needs access to the workstation site repo and the master identity.
 
-```text
-/var/lib/proxnix/containers/<vmid>/age_pubkey
-```
-
-If it is missing, run:
+Check:
 
 ```bash
-/usr/local/sbin/proxnix-create-lxc --vmid <vmid> --hostname <name> --no-start
+ls "$PROXNIX_SITE_DIR/private/containers/<vmid>/age_identity.sops.json"
+ls "$PROXNIX_MASTER_IDENTITY"
 ```
 
-For legacy/manual containers, you can still use:
+If the encrypted identity is missing, `proxnix-secrets set <vmid> ...` will create it automatically.
+
+## `proxnix-publish` cannot reach a host
+
+Check the workstation config:
 
 ```bash
-./bootstrap-guest-secrets.sh <vmid>
+mkdir -p ~/.config/proxnix
+cat > ~/.config/proxnix/config << 'EOF'
+PROXNIX_SITE_DIR=~/src/proxnix-site
+PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
+PROXNIX_HOSTS="root@your-proxmox-host"
+PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
+EOF
 ```
 
-## `proxnix-secrets` says "PROXNIX_HOST not set"
+See [installation step 3](../getting-started/installation.md#step-3-configure-your-workstation).
+
+## `proxnix-secrets` says "PROXNIX_SITE_DIR not set"
 
 The workstation config file is missing. Create it:
 
 ```bash
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
-PROXNIX_HOST=root@your-proxmox-host
-PROXNIX_IDENTITY=~/.ssh/id_ed25519
+PROXNIX_SITE_DIR=~/src/proxnix-site
+PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
+PROXNIX_HOSTS="root@your-proxmox-host"
+PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
 EOF
 ```
 
-See [installation step 5](../getting-started/installation.md#step-5-configure-your-workstation).
+See [installation step 3](../getting-started/installation.md#step-3-configure-your-workstation).
 
-## `proxnix-secrets` says "SSH identity not found"
+## `proxnix-secrets` says "master SSH identity not found"
 
-The identity file specified in `PROXNIX_IDENTITY` doesn't exist. Check the path in `~/.config/proxnix/config`.
+The identity file specified in `PROXNIX_MASTER_IDENTITY` doesn't exist. Check the path in `~/.config/proxnix/config`.
 
 Default location:
 
 ```bash
-PROXNIX_IDENTITY=~/.ssh/id_ed25519
+PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
 ```
 
 ## A native service cannot read its secret file

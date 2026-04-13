@@ -452,22 +452,14 @@ if changed:
     )
 PYEOF
 
-if [[ -f "${META_DIR}/bootstrap_done" ]]; then
-    touch "${ROOTFS}/etc/secrets/.bootstrap_done"
-else
-    rm -f "${ROOTFS}/etc/secrets/.bootstrap_done"
-fi
-
 if [[ -f "${KEYS_STAGE_DIR}/identity" ]]; then
     mkdir -p "${ROOTFS}/etc/proxnix/secrets"
     chmod 700 "${ROOTFS}/etc/proxnix/secrets"
     cp "${KEYS_STAGE_DIR}/identity" "${ROOTFS}/etc/proxnix/secrets/identity"
     chmod 600 "${ROOTFS}/etc/proxnix/secrets/identity"
-    if [[ -f "${KEYS_STAGE_DIR}/identity.pub" ]]; then
-        cp "${KEYS_STAGE_DIR}/identity.pub" "${ROOTFS}/etc/proxnix/secrets/identity.pub"
-        chmod 644 "${ROOTFS}/etc/proxnix/secrets/identity.pub"
-    fi
-    log "Deployed host-generated container age identity"
+    log "Deployed staged container age identity"
+else
+    rm -f "${ROOTFS}/etc/proxnix/secrets/identity" "${ROOTFS}/etc/proxnix/secrets/identity.pub"
 fi
 
 # Deploy the shared SSH-backed age identity — every container gets it when one
@@ -478,6 +470,8 @@ if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
     cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/proxnix/secrets/shared_identity"
     chmod 600 "${ROOTFS}/etc/proxnix/secrets/shared_identity"
     log "Deployed shared SSH-backed age identity"
+else
+    rm -f "${ROOTFS}/etc/proxnix/secrets/shared_identity"
 fi
 
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"

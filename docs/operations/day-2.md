@@ -97,14 +97,14 @@ Sample output for a healthy container:
 [ct 100]
   OK    ostype=nixos
   OK    applied managed config hash matches current hash
-  OK    host identity marker present
+  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
 
 Summary: 0 fail(s), 0 warning(s)
 ```
 
 ## Secret management
 
-From the host (or workstation with `proxnix-secrets` configured):
+From the workstation:
 
 ```bash
 # Per-container secrets
@@ -123,7 +123,12 @@ proxnix-secrets rm-shared <name>
 proxnix-secrets rotate-shared
 ```
 
-> **Remember:** Restart the CT after changing secrets so the staged store and Podman secret registry are refreshed.
+After changing secrets, publish and restart:
+
+```bash
+proxnix-publish
+pct restart <vmid>
+```
 
 ## Updating proxnix itself
 

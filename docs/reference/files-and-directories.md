@@ -7,54 +7,51 @@ This page maps every important proxnix path by role.
 | File | Purpose |
 |------|---------|
 | `install.sh` | Installs local hooks, helpers, and node-local proxnix files |
+| `ansible/install.yml` | Idempotent Ansible playbook that mirrors `install.sh` on one or more Proxmox nodes |
 | `uninstall.sh` | Removes the local installation from a node |
-| `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
-| `bootstrap-guest-secrets.sh` | Legacy host-side helper for older/manual containers |
 | `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
 | `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
+| `proxnix-doctor` | Host-side health check tool |
+| `proxnix-secrets` | Workstation-side secret and identity management tool |
+| `proxnix-publish` | Workstation-side publisher for relay caches |
+| `proxnix-workstation-common.sh` | Shared workstation helper library |
+| `proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `install.sh` |
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
 | `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
 | `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
-| `site.nix` | Optional site-wide override, usually managed outside the install repo |
-| `proxnix-secrets` | Host/workstation secret management tool |
-| `proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
-| `proxnix-doctor` | Host-side health check tool |
-| `lxc/hooks/` | Host-side pre-start and mount hooks |
-| `containers/` | Workload templates and examples |
 | `docs/` | Human-facing documentation site |
 
 ## Node-local host paths
 
-```
+These paths are relay caches on the Proxmox host. The workstation-owned site repo is the source of truth.
+
+```text
 /var/lib/proxnix/
 ├── base.nix                           shared NixOS baseline
 ├── common.nix                         shared operator module
 ├── configuration.nix                  NixOS entrypoint
-├── site.nix                           optional site-wide override
-├── master_age_pubkey                  master recovery key
-├── shared_age_pubkey                  shared encryption recipient
+├── site.nix                           published site override
 └── containers/
     └── <vmid>/
         ├── proxmox.yaml               optional extra PVE fields
         ├── user.yaml                  native service definitions
-        ├── age_pubkey                 host-managed SSH public key used as an age recipient
         ├── dropins/                   extra Nix, services, scripts, Quadlets
         └── quadlets/                  main Podman workload tree
 
 /var/lib/proxnix/private/
-├── shared_age_identity.txt            shared SSH private key used as an age identity
+├── shared_age_identity.txt            published shared relay identity
 ├── shared/
 │   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
     └── <vmid>/
-        ├── age_identity.txt          host-managed container SSH private key used as an age identity
+        ├── age_identity.txt          published container relay identity
         └── secrets.sops.yaml         per-container encrypted secrets
 ```
 
 ## Per-node runtime paths
 
-```
+```text
 /usr/share/lxc/config/
 ├── nixos.common.conf                  auto-included for ostype=nixos
 └── nixos.userns.conf                  auto-included for unprivileged
@@ -69,7 +66,6 @@ This page maps every important proxnix path by role.
 └── proxnix-secrets-guest              helper injected into guests
 
 /usr/local/sbin/
-├── bootstrap-guest-secrets.sh         legacy guest age recipient bootstrap
 ├── proxnix-create-lxc                 CT creation helper
 └── proxnix-doctor                     health check tool
 ```
@@ -78,7 +74,7 @@ This page maps every important proxnix path by role.
 
 Created by the pre-start hook, consumed by the mount hook:
 
-```
+```text
 /run/proxnix/<vmid>/
 ├── rendered/
 │   ├── configuration.nix
@@ -98,17 +94,15 @@ Created by the pre-start hook, consumed by the mount hook:
 │   └── container.sops.yaml
 ├── keys/
 │   ├── identity
-│   ├── identity.pub
 │   └── shared_identity.txt
 └── meta/
     ├── current-config-hash
-    ├── vmid
-    └── bootstrap_done              host identity staged marker
+    └── vmid
 ```
 
 ## Managed paths inside the guest
 
-```
+```text
 /etc/nixos/
 ├── configuration.nix                  NixOS entrypoint (read-only)
 ├── managed/                           host-managed modules (read-only)
@@ -133,7 +127,6 @@ Created by the pre-start hook, consumed by the mount hook:
 
 /etc/proxnix/secrets/
 ├── identity                           host-staged container SSH private key used as an age identity
-├── identity.pub                       matching container SSH public key used as an age recipient
 └── shared_identity                    shared SSH private key used as an age identity
 
 /etc/systemd/system.attached/
@@ -155,7 +148,12 @@ Created by the pre-start hook, consumed by the mount hook:
 
 ## Workstation paths
 
-```
+```text
 ~/.config/proxnix/
-└── config                             PROXNIX_HOST, PROXNIX_IDENTITY, etc.
+└── config                             PROXNIX_SITE_DIR, PROXNIX_MASTER_IDENTITY, etc.
+
+<proxnix-site>/
+├── site.nix
+├── containers/
+└── private/
 ```

@@ -2,9 +2,9 @@
 # install.sh — Install proxnix on a Proxmox host.
 #
 # Must be run as root on the Proxmox host from this repository directory.
-# proxnix now uses node-local storage. Run this on every node that should host
-# proxnix-managed containers. If you want identical config across nodes, keep
-# /var/lib/proxnix in sync yourself.
+# proxnix now uses node-local relay caches. Run this on every node that should
+# host proxnix-managed containers. Publish workstation-owned site data into
+# /var/lib/proxnix on every node that should relay it.
 #
 # Usage:
 #   ./install.sh [--dry-run] [--force-shared]
@@ -22,7 +22,6 @@
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
 #                                               — helper injected into guests
-#   /usr/local/sbin/bootstrap-guest-secrets.sh  — guest age recipient bootstrap
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #
 # Node-local proxnix data:
@@ -30,7 +29,7 @@
 #   /var/lib/proxnix/common.nix                 — shared proxnix option module
 #   /var/lib/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /var/lib/proxnix/site.nix                   — optional site/data-repo override
-#   /var/lib/proxnix/containers/                — per-container config + pubkeys
+#   /var/lib/proxnix/containers/                — per-container config relay cache
 #   /var/lib/proxnix/private/shared/            — shared encrypted secrets
 #   /var/lib/proxnix/private/containers/        — per-container encrypted secrets
 #
@@ -147,8 +146,6 @@ do_install "$SCRIPT_DIR/proxnix-secrets-guest" \
 
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
-do_install "$SCRIPT_DIR/bootstrap-guest-secrets.sh" \
-           "$PROXNIX_SBIN_DIR/bootstrap-guest-secrets.sh" "755"
 do_install "$SCRIPT_DIR/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
@@ -185,11 +182,11 @@ echo "Done."
 echo ""
 echo "Next steps:"
 echo ""
-echo "  1. Set a master SSH-backed age key for secret backup/recovery:"
-echo "       ssh-keygen -y -f ~/.ssh/id_ed25519 > $NIXLXC_DIR/master_age_pubkey"
-echo ""
-echo "  1b. Initialize the shared keypair (if you plan to use shared secrets):"
+echo "  1. On your workstation, manage proxnix state from a separate site repo:"
+echo "       # site.nix, containers/<vmid>/..., encrypted secret stores,"
+echo "       # and encrypted private identities all live there"
 echo "       proxnix-secrets init-shared"
+echo "       proxnix-publish"
 echo ""
 echo "  2. Create a NixOS CT in the Proxmox WebUI, with pct create, or with:"
 echo "       proxnix-create-lxc"
@@ -198,15 +195,10 @@ echo "       # If you plan to use Podman, also enable features: nesting=1."
 echo "       # Hostname/IP/gateway/DNS/SSH keys from the WebUI are mirrored"
 echo "       # into generated Nix on first boot."
 echo ""
-echo "  3. Optional: add per-container config under $NIXLXC_DIR/containers/<vmid>/"
-echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>/quadlets"
-echo "       # Optional: manage $NIXLXC_DIR/site.nix from a separate repo"
-echo "       # for site-wide overrides such as proxnix.common.extraPackages."
-echo "       # proxmox.yaml is optional — use it for search_domain or ssh_keys."
-echo "       # Add user.yaml only for native NixOS services."
-echo "       # Put Quadlet files and their app config under quadlets/."
-echo "       # Unit files go to /etc/containers/systemd; app config goes"
-echo "       # to /etc/proxnix/quadlets and is tracked with jj."
+echo "  3. Publish workstation-managed relay state to this node before booting:"
+echo "       proxnix-publish"
+echo "       # This syncs site.nix, containers/<vmid>/..., encrypted secret"
+echo "       # stores, and staged private identities into $NIXLXC_DIR."
 echo ""
 echo "  4. Start the container — pre-start renders state, mount seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"
@@ -217,9 +209,6 @@ echo "       # and applies managed config automatically when the hash changes."
 echo "       # Watch it with:"
 echo "       pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b"
 echo ""
-echo "  5. After first boot, bootstrap guest secrets:"
-echo "       $SCRIPT_DIR/bootstrap-guest-secrets.sh <vmid>"
-echo ""
-echo "  6. Run health checks anytime:"
+echo "  5. Run health checks anytime:"
 echo "       proxnix-doctor <vmid>"
 echo "       # Inside the guest, run: proxnix-help"

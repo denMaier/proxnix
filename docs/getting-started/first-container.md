@@ -2,7 +2,7 @@
 
 This page walks through the complete lifecycle for onboarding a new proxnix-managed NixOS container — from creation through health check.
 
-> **Before you start:** Make sure you've completed all steps in [installation](installation.md), including the master key, shared keypair, admin password hash, and workstation config. Skipping those will cause subtle failures later.
+> **Before you start:** Make sure you've completed all steps in [installation](installation.md), including the workstation site repo, master identity, and publish workflow. Skipping those will cause subtle failures later.
 
 ## Overview
 
@@ -11,7 +11,7 @@ Here's what you'll do and why:
 | Step | What | Why |
 |------|------|-----|
 | 1 | Create the CT in Proxmox | You need a NixOS LXC container |
-| 2 | Create the host-side config directory | proxnix reads per-container config from here |
+| 2 | Create the workstation-side container directory | proxnix reads published per-container config from here |
 | 3 | Start the container | Triggers the pre-start and mount hooks that seed NixOS config |
 | 4 | Bootstrap the NixOS channel | Fresh templates lack the root `nixos` channel needed for `nixos-rebuild` |
 | 5 | Add the first secret (optional) | Demonstrates the secrets workflow |
@@ -47,15 +47,15 @@ pct set <vmid> --ostype nixos
 
 > `ostype=nixos` matters because Proxmox automatically includes the proxnix LXC config snippets for NixOS containers. Without it, the hooks won't run.
 
-## 2. Create the host-side container directory
+## 2. Create the workstation-side container directory
 
-proxnix looks for per-container configuration under `/var/lib/proxnix/containers/<vmid>/`. Creating this directory is optional for a baseline container, but you'll need it for any customization.
+proxnix looks for published per-container configuration under `/var/lib/proxnix/containers/<vmid>/`, but the source of truth now lives in your workstation-owned site repo. Creating this directory is optional for a baseline container, but you'll need it for any customization.
 
 For VMID `100`:
 
 ```bash
 VMID=100
-mkdir -p /var/lib/proxnix/containers/$VMID/quadlets
+mkdir -p ~/src/proxnix-site/containers/$VMID/quadlets
 ```
 
 ### Optional files
@@ -73,15 +73,21 @@ Example setup for a container with native services:
 
 ```bash
 VMID=100
-mkdir -p /var/lib/proxnix/containers/$VMID/{quadlets,dropins}
+mkdir -p ~/src/proxnix-site/containers/$VMID/{quadlets,dropins}
 
-cat > /var/lib/proxnix/containers/$VMID/user.yaml << 'EOF'
+cat > ~/src/proxnix-site/containers/$VMID/user.yaml << 'EOF'
 runtime: native
 services:
   jellyfin:
     enable: true
     hardware_acceleration: true
 EOF
+```
+
+Publish the new relay state before starting the container:
+
+```bash
+proxnix-publish
 ```
 
 ## 3. Start the container
@@ -141,16 +147,15 @@ When you log in after the first boot apply finishes, you'll see:
 
 ## 5. Add the first secret (optional)
 
-proxnix generates the per-container SSH-backed age keypair on the host automatically, so you can encrypt secrets to the container immediately:
+`proxnix-secrets` creates the per-container identity in the workstation site repo on demand, so you can encrypt secrets to the container immediately:
 
 ```bash
 # From your workstation (with proxnix-secrets configured)
 proxnix-secrets set 100 mysecret
+proxnix-publish
 ```
 
-You'll be prompted to enter and confirm the secret value.
-
-Restart the CT so the pre-start hook stages the encrypted secret store and the mount hook registers the secret with Podman:
+You'll be prompted to enter and confirm the secret value. Restart the CT so the pre-start hook stages the updated relay cache and the mount hook registers the secret with Podman:
 
 ```bash
 # From the Proxmox host
@@ -187,14 +192,13 @@ Expected output for a healthy container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   OK    container config dir present: /var/lib/proxnix/containers/100
-  OK    host age recipient present: /var/lib/proxnix/containers/100/age_pubkey
+  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
   OK    guest container age identity present
   ...
   OK    guest file present: /etc/nixos/configuration.nix
   OK    guest file present: /etc/nixos/managed/base.nix
   ...
   OK    applied managed config hash matches current hash
-  OK    host identity marker present
 
 Summary: 0 fail(s), 0 warning(s)
 ```

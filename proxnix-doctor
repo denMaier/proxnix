@@ -226,6 +226,8 @@ check_container() {
   local conf="/etc/pve/lxc/${vmid}.conf"
   local cdir="${NIXLXC_DIR}/containers/${vmid}"
   local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
+  local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
+  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
   local user_yaml="${cdir}/user.yaml"
   local dropin_dir="${cdir}/dropins"
   local quadlet_dir="${cdir}/quadlets"
@@ -349,20 +351,34 @@ check_container() {
     warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"
   fi
 
-  if [[ -f "${cdir}/age_pubkey" ]]; then
-    ok "host age recipient present: ${cdir}/age_pubkey"
+  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.txt" ]]; then
+    fail "container secret store exists but relay identity is missing: ${priv_cdir}/age_identity.txt"
+  fi
+
+  if [[ -f "${shared_store}" && ! -f "${shared_identity}" ]]; then
+    fail "shared secret store exists but relay identity is missing: ${shared_identity}"
+  fi
+
+  if [[ -f "${priv_cdir}/age_identity.txt" ]]; then
+    ok "host relay container age identity present: ${priv_cdir}/age_identity.txt"
     if guest_test "$vmid" -f /etc/proxnix/secrets/identity >/dev/null 2>&1; then
       ok "guest container age identity present"
     else
-      warn "host has age_pubkey but guest container age identity is missing; restart the container"
-    fi
-    if guest_test "$vmid" -f /etc/secrets/.bootstrap_done >/dev/null 2>&1; then
-      ok "host identity marker present"
-    else
-      warn "host identity marker missing; restart the container"
+      warn "host relay has a container age identity but the guest is missing it; restart the container"
     fi
   else
-    fail "host age recipient missing: ${cdir}/age_pubkey"
+    info "no host relay container age identity configured"
+  fi
+
+  if [[ -f "${shared_identity}" ]]; then
+    ok "host relay shared age identity present: ${shared_identity}"
+    if guest_test "$vmid" -f /etc/proxnix/secrets/shared_identity >/dev/null 2>&1; then
+      ok "guest shared age identity present"
+    else
+      warn "host relay has a shared age identity but the guest is missing it; restart the container"
+    fi
+  else
+    info "no host relay shared age identity configured"
   fi
 
   if [[ "$mode" == "quadlet-dropins" ]]; then

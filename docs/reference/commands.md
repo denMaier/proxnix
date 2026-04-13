@@ -13,56 +13,35 @@ Useful flags:
 | `--dry-run` | Preview what would be installed without writing anything |
 | `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
 
+### `ansible/install.yml`
+
+Install proxnix onto one or more Proxmox nodes through Ansible.
+
+```bash
+ansible-playbook -i inventory.ini ansible/install.yml
+ansible-playbook -i inventory.ini ansible/install.yml -e proxnix_target_hosts=pve_nodes
+```
+
 ### `remote/codeberg-install.sh`
 
-Curl-friendly wrapper for `install.sh`. It downloads a repo archive from Codeberg into a temporary directory and then executes the real `install.sh` from that checkout.
-
-Typical usage after publishing your own repo copy:
+Curl-friendly wrapper for `install.sh`.
 
 ```bash
 bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)"
-
 bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)" -- --dry-run
-```
-
-You can also override the archive source without editing the wrapper:
-
-```bash
-PROXNIX_REPO_ARCHIVE_URL=https://codeberg.org/<owner>/<repo>/archive/main.tar.gz \
-  bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)"
 ```
 
 ### `./uninstall.sh`
 
-Remove proxnix's installed assets from the current Proxmox node. Leaves node-local proxnix data intact.
-
-Useful flag:
-
-| Flag | Purpose |
-|------|---------|
-| `--dry-run` | Preview what would be removed |
-
-### `./bootstrap-guest-secrets.sh <vmid>`
-
-Legacy repair helper. For older/manual containers, read the guest SSH public key used as an `age` recipient and store it under `/var/lib/proxnix/containers/<vmid>/age_pubkey`.
-
-Containers created by `proxnix-create-lxc` do not need this step because proxnix generates the per-container keypair on the host.
+Remove proxnix's installed assets from the current Proxmox node. Leaves `/var/lib/proxnix` intact.
 
 ### `proxnix-doctor <vmid>`
 
 Run host and per-container health checks.
 
 ```bash
-# Check a single container
 proxnix-doctor 100
-
-# Check all known containers
 proxnix-doctor --all
-
-# Check multiple specific containers
-proxnix-doctor 100 101 102
-
-# Check only the local proxnix installation on this node
 proxnix-doctor --host-only
 ```
 
@@ -74,7 +53,18 @@ Exit codes:
 | 1 | Warnings found, no hard failures |
 | 2 | One or more hard failures |
 
-`--host-only` is useful for automation that needs to verify a node has the proxnix hooks, helpers, and node-local data files in place before creating or starting a container.
+Sample output for a healthy relay-backed container:
+
+```text
+[ct 100]
+  OK    PVE config present: /etc/pve/lxc/100.conf
+  OK    ostype=nixos
+  INFO  state: running
+  OK    guest file present: /etc/nixos/configuration.nix
+  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
+  OK    guest container age identity present
+  OK    applied managed config hash matches current hash
+```
 
 ### `proxnix-create-lxc`
 
@@ -90,120 +80,78 @@ This helper:
 - starts the CT by default after creating it
 - optionally creates `/var/lib/proxnix/containers/<vmid>/{quadlets,dropins}`
 - never attempts to install proxnix itself
+- does not generate secret identities on the host
 
-Example:
+## Workstation commands
 
-```bash
-proxnix-create-lxc \
-  --vmid 120 \
-  --hostname nixos-media \
-  --disk 16 \
-  --memory 4096 \
-  --cores 4 \
-  --start
-```
+### `proxnix-secrets`
 
-After running `install.sh` once on a node, use the installed local helper directly:
+This is the workstation-authoritative helper for the external proxnix site repo.
 
-```bash
-/usr/local/sbin/proxnix-create-lxc \
-  --vmid 120 \
-  --hostname nixos-media \
-  --disk 16 \
-  --memory 4096 \
-  --cores 4 \
-  --start
-```
-
-That helper is localized by `install.sh`, so creating additional containers does not require re-downloading the repository.
-Pass `--template ...` or `--storage ...` only when you want to override the auto-detected defaults.
-Pass `--no-start` only when you explicitly want to create the CT without booting it yet.
-
-Sample output for `proxnix-doctor`:
-
-```text
-[host]
-  OK    /usr/share/lxc/config/nixos.common.conf present
-  OK    /usr/share/lxc/config/nixos.userns.conf present
-  OK    /usr/share/lxc/hooks/nixos-proxnix-prestart present
-  OK    /usr/share/lxc/hooks/nixos-proxnix-mount present
-  OK    /usr/local/lib/proxnix/yaml-to-nix.py present
-  OK    /usr/local/lib/proxnix/nixos-proxnix-common.sh present
-  OK    /usr/local/lib/proxnix/proxnix-secrets-guest present
-  OK    /usr/local/sbin/proxnix-doctor present
-  OK    /var/lib/proxnix/base.nix present
-  OK    /var/lib/proxnix/common.nix present
-  OK    /var/lib/proxnix/configuration.nix present
-  OK    /var/lib/proxnix/private present
-
-[ct 100]
-  OK    PVE config present: /etc/pve/lxc/100.conf
-  OK    ostype=nixos
-  INFO  workload mode: native services
-  INFO  state: running
-  OK    guest file present: /etc/nixos/configuration.nix
-  OK    guest file present: /etc/nixos/managed/base.nix
-  OK    host age recipient present: /var/lib/proxnix/containers/100/age_pubkey
-  OK    guest container age identity present
-  OK    applied managed config hash matches current hash
-  OK    host identity marker present
-
-Summary: 0 fail(s), 0 warning(s)
-```
-
-## `proxnix-secrets` (host/workstation)
-
-This is the host-side admin helper for SOPS-backed proxnix secret stores.
-
-**Configuration:** `~/.config/proxnix/config` (see [installation step 5](../getting-started/installation.md#step-5-configure-your-workstation))
+**Configuration:** `~/.config/proxnix/config` (see [installation step 3](../getting-started/installation.md#step-3-configure-your-workstation))
 
 ### Listing
 
 ```bash
-proxnix-secrets ls                # all secrets across all containers and shared
-proxnix-secrets ls <vmid>         # secrets visible to a specific container (container + shared)
-proxnix-secrets ls-shared         # only shared secrets
+proxnix-secrets ls
+proxnix-secrets ls <vmid>
+proxnix-secrets ls-shared
 ```
 
 ### Reading
 
 ```bash
-proxnix-secrets get <vmid> <name>       # decrypt from container store (falls back to shared)
-proxnix-secrets get-shared <name>       # decrypt from shared store only
+proxnix-secrets get <vmid> <name>
+proxnix-secrets get-shared <name>
 ```
 
 ### Writing
 
 ```bash
-proxnix-secrets set <vmid> <name>       # create or update a per-container secret
-proxnix-secrets set-shared <name>       # create or update a shared secret
+proxnix-secrets set <vmid> <name>
+proxnix-secrets set-shared <name>
 ```
 
-Both commands prompt interactively for the secret value (with confirmation). You can also pipe a value:
+Both commands prompt interactively for the secret value. You can also pipe a value:
 
 ```bash
-printf %s "myvalue" | proxnix-secrets set <vmid> <name>
+printf %s "myvalue" | proxnix-secrets set 120 db_password
 ```
 
 ### Removing
 
 ```bash
-proxnix-secrets rm <vmid> <name>        # remove from container store
-proxnix-secrets rm-shared <name>        # remove from shared store
+proxnix-secrets rm <vmid> <name>
+proxnix-secrets rm-shared <name>
 ```
 
 ### Rotating recipients
 
 ```bash
-proxnix-secrets rotate <vmid>           # re-encrypt container store to configured recipients
-proxnix-secrets rotate-shared           # re-encrypt shared store to configured recipients
+proxnix-secrets rotate <vmid>
+proxnix-secrets rotate-shared
 ```
 
-### Shared key initialization
+### Identity initialization
 
 ```bash
-proxnix-secrets init-shared             # generate shared age keypair (run once)
+proxnix-secrets init-shared
+proxnix-secrets init-container 120
 ```
+
+`set` and `set-shared` create identities automatically when needed, so the explicit init commands are optional.
+
+### `proxnix-publish`
+
+Publish the workstation-owned site repo to one or more Proxmox relay hosts.
+
+```bash
+proxnix-publish
+proxnix-publish root@node1
+proxnix-publish --dry-run
+```
+
+It pushes config, encrypted secret stores, and decrypted relay identities into `/var/lib/proxnix` on the target hosts.
 
 ## Guest commands
 
@@ -226,23 +174,23 @@ Read a secret only from the shared store.
 ### Useful Podman commands
 
 ```bash
-podman ps -a                                    # list all containers
-podman logs -f <name>                           # follow container logs
-podman auto-update --dry-run                    # check for image updates
-systemctl status podman-<name>.service          # check systemd unit status
+podman ps -a
+podman logs -f <name>
+podman auto-update --dry-run
+systemctl status podman-<name>.service
 ```
 
 ### Useful NixOS commands
 
 ```bash
-nixos-rebuild switch                            # manually apply config changes
-nixos-rebuild list-generations                  # list config generations
-nix-collect-garbage -d                          # free disk space
+nixos-rebuild switch
+nixos-rebuild list-generations
+nix-collect-garbage -d
 ```
 
 ### Quadlet config tracking
 
 ```bash
-jj -R /etc/proxnix/quadlets status             # check for host-managed config changes
-jj -R /etc/proxnix/quadlets diff               # see what changed
+jj -R /etc/proxnix/quadlets status
+jj -R /etc/proxnix/quadlets diff
 ```

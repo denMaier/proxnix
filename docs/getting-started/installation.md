@@ -1,16 +1,14 @@
 # Installation
 
-This page covers installing proxnix on a Proxmox node, preparing the node-local configuration and secrets directories, and setting up your workstation for secret management.
+This page covers installing proxnix on Proxmox nodes and setting up the workstation-owned site repo that proxnix now uses as its source of truth.
 
 ## Checklist
 
-Use this checklist to make sure you don't miss anything. Each item is explained in detail below.
-
-- [ ] Run `./install.sh` on every Proxmox node
-- [ ] Store the master SSH-backed age recovery key
-- [ ] Initialize the shared SSH-backed age keypair (if using shared secrets)
-- [ ] Set the admin user password hash as a shared secret
-- [ ] Configure your workstation for `proxnix-secrets`
+- [ ] Run `./install.sh` or `ansible-playbook ansible/install.yml` on every Proxmox node
+- [ ] Create a separate workstation-owned site repo
+- [ ] Configure your workstation for `proxnix-secrets` and `proxnix-publish`
+- [ ] Initialize the shared identity if you plan to use shared secrets
+- [ ] Publish the site repo to every Proxmox node that should relay it
 
 ## What `install.sh` does
 
@@ -29,23 +27,28 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/lib/proxnix/yaml-to-nix.py`
 - `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
+- `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
 - `proxnix-gc.service` and `proxnix-gc.timer`
 
-### Node-local proxnix files
+### Node-local relay cache
 
-These live on the local node under `/var/lib/proxnix/`. If you want the same proxnix data on multiple nodes, keep these directories in sync yourself.
+These live on the local node under `/var/lib/proxnix/`. They are no longer the source of truth; your workstation publishes them there.
 
 - `/var/lib/proxnix/base.nix`
 - `/var/lib/proxnix/common.nix`
 - `/var/lib/proxnix/configuration.nix`
+- `/var/lib/proxnix/site.nix`
 - `/var/lib/proxnix/containers/`
+- `/var/lib/proxnix/private/shared_age_identity.txt`
 - `/var/lib/proxnix/private/shared/`
 - `/var/lib/proxnix/private/containers/`
 
 ## Step 1: Install on the Proxmox host
 
-Clone the repo and run the installer as root:
+Choose one of the supported installation paths.
+
+### Option A: Run the shell installer directly
 
 ```bash
 git clone <this repo>
@@ -53,130 +56,141 @@ cd proxnix
 ./install.sh
 ```
 
-Run the installer on every node that should host proxnix-managed containers.
-
 Use `--dry-run` to preview what would be installed without writing anything.
 
-## Step 2: Store the master SSH-backed age recovery key
-
-**Why:** The master key is included as an encryption recipient for every secret store (both per-container and shared). Without it, you cannot recover secrets if a container's SSH-backed age identity is lost.
-
-**When to skip:** Never. Always set up the master key.
+### Option B: Install with Ansible
 
 ```bash
-ssh-keygen -y -f ~/.ssh/id_ed25519 > /var/lib/proxnix/master_age_pubkey
+ansible-playbook -i inventory.ini ansible/install.yml
 ```
 
-Use an SSH ed25519 key here. proxnix standardizes on SSH keys used as `age` recipients so SOPS only needs one identity mode end to end.
-
-> **⚠️ Keep the corresponding private key safe.** If you lose the master private key, you lose the ability to decrypt any secret store that was encrypted to it.
-
-## Step 3: Initialize the shared SSH-backed age keypair
-
-**Why:** Shared secrets are available in every container. They're useful for credentials that multiple services need, like the admin user password hash.
-
-**When to skip:** Only if you are sure no container will ever need a shared secret. In practice, you almost always want this because the admin password hash uses it.
+By default the playbook targets the `proxmox` inventory group. Override that group when needed:
 
 ```bash
-proxnix-secrets init-shared
+ansible-playbook -i inventory.ini ansible/install.yml -e proxnix_target_hosts=pve_nodes
 ```
 
-That creates:
+## Step 2: Create the workstation site repo
 
-- `/var/lib/proxnix/private/shared_age_identity.txt` — SSH private key, staged into every guest
-- `/var/lib/proxnix/shared_age_pubkey` — public key, used as encryption recipient
+Keep live state outside this install repo. A typical layout looks like this:
 
-## Step 4: Set the admin user password hash
-
-**Why:** Every proxnix-managed container creates a shared `admin` user (configurable in `common.nix`). By default, this user is SSH-key-only with a locked password. If you want the admin user to have a password (for `sudo`, console login, etc.), you must store a shadow-compatible password hash as a shared secret.
-
-The default configuration in `base.nix` reads the password hash from a shared secret named `common_admin_password_hash`.
-
-### Generate the hash
-
-```bash
-# Interactive — prompts for password, outputs the hash
-mkpasswd -m sha-512
+```text
+proxnix-site/
+├── site.nix
+├── containers/
+│   └── <vmid>/
+│       ├── proxmox.yaml
+│       ├── user.yaml
+│       ├── dropins/
+│       └── quadlets/
+└── private/
+    ├── shared_age_identity.sops.json
+    ├── shared/
+    │   └── secrets.sops.yaml
+    └── containers/
+        └── <vmid>/
+            ├── age_identity.sops.json
+            └── secrets.sops.yaml
 ```
 
-Or non-interactively:
+`site.nix`, `containers/`, encrypted secret stores, and encrypted private identities all live here and can be Git-tracked independently of the install repo.
 
-```bash
-mkpasswd -m sha-512 "your-password-here"
-```
+## Step 3: Configure your workstation
 
-### Store it as a shared secret
-
-```bash
-proxnix-secrets set-shared common_admin_password_hash
-```
-
-Paste the full `$6$...` hash when prompted.
-
-> **⚠️ Do not skip this if `wheelNeedsPassword = true`.** The default `base.nix` sets `wheelNeedsPassword = true`, which means `sudo` requires a password. If you don't set the password hash, the admin user will be locked out of `sudo`.
-
-### What happens inside the guest
-
-On boot, the `proxnix-common-admin-password` systemd service:
-
-1. Reads the `common_admin_password_hash` secret from the SOPS store
-2. Applies it to the admin user via `chpasswd -e`
-
-If the secret is not yet available (e.g., before the first secret bootstrap), the service logs a message and skips — it does not fail.
-
-## Step 5: Configure your workstation
-
-The `proxnix-secrets` command runs from your workstation (or any machine with SSH access to the Proxmox host). It needs to know how to reach the host and which SSH private key to use for SOPS operations.
-
-### Create the config file
+Create `~/.config/proxnix/config`:
 
 ```bash
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
-PROXNIX_HOST=root@your-proxmox-host
-PROXNIX_IDENTITY=~/.ssh/id_ed25519
+PROXNIX_SITE_DIR=~/src/proxnix-site
+PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
+PROXNIX_HOSTS="root@node1 root@node2"
+PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
 EOF
 ```
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `PROXNIX_HOST` | SSH target for the Proxmox host | *(required)* |
-| `PROXNIX_IDENTITY` | Path to your local SSH private key used by SOPS | `~/.ssh/id_ed25519` |
-| `PROXNIX_DIR` | Node-local proxnix config dir on the Proxmox host | `/var/lib/proxnix` |
-| `PROXNIX_PRIV_DIR` | Node-local private proxnix dir on the Proxmox host | `/var/lib/proxnix/private` |
+| `PROXNIX_SITE_DIR` | Local proxnix site repo | *(required)* |
+| `PROXNIX_MASTER_IDENTITY` | Local SSH private key used by SOPS for encrypted identities and stores | `~/.ssh/id_ed25519` |
+| `PROXNIX_HOSTS` | Space-separated SSH targets used by `proxnix-publish` | *(required for publishing)* |
+| `PROXNIX_SSH_IDENTITY` | SSH private key used to connect to relay hosts | `~/.ssh/id_ed25519` |
+| `PROXNIX_REMOTE_DIR` | Relay cache dir on the Proxmox host | `/var/lib/proxnix` |
+| `PROXNIX_REMOTE_PRIV_DIR` | Relay cache private dir on the Proxmox host | `/var/lib/proxnix/private` |
 
 ### Required workstation tools
 
-Make sure these are available in your `$PATH`:
-
 - `ssh`
 - `ssh-keygen`
+- `rsync`
 - `sops`
 - `python3`
 
-### Verify it works
+## Step 4: Initialize identities and secrets
+
+Initialize the shared identity if you plan to use shared secrets:
 
 ```bash
-proxnix-secrets ls
+proxnix-secrets init-shared
 ```
 
-This should show an empty list or the `common_admin_password_hash` secret you created earlier.
+Initialize a per-container identity explicitly when you want one before writing secrets:
+
+```bash
+proxnix-secrets init-container 120
+```
+
+You usually do not need to run `init-container` manually because `proxnix-secrets set <vmid> ...` creates the identity on demand.
+
+To set the default admin password hash:
+
+```bash
+mkpasswd -m sha-512
+proxnix-secrets set-shared common_admin_password_hash
+```
+
+## Step 5: Publish relay state to the nodes
+
+Publish the workstation-owned site repo to every relay host:
+
+```bash
+proxnix-publish
+```
+
+Or only to a subset:
+
+```bash
+proxnix-publish root@node1
+```
+
+This pushes:
+
+- `site.nix`
+- `containers/<vmid>/...`
+- encrypted secret stores
+- decrypted relay identities under `/var/lib/proxnix/private/...`
+
+The host cache contains plaintext relay identities because proxnix must be able to restage them into guests on every boot without workstation access. In practice that means the Proxmox host is the trust boundary for secret relay.
 
 ## Upgrading proxnix files
 
-If the repo changes `base.nix`, `common.nix`, or `configuration.nix`, reinstall proxnix on each node that should host proxnix-managed containers:
+If the install repo changes `base.nix`, `common.nix`, or `configuration.nix`, reinstall proxnix on each node:
 
 ```bash
 ./install.sh
 ```
 
-The `--force-shared` flag is kept only as a deprecated compatibility no-op in node-local mode.
+Or, if you installed with Ansible:
 
-After upgrading, restart managed containers so they pick up the new config.
+```bash
+ansible-playbook -i inventory.ini ansible/install.yml
+```
+
+After upgrading, restart managed containers so they pick up the new hook/runtime code.
 
 ## Uninstalling
 
-To remove proxnix from a node but keep the node-local config data:
+To remove proxnix from a node but keep the published relay cache:
 
 ```bash
 ./uninstall.sh
@@ -186,26 +200,29 @@ This removes only the installed hooks, helpers, and timers. It intentionally lea
 
 ## What you should have when done
 
-After completing all steps, your setup should look like this:
+On the workstation:
 
+```text
+~/.config/proxnix/config
+~/src/proxnix-site/
+├── site.nix
+├── containers/
+└── private/
 ```
-/var/lib/proxnix/
-├── base.nix                    ← shared NixOS baseline
-├── common.nix                  ← shared operator module
-├── configuration.nix           ← NixOS entrypoint
-├── site.nix                    ← optional site override from your data repo
-├── master_age_pubkey           ← your recovery key (step 2)
-├── shared_age_pubkey           ← shared encryption recipient (step 3)
-├── containers/                 ← per-container config (populated later)
-│
-/var/lib/proxnix/private/
-├── shared_age_identity.txt     ← shared SSH private key used as an age identity (step 3)
-├── shared/
-│   └── secrets.sops.yaml       ← shared secrets including admin hash (step 4)
-├── containers/                 ← per-container secrets (populated later)
 
-~/.config/proxnix/
-└── config                      ← workstation config (step 5)
+On each Proxmox node:
+
+```text
+/var/lib/proxnix/
+├── base.nix
+├── common.nix
+├── configuration.nix
+├── site.nix
+├── containers/
+└── private/
+    ├── shared_age_identity.txt
+    ├── shared/
+    └── containers/
 ```
 
 Proceed to [first container](first-container.md) to onboard your first NixOS LXC.

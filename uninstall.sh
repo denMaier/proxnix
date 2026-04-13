@@ -2,8 +2,8 @@
 # uninstall.sh — Remove proxnix from a Proxmox node.
 #
 # Removes the per-node files installed by install.sh.
-# /var/lib/proxnix/ is intentionally left untouched — it holds node-local
-# container config, pubkeys, and encrypted secrets that the operator manages.
+# /var/lib/proxnix/ is intentionally left untouched — it holds relay-cache
+# config and secret material that the operator publishes from the workstation.
 #
 # Must be run as root on the Proxmox host.
 #
@@ -74,7 +74,6 @@ do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 action "Local admin helper"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
-do_rm "$PROXNIX_SBIN_DIR/bootstrap-guest-secrets.sh"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-create-lxc"
 
 action "GC timer"
@@ -91,7 +90,7 @@ echo ""
 echo "Done."
 echo ""
 echo "  /var/lib/proxnix/ was not touched."
-echo "  Container configs, public keys, and encrypted secrets are still intact."
+echo "  Published relay-cache config and secret material are still intact."
 echo ""
 echo "  To fully remove proxnix data from this node, delete:"
 echo "    rm -rf /var/lib/proxnix"
