@@ -24,10 +24,11 @@ let
 
     printf 'Managed config\n'
     printf '  Files:       /etc/nixos/configuration.nix\n'
-    printf '               /etc/nixos/managed/{base,common,proxmox,user}.nix\n'
+    printf '               /etc/nixos/managed/{base,common,site,proxmox,user}.nix\n'
     printf '               /etc/nixos/managed/dropins/*.nix\n'
     printf '               host dropins/*.service -> /etc/systemd/system.attached/\n'
     printf '               host dropins/*.{sh,py} -> /usr/local/bin/\n'
+    printf '               site.nix is optional and usually comes from a separate repo\n'
     printf '  Local hook:  /etc/nixos/local.nix\n'
     if [ -n "$current" ] && [ "$current" != "$applied" ]; then
       printf '  State:       changed; restart the CT or run nixos-rebuild switch\n\n'
@@ -316,10 +317,11 @@ in {
 
     Managed config
       /etc/nixos/configuration.nix
-      /etc/nixos/managed/{base,common,proxmox,user}.nix
+      /etc/nixos/managed/{base,common,site,proxmox,user}.nix
       /etc/nixos/managed/dropins/*.nix
       host dropins/*.service -> /etc/systemd/system.attached/
       host dropins/*.{sh,py} -> /usr/local/bin/
+      /etc/nixos/managed/site.nix  optional site override
       /etc/nixos/local.nix  optional local override
 
     Workloads

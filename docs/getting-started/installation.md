@@ -193,6 +193,7 @@ After completing all steps, your setup should look like this:
 ├── base.nix                    ← shared NixOS baseline
 ├── common.nix                  ← shared operator module
 ├── configuration.nix           ← NixOS entrypoint
+├── site.nix                    ← optional site override from your data repo
 ├── master_age_pubkey           ← your recovery key (step 2)
 ├── shared_age_pubkey           ← shared encryption recipient (step 3)
 ├── containers/                 ← per-container config (populated later)

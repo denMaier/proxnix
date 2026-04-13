@@ -26,9 +26,10 @@
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #
 # Shared (first node only, replicated via pmxcfs to all nodes):
-#   /etc/pve/proxnix/base.nix                   — shared NixOS base config
-#   /etc/pve/proxnix/common.nix                 — shared operator baseline
+#   /etc/pve/proxnix/base.nix                   — shared install baseline
+#   /etc/pve/proxnix/common.nix                 — shared proxnix option module
 #   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
+#   /etc/pve/proxnix/site.nix                   — optional site/data-repo override
 #   /etc/pve/proxnix/containers/                — per-container config + pubkeys
 #   /etc/pve/priv/proxnix/shared/               — shared encrypted secrets
 #   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
@@ -158,8 +159,10 @@ do_systemd_timer "proxnix-gc"
 # ── Shared proxnix files → /etc/pve/{proxnix,priv/proxnix}/ ──────────────────
 # Written on the first node only. pmxcfs replicates these directories to every
 # other cluster node automatically, so subsequent installs skip this section.
-# Keep only shared data here, not runnable scripts, and place encrypted secrets
-# under /etc/pve/priv so pmxcfs keeps them root-only.
+# Keep only shared data here, not runnable scripts. In practice this repo owns
+# the install/bootstrap layer; a separate site/data repo can manage site.nix,
+# containers/, and the encrypted secrets trees. Place encrypted secrets under
+# /etc/pve/priv so pmxcfs keeps them root-only.
 
 if [[ -d "$NIXLXC_DIR" && $FORCE_SHARED -eq 0 ]]; then
     action "Shared files → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/ (skipped — already exists, replicated via pmxcfs)"
@@ -198,6 +201,8 @@ echo "       # into generated Nix on first boot."
 echo ""
 echo "  3. Optional: add per-container config under $NIXLXC_DIR/containers/<vmid>/"
 echo "       mkdir -p $NIXLXC_DIR/containers/<vmid>/quadlets"
+echo "       # Optional: manage $NIXLXC_DIR/site.nix from a separate repo"
+echo "       # for site-wide overrides such as proxnix.common.extraPackages."
 echo "       # proxmox.yaml is optional — use it for search_domain or ssh_keys."
 echo "       # Add user.yaml only for native NixOS services."
 echo "       # Put Quadlet files and their app config under quadlets/."

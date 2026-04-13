@@ -28,6 +28,19 @@ Typical uses:
 
 Do not try to redefine the CT's main IP or gateway here when Proxmox already owns those values.
 
+### `site.nix`
+
+`site.nix` is the host-side site override layer.
+
+Use it for settings that should apply broadly across containers but still belong
+to your environment rather than the install repo.
+
+Typical uses:
+
+- extending `proxnix.common.extraPackages`
+- changing the shared admin user defaults
+- setting cluster-wide policy overrides without editing the install repo
+
 ### `user.yaml`
 
 `user.yaml` is for native NixOS services only.
@@ -83,7 +96,8 @@ Both can hold Quadlet unit files, but they serve different roles:
 - `proxmox.nix`
 - `user.nix`
 
-The shared entrypoint imports them from `/etc/nixos/managed/`.
+The shared entrypoint imports them from `/etc/nixos/managed/`, after the install
+layer (`base.nix`, `common.nix`) and optional `site.nix`.
 
 ## When to use which mechanism
 

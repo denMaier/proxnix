@@ -34,7 +34,7 @@ You will need these tools installed on your **workstation** (the machine you man
 There are four main layers:
 
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, SSH keys, CT features, rootfs, and lifecycle
-2. **Host-side proxnix config**: shared Nix files plus per-container `proxmox.yaml`, `user.yaml`, `dropins/`, and `quadlets/`
+2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `proxmox.yaml`, `user.yaml`, `dropins/`, and `quadlets/`
 3. **Rendered guest state**: generated Nix files, staged secrets, attached systemd units, helper scripts, and Quadlet files
 4. **Guest activation**: a guarded `nixos-rebuild switch` that runs only when the staged config hash changes
 
@@ -84,6 +84,20 @@ While the host is the *source of truth* for your declarative config, the guest i
 3. Read [architecture](concepts/architecture.md) if you want the lifecycle and staging model
 4. Read [configuration model](concepts/configuration-model.md) to understand which file owns which behavior
 5. Read [secrets](concepts/secrets.md) before introducing credentials into workloads
+
+## Repo split
+
+Treat this repository as the **install repo**:
+
+- it owns `install.sh`, hooks, helpers, and the shared baseline Nix files
+- it may ship example workloads and example config shapes
+- it does **not** need to own your live site data
+
+In practice, live site data can be managed from a separate repo that writes:
+
+- `/etc/pve/proxnix/site.nix` for site-wide overrides
+- `/etc/pve/proxnix/containers/<vmid>/` for per-container config
+- `/etc/pve/priv/proxnix/` for encrypted secrets
 
 ## Main workflows
 

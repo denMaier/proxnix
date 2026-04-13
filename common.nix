@@ -125,14 +125,24 @@ in {
         curl
         cacert
         lazyjournal
-        yazi #probably superfile soon, but currently to much hassle (flake or override)
+        pkgs.unstable.superfile
         lazydocker
         pkgs.unstable.snitch
         gdu
       ];
       description = lib.mdDoc ''
-        Convenience packages installed on every proxnix-managed LXC as part of
-        the shared operator baseline.
+        Full convenience-package baseline installed on every proxnix-managed
+        LXC. Override this when you want to replace the default set entirely.
+      '';
+    };
+
+    extraPackages = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [];
+      description = lib.mdDoc ''
+        Extra convenience packages appended to `packages`. This is the
+        recommended knob for a separate site/data repo when you only want to
+        amend the shared baseline.
       '';
     };
 
@@ -197,7 +207,7 @@ in {
   config = lib.mkIf cfg.enable (lib.mkMerge [
 
     {
-      environment.systemPackages = cfg.packages;
+      environment.systemPackages = cfg.packages ++ cfg.extraPackages;
 
       security.sudo = {
         enable = true;

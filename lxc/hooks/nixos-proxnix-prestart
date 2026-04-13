@@ -100,6 +100,9 @@ done
 cp "${NIXLXC_DIR}/configuration.nix" "${RENDERED_DIR}/configuration.nix"
 cp "${NIXLXC_DIR}/base.nix"          "${MANAGED_DIR}/base.nix"
 cp "${NIXLXC_DIR}/common.nix"        "${MANAGED_DIR}/common.nix"
+if [[ -f "${NIXLXC_DIR}/site.nix" ]]; then
+    cp "${NIXLXC_DIR}/site.nix"      "${MANAGED_DIR}/site.nix"
+fi
 
 ARGS=("--out-dir" "$MANAGED_DIR")
 [[ -f "$PVE_CONF"                     ]] && ARGS+=("--pve-conf"     "$PVE_CONF")

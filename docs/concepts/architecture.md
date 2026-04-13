@@ -127,14 +127,23 @@ While `/etc/nixos/managed/` is read-only and overwritten on restart, proxnix **d
 
 The guest entrypoint is intentionally small. It imports:
 
-- `base.nix` — LXC adjustments, age setup, Podman config, login summary
-- `common.nix` — admin user, SSH hardening, journald, packages
+- `base.nix` — install-layer guest baseline: LXC adjustments, age setup, Podman config, login summary
+- `common.nix` — proxnix option module for the shared operator baseline
+- optional `site.nix` — site-wide overrides, typically managed from a separate repo
 - `proxmox.nix` — generated from PVE conf (hostname, IP, DNS, SSH keys)
 - `user.nix` — generated from `user.yaml` (native services)
 - every managed drop-in `*.nix`
 - optional `/etc/nixos/local.nix`
 
 That last file is the escape hatch for guest-only experimentation. proxnix does not manage it.
+
+`base.nix` and `common.nix` are separate on purpose:
+
+- `common.nix` defines the reusable `proxnix.common.*` options and applies them
+- `base.nix` is the install repo's default consumer of those options
+
+That keeps the baseline policy amendable. A separate site repo can add a `site.nix`
+that changes `proxnix.common.*` without needing to fork the install-layer files.
 
 ## The admin user
 
@@ -146,6 +155,7 @@ That last file is the escape hatch for guest-only experimentation. proxnix does 
 - **Root:** Root password is locked, SSH root login is key-only (`prohibit-password`)
 
 These defaults are configurable via `proxnix.common.*` options in `common.nix`.
+For additive package changes, prefer `proxnix.common.extraPackages` from `site.nix`.
 
 ## Podman enablement rule
 

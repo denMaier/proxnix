@@ -16,6 +16,7 @@ This page maps every important proxnix path by role.
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
 | `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
 | `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
+| `site.nix` | Optional site-wide override, usually managed outside the install repo |
 | `proxnix-secrets` | Host/workstation secret management tool |
 | `proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `proxnix-doctor` | Host-side health check tool |
@@ -30,6 +31,7 @@ This page maps every important proxnix path by role.
 ├── base.nix                           shared NixOS baseline
 ├── common.nix                         shared operator module
 ├── configuration.nix                  NixOS entrypoint
+├── site.nix                           optional site-wide override
 ├── master_age_pubkey                  master recovery key
 ├── shared_age_pubkey                  shared encryption recipient
 └── containers/
@@ -83,6 +85,7 @@ Created by the pre-start hook, consumed by the mount hook:
 │   └── managed/
 │       ├── base.nix
 │       ├── common.nix
+│       ├── site.nix
 │       ├── proxmox.nix
 │       ├── user.nix
 │       └── dropins/
@@ -111,6 +114,7 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── managed/                           host-managed modules (read-only)
 │   ├── base.nix
 │   ├── common.nix
+│   ├── site.nix
 │   ├── proxmox.nix
 │   ├── user.nix
 │   └── dropins/
