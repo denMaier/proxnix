@@ -223,7 +223,7 @@ def parse_pve_conf(path):
       net0: name=eth0,bridge=vmbr0,ip=192.0.2.10/24,gw=192.0.2.1,
             ip6=2001:db8::1/64,gw6=2001:db8::1,type=veth,...
       net1: name=eth1,bridge=vmbr1,ip=dhcp,ip6=auto,...
-      nameserver: 8.8.8.8 1.1.1.1
+      nameserver: 9.9.9.9 1.1.1.1
       searchdomain: example.internal
 
     IPv6 modes (ip6= field):
