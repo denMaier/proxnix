@@ -15,6 +15,7 @@
 #   runtime/bin/*.{sh,py}
 #   quadlet/                             recursive Quadlet source tree
 #   secrets/{container,shared}.sops.yaml
+#   keys/{identity,shared_identity.txt}    transient plaintext guest identities
 #   meta/{current-config-hash,vmid,proxnix-apply-config.service}
 #
 # Managed Nix files are hashed from the rendered tree only. The guest-side
@@ -68,6 +69,12 @@ trap 'status=$?; if [[ $status -ne 0 ]]; then cleanup_stage; fi; exit $status' E
 if [[ ! -f "$YAML_TO_NIX" ]]; then
     log "ERROR: ${YAML_TO_NIX} not found."
     log "Run ./install.sh on this Proxmox node to install local runtime files."
+    exit 1
+fi
+
+if ! command -v sops >/dev/null 2>&1; then
+    log "ERROR: sops not found on the Proxmox host."
+    log "Install sops on the host; proxnix now decrypts relay-encrypted guest identities during pre-start."
     exit 1
 fi
 
@@ -191,9 +198,12 @@ chmod 0644 "${META_DIR}/current-config-hash"
 printf '%s' "$VMID" > "${META_DIR}/vmid"
 chmod 0644 "${META_DIR}/vmid"
 
-CONTAINER_IDENTITY_PATH="$(proxnix_container_age_identity_path "$VMID")"
-if [[ -f "$CONTAINER_IDENTITY_PATH" ]]; then
-    cp "$CONTAINER_IDENTITY_PATH" "${KEYS_STAGE_DIR}/identity"
+CONTAINER_IDENTITY_STORE_PATH="$(proxnix_container_age_identity_store_path "$VMID")"
+if [[ -f "$CONTAINER_IDENTITY_STORE_PATH" ]]; then
+    if ! proxnix_decrypt_host_identity_store_to_file "$CONTAINER_IDENTITY_STORE_PATH" "${KEYS_STAGE_DIR}/identity"; then
+        log "ERROR: failed to decrypt host-relay container identity: ${CONTAINER_IDENTITY_STORE_PATH}"
+        exit 1
+    fi
     chmod 644 "${KEYS_STAGE_DIR}/identity"
 fi
 
@@ -202,9 +212,12 @@ fi
 # chmod 644 explicitly: the source is mode 600 and chmod -R a+rX below uses
 # capital X which only sets execute on directories, leaving 600 files unreadable
 # by the mount hook (which runs as the container's subuid, not root).
-SHARED_IDENTITY_PATH="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
-if [[ -f "$SHARED_IDENTITY_PATH" ]]; then
-    cp "$SHARED_IDENTITY_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"
+SHARED_IDENTITY_STORE_PATH="$(proxnix_shared_age_identity_store_path)"
+if [[ -f "$SHARED_IDENTITY_STORE_PATH" ]]; then
+    if ! proxnix_decrypt_host_identity_store_to_file "$SHARED_IDENTITY_STORE_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"; then
+        log "ERROR: failed to decrypt host-relay shared identity: ${SHARED_IDENTITY_STORE_PATH}"
+        exit 1
+    fi
     chmod 644 "${KEYS_STAGE_DIR}/shared_identity.txt"
 fi
 

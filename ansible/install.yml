@@ -1,6 +1,7 @@
 ---
 - name: Install proxnix on Proxmox nodes
   hosts: "{{ proxnix_target_hosts | default('proxmox') }}"
+  connection: ssh
   become: true
   gather_facts: false
 
@@ -13,12 +14,15 @@
     proxnix_systemd_unit_dir: /etc/systemd/system
     proxnix_data_dir: /var/lib/proxnix
     proxnix_private_dir: /var/lib/proxnix/private
+    proxnix_host_state_dir: /etc/proxnix
     proxnix_directories:
       - path: "{{ proxnix_lib_dir }}"
         mode: "0755"
       - path: "{{ proxnix_data_dir }}"
         mode: "0755"
       - path: "{{ proxnix_private_dir }}"
+        mode: "0700"
+      - path: "{{ proxnix_host_state_dir }}"
         mode: "0700"
       - path: "{{ proxnix_data_dir }}/containers"
         mode: "0755"
@@ -71,8 +75,22 @@
         mode: "0644"
 
   pre_tasks:
+    - name: Ensure this playbook targets remote SSH hosts
+      ansible.builtin.assert:
+        that:
+          - ansible_connection == 'ssh'
+          - inventory_hostname not in ['localhost', '127.0.0.1', '::1']
+          - (ansible_host | default(inventory_hostname)) not in ['localhost', '127.0.0.1', '::1']
+        fail_msg: >-
+          ansible/install.yml deploys proxnix to remote Proxmox hosts over SSH.
+          Use ./install.sh directly on the node for local installs.
+
     - name: Verify the target is a Proxmox host
       ansible.builtin.command: pveversion
+      changed_when: false
+
+    - name: Verify sops is installed on the target host
+      ansible.builtin.command: sops --version
       changed_when: false
 
   tasks:

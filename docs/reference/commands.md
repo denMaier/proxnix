@@ -15,11 +15,13 @@ Useful flags:
 
 ### `ansible/install.yml`
 
-Install proxnix onto one or more Proxmox nodes through Ansible.
+Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
+It copies files from this repo on the Ansible controller to the remote hosts in
+your inventory; it is not meant to run against `localhost`.
 
 ```bash
-ansible-playbook -i inventory.ini ansible/install.yml
-ansible-playbook -i inventory.ini ansible/install.yml -e proxnix_target_hosts=pve_nodes
+ansible-playbook -i inventory.proxmox.ini ansible/install.yml
+ansible-playbook -i inventory.proxmox.ini ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
 
 ### `remote/codeberg-install.sh`
@@ -61,7 +63,7 @@ Sample output for a healthy relay-backed container:
   OK    ostype=nixos
   INFO  state: running
   OK    guest file present: /etc/nixos/configuration.nix
-  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
   OK    guest container age identity present
   OK    applied managed config hash matches current hash
 ```
@@ -135,11 +137,12 @@ proxnix-secrets rotate-shared
 ### Identity initialization
 
 ```bash
+proxnix-secrets init-host-relay
 proxnix-secrets init-shared
 proxnix-secrets init-container 120
 ```
 
-`set` and `set-shared` create identities automatically when needed, so the explicit init commands are optional.
+`set` and `set-shared` create guest identities automatically when needed. `init-host-relay` is the one shared relay key that Proxmox hosts use to decrypt guest identities during staging.
 
 ### `proxnix-publish`
 
@@ -151,7 +154,7 @@ proxnix-publish root@node1
 proxnix-publish --dry-run
 ```
 
-It pushes config, encrypted secret stores, and decrypted relay identities into `/var/lib/proxnix` on the target hosts.
+It pushes config and encrypted secret stores into `/var/lib/proxnix`, stores the shared plaintext host relay key at `/etc/proxnix/host_relay_identity`, and stores guest identities re-encrypted to both the host relay key and the master recovery key under `/var/lib/proxnix/private/` on the target hosts.
 
 ## Guest commands
 

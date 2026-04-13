@@ -2,8 +2,9 @@
 # uninstall.sh — Remove proxnix from a Proxmox node.
 #
 # Removes the per-node files installed by install.sh.
-# /var/lib/proxnix/ is intentionally left untouched — it holds relay-cache
-# config and secret material that the operator publishes from the workstation.
+# /var/lib/proxnix/ and /etc/proxnix/ are intentionally left untouched — they
+# hold relay-cache config and secret material that the operator publishes from
+# the workstation.
 #
 # Must be run as root on the Proxmox host.
 #
@@ -89,8 +90,8 @@ fi
 echo ""
 echo "Done."
 echo ""
-echo "  /var/lib/proxnix/ was not touched."
+echo "  /var/lib/proxnix/ and /etc/proxnix/ were not touched."
 echo "  Published relay-cache config and secret material are still intact."
 echo ""
 echo "  To fully remove proxnix data from this node, delete:"
-echo "    rm -rf /var/lib/proxnix"
+echo "    rm -rf /var/lib/proxnix /etc/proxnix"

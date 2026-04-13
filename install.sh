@@ -42,6 +42,7 @@ PROXNIX_SBIN_DIR="/usr/local/sbin"
 SYSTEMD_UNIT_DIR="/etc/systemd/system"
 NIXLXC_DIR="/var/lib/proxnix"
 NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 
 DRY_RUN=0
 FORCE_SHARED=0
@@ -107,6 +108,7 @@ do_mkdir() {
 
 [[ "$(id -u)" -eq 0 ]] || die "Must be run as root."
 command -v pveversion >/dev/null 2>&1 || die "pveversion not found — is this a Proxmox host?"
+command -v sops >/dev/null 2>&1 || die "sops not found — install it on the Proxmox host; proxnix uses it at boot to decrypt relay-encrypted guest identities"
 
 echo ""
 echo "proxnix install"
@@ -168,6 +170,7 @@ if [[ $FORCE_SHARED -eq 1 ]]; then
 fi
 do_mkdir "$NIXLXC_DIR" "0755"
 do_mkdir "$NIXLXC_PRIV_DIR" "0700"
+do_mkdir "$PROXNIX_HOST_STATE_DIR" "0700"
 do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
 do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
 do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
@@ -185,6 +188,7 @@ echo ""
 echo "  1. On your workstation, manage proxnix state from a separate site repo:"
 echo "       # site.nix, containers/<vmid>/..., encrypted secret stores,"
 echo "       # and encrypted private identities all live there"
+echo "       proxnix-secrets init-host-relay"
 echo "       proxnix-secrets init-shared"
 echo "       proxnix-publish"
 echo ""
@@ -198,7 +202,8 @@ echo ""
 echo "  3. Publish workstation-managed relay state to this node before booting:"
 echo "       proxnix-publish"
 echo "       # This syncs site.nix, containers/<vmid>/..., encrypted secret"
-echo "       # stores, and staged private identities into $NIXLXC_DIR."
+echo "       # stores and relay-encrypted guest identities into $NIXLXC_DIR,"
+echo "       # plus the shared host relay key into $PROXNIX_HOST_STATE_DIR."
 echo ""
 echo "  4. Start the container — pre-start renders state, mount seeds /etc/nixos before boot:"
 echo "       pct start <vmid>"

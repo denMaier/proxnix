@@ -97,7 +97,7 @@ Sample output for a healthy container:
 [ct 100]
   OK    ostype=nixos
   OK    applied managed config hash matches current hash
-  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
 
 Summary: 0 fail(s), 0 warning(s)
 ```

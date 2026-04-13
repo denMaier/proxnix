@@ -124,11 +124,6 @@ in {
         git
         curl
         cacert
-        lazyjournal
-        pkgs.unstable.superfile
-        lazydocker
-        pkgs.unstable.snitch
-        gdu
       ];
       description = lib.mdDoc ''
         Full convenience-package baseline installed on every proxnix-managed

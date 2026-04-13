@@ -17,9 +17,10 @@ load_proxnix_workstation_config() {
   PROXNIX_SITE_DIR="${PROXNIX_SITE_DIR:-}"
   PROXNIX_MASTER_IDENTITY="${PROXNIX_MASTER_IDENTITY:-$HOME/.ssh/id_ed25519}"
   PROXNIX_HOSTS="${PROXNIX_HOSTS:-}"
-  PROXNIX_SSH_IDENTITY="${PROXNIX_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}"
+  PROXNIX_SSH_IDENTITY="${PROXNIX_SSH_IDENTITY:-}"
   PROXNIX_REMOTE_DIR="${PROXNIX_REMOTE_DIR:-/var/lib/proxnix}"
   PROXNIX_REMOTE_PRIV_DIR="${PROXNIX_REMOTE_PRIV_DIR:-/var/lib/proxnix/private}"
+  PROXNIX_REMOTE_HOST_RELAY_IDENTITY="${PROXNIX_REMOTE_HOST_RELAY_IDENTITY:-/etc/proxnix/host_relay_identity}"
 
   [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 
@@ -28,6 +29,7 @@ load_proxnix_workstation_config() {
   PROXNIX_SSH_IDENTITY="$(expand_home_path "$PROXNIX_SSH_IDENTITY")"
   PROXNIX_REMOTE_DIR="$(expand_home_path "$PROXNIX_REMOTE_DIR")"
   PROXNIX_REMOTE_PRIV_DIR="$(expand_home_path "$PROXNIX_REMOTE_PRIV_DIR")"
+  PROXNIX_REMOTE_HOST_RELAY_IDENTITY="$(expand_home_path "$PROXNIX_REMOTE_HOST_RELAY_IDENTITY")"
 }
 
 proxnix_site_private_dir() {
@@ -41,6 +43,10 @@ proxnix_site_shared_store() {
 proxnix_site_container_store() {
   local vmid="$1"
   printf '%s/containers/%s/secrets.sops.yaml' "$(proxnix_site_private_dir)" "$vmid"
+}
+
+proxnix_site_host_relay_identity_store() {
+  printf '%s/host_relay_identity.sops.json' "$(proxnix_site_private_dir)"
 }
 
 proxnix_site_shared_identity_store() {
@@ -78,7 +84,9 @@ proxnix_need_site_tools() {
 proxnix_need_publish_tools() {
   proxnix_need_site_tools
   [[ -n "$PROXNIX_HOSTS" ]] || die "PROXNIX_HOSTS not set — create $CONFIG_FILE"
-  [[ -f "$PROXNIX_SSH_IDENTITY" ]] || die "publish SSH identity not found: $PROXNIX_SSH_IDENTITY"
+  if [[ -n "$PROXNIX_SSH_IDENTITY" && ! -f "$PROXNIX_SSH_IDENTITY" ]]; then
+    die "publish SSH identity not found: $PROXNIX_SSH_IDENTITY"
+  fi
   command -v ssh >/dev/null 2>&1 || die "ssh not found"
   command -v rsync >/dev/null 2>&1 || die "rsync not found"
   command -v mktemp >/dev/null 2>&1 || die "mktemp not found"
@@ -116,26 +124,48 @@ with open(sys.argv[2], "w") as fh:
 PY
 }
 
-proxnix_decrypt_identity_to_file() {
-  local store="$1" out="$2"
-  proxnix_with_master_key sops decrypt --input-type json "$store" \
-    | python3 - "$out" <<'PY'
+proxnix_decrypt_identity_to_file() (
+  local store="$1" out="$2" tmp_json
+  tmp_json="$(mktemp /tmp/proxnix-identity-json.XXXXXX)"
+  trap 'rm -f "$tmp_json" "$out"' EXIT
+  proxnix_with_master_key sops decrypt --input-type json "$store" > "$tmp_json"
+  python3 - "$tmp_json" "$out" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1], "w") as fh:
-    fh.write(json.load(sys.stdin)["identity"])
+with open(sys.argv[1]) as source:
+    payload = json.load(source)
+
+with open(sys.argv[2], "w") as fh:
+    fh.write(payload["identity"])
 PY
   chmod 600 "$out"
-}
+  rm -f "$tmp_json"
+  trap - EXIT
+)
 
-proxnix_identity_public_key_from_store() {
-  local store="$1" tmp
+proxnix_identity_public_key_from_store() (
+  local store="$1" tmp pubkey
   tmp="$(mktemp /tmp/proxnix-identity.XXXXXX)"
+  trap 'rm -f "$tmp"' EXIT
   proxnix_decrypt_identity_to_file "$store" "$tmp"
-  ssh-keygen -y -f "$tmp" | tr -d '\r\n'
+  pubkey="$(ssh-keygen -y -f "$tmp" | tr -d '\r\n')"
   rm -f "$tmp"
-}
+  trap - EXIT
+  printf '%s' "$pubkey"
+)
+
+proxnix_reencrypt_identity_store_to_file() (
+  local source_store="$1" recipients="$2" out="$3" tmp_json
+  tmp_json="$(mktemp /tmp/proxnix-identity-json.XXXXXX)"
+  trap 'rm -f "$tmp_json" "$out"' EXIT
+  proxnix_with_master_key sops decrypt --input-type json --output-type json "$source_store" > "$tmp_json"
+  proxnix_with_master_key sops --encrypt --age "$recipients" \
+    --input-type json --output-type json "$tmp_json" > "$out"
+  chmod 600 "$out"
+  rm -f "$tmp_json"
+  trap - EXIT
+)
 
 proxnix_top_level_keys() {
   awk '

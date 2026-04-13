@@ -17,6 +17,7 @@ set -euo pipefail
 
 NIXLXC_DIR="/var/lib/proxnix"
 NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
@@ -46,6 +47,7 @@ FIND_BIN=""
 BASENAME_BIN=""
 SORT_BIN=""
 AWK_BIN=""
+SOPS_BIN=""
 
 init_bins() {
   ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
@@ -59,6 +61,7 @@ init_bins() {
   BASENAME_BIN="$(pick_bin /usr/bin/basename /bin/basename)" || die "basename not found"
   SORT_BIN="$(pick_bin /usr/bin/sort /bin/sort)" || die "sort not found"
   AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
+  SOPS_BIN="$(command -v sops 2>/dev/null || true)"
 }
 
 warns=0
@@ -211,7 +214,9 @@ check_host_files() {
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
     "$NIXLXC_DIR/configuration.nix" \
-    "$NIXLXC_PRIV_DIR"
+    "$NIXLXC_PRIV_DIR" \
+    "$PROXNIX_HOST_STATE_DIR" \
+    "$PROXNIX_HOST_STATE_DIR/host_relay_identity"
   do
     if [[ -e "$path" ]]; then
       ok "$path present"
@@ -219,6 +224,12 @@ check_host_files() {
       fail "$path missing"
     fi
   done
+
+  if [[ -n "$SOPS_BIN" && -x "$SOPS_BIN" ]]; then
+    ok "sops present: $SOPS_BIN"
+  else
+    fail "sops not found on host; pre-start cannot decrypt relay-encrypted guest identities"
+  fi
 }
 
 check_container() {
@@ -227,7 +238,7 @@ check_container() {
   local cdir="${NIXLXC_DIR}/containers/${vmid}"
   local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
   local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
-  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.txt"
+  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.json"
   local user_yaml="${cdir}/user.yaml"
   local dropin_dir="${cdir}/dropins"
   local quadlet_dir="${cdir}/quadlets"
@@ -351,34 +362,34 @@ check_container() {
     warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"
   fi
 
-  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.txt" ]]; then
-    fail "container secret store exists but relay identity is missing: ${priv_cdir}/age_identity.txt"
+  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.json" ]]; then
+    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.sops.json"
   fi
 
   if [[ -f "${shared_store}" && ! -f "${shared_identity}" ]]; then
-    fail "shared secret store exists but relay identity is missing: ${shared_identity}"
+    fail "shared secret store exists but host-relay-encrypted shared identity is missing: ${shared_identity}"
   fi
 
-  if [[ -f "${priv_cdir}/age_identity.txt" ]]; then
-    ok "host relay container age identity present: ${priv_cdir}/age_identity.txt"
+  if [[ -f "${priv_cdir}/age_identity.sops.json" ]]; then
+    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.sops.json"
     if guest_test "$vmid" -f /etc/proxnix/secrets/identity >/dev/null 2>&1; then
       ok "guest container age identity present"
     else
-      warn "host relay has a container age identity but the guest is missing it; restart the container"
+      warn "host relay has an encrypted container identity but the guest is missing it; restart the container"
     fi
   else
-    info "no host relay container age identity configured"
+    info "no host relay encrypted container identity configured"
   fi
 
   if [[ -f "${shared_identity}" ]]; then
-    ok "host relay shared age identity present: ${shared_identity}"
+    ok "host relay encrypted shared identity present: ${shared_identity}"
     if guest_test "$vmid" -f /etc/proxnix/secrets/shared_identity >/dev/null 2>&1; then
       ok "guest shared age identity present"
     else
-      warn "host relay has a shared age identity but the guest is missing it; restart the container"
+      warn "host relay has an encrypted shared identity but the guest is missing it; restart the container"
     fi
   else
-    info "no host relay shared age identity configured"
+    info "no host relay encrypted shared identity configured"
   fi
 
   if [[ "$mode" == "quadlet-dropins" ]]; then

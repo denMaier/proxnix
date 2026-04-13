@@ -23,18 +23,33 @@ Config: $CONFIG_FILE
   PROXNIX_MASTER_IDENTITY
                         Local SSH private key used by SOPS
   PROXNIX_HOSTS         Space-separated SSH targets for relay hosts
-  PROXNIX_SSH_IDENTITY  SSH private key used for publishing
+  PROXNIX_SSH_IDENTITY  Optional SSH private key used for publishing
+                        If unset, ssh/rsync use your SSH agent and config
   PROXNIX_REMOTE_DIR    Remote proxnix config dir (default: /var/lib/proxnix)
   PROXNIX_REMOTE_PRIV_DIR
                         Remote proxnix private dir (default: /var/lib/proxnix/private)
+  PROXNIX_REMOTE_HOST_RELAY_IDENTITY
+                        Remote host relay identity path (default: /etc/proxnix/host_relay_identity)
 EOF
   exit 1
+}
+
+ssh_cmd() {
+  if [[ -n "$PROXNIX_SSH_IDENTITY" ]]; then
+    printf 'ssh -i %q' "$PROXNIX_SSH_IDENTITY"
+  else
+    printf 'ssh'
+  fi
 }
 
 run_ssh() {
   local host="$1"
   shift
-  ssh -i "$PROXNIX_SSH_IDENTITY" "$host" "$@"
+  if [[ -n "$PROXNIX_SSH_IDENTITY" ]]; then
+    ssh -i "$PROXNIX_SSH_IDENTITY" "$host" "$@"
+  else
+    ssh "$host" "$@"
+  fi
 }
 
 sync_path() {
@@ -43,7 +58,7 @@ sync_path() {
     info "[dry-run] sync ${source} -> ${host}:${dest}"
     return
   fi
-  rsync -a --delete -e "ssh -i $PROXNIX_SSH_IDENTITY" "$source" "${host}:${dest}"
+  rsync -a --no-owner --no-group --delete -e "$(ssh_cmd)" "$source" "${host}:${dest}"
 }
 
 sync_file() {
@@ -52,7 +67,7 @@ sync_file() {
     info "[dry-run] copy ${source} -> ${host}:${dest}"
     return
   fi
-  rsync -a -e "ssh -i $PROXNIX_SSH_IDENTITY" "$source" "${host}:${dest}"
+  rsync -a --no-owner --no-group -e "$(ssh_cmd)" "$source" "${host}:${dest}"
 }
 
 remove_remote_file() {
@@ -70,15 +85,19 @@ ensure_remote_dirs() {
     info "[dry-run] ensure relay dirs on ${host}"
     return
   fi
-  run_ssh "$host" "mkdir -p '$PROXNIX_REMOTE_DIR/containers' '$PROXNIX_REMOTE_PRIV_DIR/shared' '$PROXNIX_REMOTE_PRIV_DIR/containers' && chmod 755 '$PROXNIX_REMOTE_DIR' '$PROXNIX_REMOTE_DIR/containers' && chmod 700 '$PROXNIX_REMOTE_PRIV_DIR' '$PROXNIX_REMOTE_PRIV_DIR/shared' '$PROXNIX_REMOTE_PRIV_DIR/containers'"
+  run_ssh "$host" "mkdir -p '$PROXNIX_REMOTE_DIR/containers' '$PROXNIX_REMOTE_PRIV_DIR/shared' '$PROXNIX_REMOTE_PRIV_DIR/containers' '$(dirname "$PROXNIX_REMOTE_HOST_RELAY_IDENTITY")' && chmod 755 '$PROXNIX_REMOTE_DIR' '$PROXNIX_REMOTE_DIR/containers' && chmod 700 '$PROXNIX_REMOTE_PRIV_DIR' '$PROXNIX_REMOTE_PRIV_DIR/shared' '$PROXNIX_REMOTE_PRIV_DIR/containers' '$(dirname "$PROXNIX_REMOTE_HOST_RELAY_IDENTITY")'"
 }
 
 validate_site_repo() {
-  local shared_store vmid secret_store identity_store
+  local shared_store vmid secret_store identity_store need_host_relay=0
 
   shared_store="$(proxnix_site_shared_store)"
   if [[ -f "$shared_store" && ! -f "$(proxnix_site_shared_identity_store)" ]]; then
     die "shared secret store exists but shared identity is missing: $(proxnix_site_shared_identity_store)"
+  fi
+
+  if [[ -f "$(proxnix_site_shared_identity_store)" ]]; then
+    need_host_relay=1
   fi
 
   while IFS= read -r secret_store; do
@@ -88,13 +107,22 @@ validate_site_repo() {
     if [[ ! -f "$identity_store" ]]; then
       die "container ${vmid} secret store exists but identity is missing: ${identity_store}"
     fi
+    need_host_relay=1
   done < <(find "$(proxnix_site_private_dir)/containers" -name secrets.sops.yaml -type f 2>/dev/null || true)
+
+  if find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.json -type f -print -quit 2>/dev/null | grep -q .; then
+    need_host_relay=1
+  fi
+
+  if [[ $need_host_relay -eq 1 && ! -f "$(proxnix_site_host_relay_identity_store)" ]]; then
+    die "host relay identity is missing: $(proxnix_site_host_relay_identity_store) — run: proxnix-secrets init-host-relay"
+  fi
 }
 
 build_publish_tree() {
   local root="$1"
   local private_root="${root}/private"
-  local store vmid dest
+  local store vmid
 
   mkdir -p "${root}/containers" "${private_root}/shared" "${private_root}/containers"
   chmod 755 "${root}" "${root}/containers"
@@ -120,9 +148,28 @@ build_publish_tree() {
     install -m 600 "$store" "${private_root}/containers/${vmid}/secrets.sops.yaml"
   done < <(find "$(proxnix_site_private_dir)/containers" -name secrets.sops.yaml -type f 2>/dev/null || true)
 
+  find "${private_root}" -type d -exec chmod 700 {} +
+  find "${private_root}" -type f -exec chmod 600 {} +
+}
+
+stage_publish_identities() (
+  local tree="$1"
+  local host="$2"
+  local private_root="${tree}/private"
+  local store vmid dest relay_store relay_recipient identity_recipients relay_private
+
+  trap 'rm -f "${private_root}/host_relay_identity" "${private_root}/shared_age_identity.sops.json"; find "${private_root}/containers" \( -name age_identity.sops.json -o -name host_relay_identity \) -type f -delete 2>/dev/null || true' EXIT
+
+  relay_store="$(proxnix_site_host_relay_identity_store)"
+  relay_recipient="$(proxnix_identity_public_key_from_store "$relay_store")"
+  identity_recipients="${relay_recipient},$(proxnix_master_recipient)"
+  relay_private="${private_root}/host_relay_identity"
+  proxnix_decrypt_identity_to_file "$relay_store" "$relay_private"
+  chmod 600 "$relay_private"
+
   if [[ -f "$(proxnix_site_shared_identity_store)" ]]; then
-    dest="${private_root}/shared_age_identity.txt"
-    proxnix_decrypt_identity_to_file "$(proxnix_site_shared_identity_store)" "$dest"
+    dest="${private_root}/shared_age_identity.sops.json"
+    proxnix_reencrypt_identity_store_to_file "$(proxnix_site_shared_identity_store)" "$identity_recipients" "$dest"
     chmod 600 "$dest"
   fi
 
@@ -131,14 +178,13 @@ build_publish_tree() {
     vmid="${vmid%%/*}"
     mkdir -p "${private_root}/containers/${vmid}"
     chmod 700 "${private_root}/containers/${vmid}"
-    dest="${private_root}/containers/${vmid}/age_identity.txt"
-    proxnix_decrypt_identity_to_file "$store" "$dest"
+    dest="${private_root}/containers/${vmid}/age_identity.sops.json"
+    proxnix_reencrypt_identity_store_to_file "$store" "$identity_recipients" "$dest"
     chmod 600 "$dest"
   done < <(find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.json -type f 2>/dev/null || true)
 
-  find "${private_root}" -type d -exec chmod 700 {} +
-  find "${private_root}" -type f -exec chmod 600 {} +
-}
+  publish_host "$host" "$tree"
+)
 
 publish_host() {
   local host="$1" tree="$2"
@@ -156,10 +202,16 @@ publish_host() {
   sync_path "${tree}/private/shared/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared/"
   sync_path "${tree}/private/containers/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/containers/"
 
-  if [[ -f "${tree}/private/shared_age_identity.txt" ]]; then
-    sync_file "${tree}/private/shared_age_identity.txt" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.txt"
+  if [[ -f "${tree}/private/host_relay_identity" ]]; then
+    sync_file "${tree}/private/host_relay_identity" "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}"
   else
-    remove_remote_file "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.txt"
+    remove_remote_file "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}"
+  fi
+
+  if [[ -f "${tree}/private/shared_age_identity.sops.json" ]]; then
+    sync_file "${tree}/private/shared_age_identity.sops.json" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.json"
+  else
+    remove_remote_file "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.json"
   fi
 }
 
@@ -192,14 +244,21 @@ main() {
   fi
   [[ ${#hosts[@]} -gt 0 ]] || die "no publish hosts configured"
 
+  umask 077
   temp_root="$(mktemp -d /tmp/proxnix-publish.XXXXXX)"
   relay_tree="${temp_root}/relay"
-  trap 'rm -rf "$temp_root"' EXIT
+  trap "rm -rf '${temp_root}'" EXIT
 
   build_publish_tree "$relay_tree"
 
   for host in "${hosts[@]}"; do
-    publish_host "$host" "$relay_tree"
+    if [[ $DRY_RUN -eq 1 ]]; then
+      publish_host "$host" "$relay_tree"
+    elif [[ -f "$(proxnix_site_host_relay_identity_store)" ]]; then
+      stage_publish_identities "$relay_tree" "$host"
+    else
+      publish_host "$host" "$relay_tree"
+    fi
   done
 
   info "Publish complete"

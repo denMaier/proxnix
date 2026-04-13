@@ -24,7 +24,7 @@ This page maps every important proxnix path by role.
 
 ## Node-local host paths
 
-These paths are relay caches on the Proxmox host. The workstation-owned site repo is the source of truth.
+These paths are the published host-side state on the Proxmox node. The workstation-owned site repo is the source of truth.
 
 ```text
 /var/lib/proxnix/
@@ -40,13 +40,16 @@ These paths are relay caches on the Proxmox host. The workstation-owned site rep
         └── quadlets/                  main Podman workload tree
 
 /var/lib/proxnix/private/
-├── shared_age_identity.txt            published shared relay identity
+├── shared_age_identity.sops.json      host-relay-encrypted shared guest identity
 ├── shared/
 │   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
     └── <vmid>/
-        ├── age_identity.txt          published container relay identity
+        ├── age_identity.sops.json    host-relay-encrypted container guest identity
         └── secrets.sops.yaml         per-container encrypted secrets
+
+/etc/proxnix/
+└── host_relay_identity                shared host relay private key
 ```
 
 ## Per-node runtime paths
@@ -156,4 +159,8 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── site.nix
 ├── containers/
 └── private/
+    ├── host_relay_identity.sops.json
+    ├── shared_age_identity.sops.json
+    ├── shared/
+    └── containers/
 ```

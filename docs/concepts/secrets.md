@@ -8,7 +8,7 @@ In the current model the **workstation owns all secret state**:
 - encrypted private identities
 - the master recovery key
 
-The Proxmox host is only a **relay cache**. It stores encrypted secret stores plus plaintext relay identities so it can restage them into guests on every boot.
+The Proxmox host is only a **relay cache**. It stores encrypted secret stores, one shared plaintext host relay identity, and guest identities re-encrypted at rest for that host relay key so it can restage them into guests on every boot.
 
 ## Quick recipe
 
@@ -42,12 +42,13 @@ Inside the workstation-owned site repo:
 
 | Store | Path |
 |-------|------|
-| Shared identity | `private/shared_age_identity.sops.json` |
+| Host relay identity | `private/host_relay_identity.sops.json` |
+| Shared guest identity | `private/shared_age_identity.sops.json` |
 | Shared secret store | `private/shared/secrets.sops.yaml` |
 | Per-container identity | `private/containers/<vmid>/age_identity.sops.json` |
 | Per-container secret store | `private/containers/<vmid>/secrets.sops.yaml` |
 
-The identity files are encrypted to the master recovery key only.
+The identity files in the workstation site repo are encrypted to the master recovery key only, except for the host-side published copies of guest identities, which are re-encrypted to both the host relay key and the master recovery key.
 
 The secret stores are encrypted to:
 
@@ -92,20 +93,21 @@ proxnix:
 
 ## Publish flow
 
-`proxnix-publish` builds a temporary relay tree locally, decrypts the identity files into plaintext, and syncs the result to the host:
+`proxnix-publish` builds a temporary relay tree locally, decrypts the shared host relay key, re-encrypts guest identities for both that host relay key and the master recovery key, and syncs the result to the host:
 
 ```text
-Workstation source of truth                  Host relay cache
-──────────────────────────                  ────────────────
-private/shared_age_identity.sops.json ──►   /var/lib/proxnix/private/shared_age_identity.txt
-private/shared/secrets.sops.yaml      ──►   /var/lib/proxnix/private/shared/secrets.sops.yaml
+Workstation source of truth                        Host relay cache
+──────────────────────────                        ────────────────
+private/host_relay_identity.sops.json ───────►    /etc/proxnix/host_relay_identity
+private/shared/secrets.sops.yaml        ─────►    /var/lib/proxnix/private/shared/secrets.sops.yaml
+private/shared_age_identity.sops.json   ─────►    /var/lib/proxnix/private/shared_age_identity.sops.json
 
 private/containers/<vmid>/
-  age_identity.sops.json              ──►   /var/lib/proxnix/private/containers/<vmid>/age_identity.txt
-  secrets.sops.yaml                   ──►   /var/lib/proxnix/private/containers/<vmid>/secrets.sops.yaml
+  age_identity.sops.json                ─────►    /var/lib/proxnix/private/containers/<vmid>/age_identity.sops.json
+  secrets.sops.yaml                     ─────►    /var/lib/proxnix/private/containers/<vmid>/secrets.sops.yaml
 ```
 
-The host cache contains plaintext relay identities. That is unavoidable if the host must keep restaging them into guests after workstation access is gone. In practice, root on the Proxmox host is the trust boundary for secret relay.
+That means each Proxmox host persistently stores only one plaintext relay key. Guest identities remain encrypted at rest on the host and are decrypted only transiently during pre-start staging. In practice, root on the Proxmox host is still the trust boundary for secret relay.
 
 ## How secrets reach the guest
 
@@ -113,10 +115,12 @@ The host cache contains plaintext relay identities. That is unavoidable if the h
 Host relay cache                           Guest
 ────────────────                           ─────
 /var/lib/proxnix/private/
+/etc/proxnix/host_relay_identity  (used on host only during pre-start)
+/var/lib/proxnix/private/
   shared/secrets.sops.yaml        ──►      /etc/proxnix/secrets/shared.sops.yaml
   containers/<vmid>/secrets.sops.yaml ─►   /etc/proxnix/secrets/container.sops.yaml
-  shared_age_identity.txt         ──►      /etc/proxnix/secrets/shared_identity
-  containers/<vmid>/age_identity.txt ─►    /etc/proxnix/secrets/identity
+  shared_age_identity.sops.json   ──►      /etc/proxnix/secrets/shared_identity
+  containers/<vmid>/age_identity.sops.json ─► /etc/proxnix/secrets/identity
 
                                           /etc/proxnix/secrets/ssh-keys.txt
                                             (combined container + shared identities)
@@ -124,11 +128,13 @@ Host relay cache                           Guest
 
 The pre-start hook stages the relay cache into `/run/proxnix/<vmid>/`.
 
-The mount hook copies the encrypted stores and any available relay identities into the guest.
+During that step, the host uses `/etc/proxnix/host_relay_identity` to decrypt the host-relay-encrypted guest identity files into transient plaintext under `/run/proxnix/<vmid>/keys/`.
+
+The mount hook copies the encrypted stores and those staged guest identities into the guest.
 
 The guest activation script combines the container identity and shared identity into `/etc/proxnix/secrets/ssh-keys.txt`, which SOPS uses for decryption.
 
-If a relay identity is absent on the host, proxnix stages nothing for that scope. That simply means that scope has no secrets available.
+If a relay-encrypted guest identity is absent on the host, proxnix stages nothing for that scope. That simply means that scope has no secrets available.
 
 ## Guest helper
 

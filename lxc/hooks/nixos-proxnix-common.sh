@@ -2,6 +2,7 @@
 
 NIXLXC_DIR="/var/lib/proxnix"
 NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 PROXNIX_STAGE_BASE_DIR="/run/proxnix"
 PROXNIX_SHARED_FILES=(
     configuration.nix
@@ -24,9 +25,50 @@ proxnix_container_priv_dir() {
     printf '%s/containers/%s' "$NIXLXC_PRIV_DIR" "$vmid"
 }
 
-proxnix_container_age_identity_path() {
+proxnix_host_relay_identity_path() {
+    printf '%s/host_relay_identity' "$PROXNIX_HOST_STATE_DIR"
+}
+
+proxnix_container_age_identity_store_path() {
     local vmid="$1"
-    printf '%s/age_identity.txt' "$(proxnix_container_priv_dir "$vmid")"
+    printf '%s/age_identity.sops.json' "$(proxnix_container_priv_dir "$vmid")"
+}
+
+proxnix_shared_age_identity_store_path() {
+    printf '%s/shared_age_identity.sops.json' "$NIXLXC_PRIV_DIR"
+}
+
+proxnix_with_host_relay_key() {
+    local relay_key
+    relay_key="$(proxnix_host_relay_identity_path)"
+    [[ -f "$relay_key" ]] || return 1
+    env -u SOPS_AGE_KEY_FILE SOPS_AGE_SSH_PRIVATE_KEY_FILE="$relay_key" "$@"
+}
+
+proxnix_decrypt_host_identity_store_to_file() {
+    local store="$1" out="$2" tmp_json
+    [[ -f "$store" ]] || return 1
+    tmp_json="$(mktemp /tmp/proxnix-host-identity-json.XXXXXX)"
+    if ! proxnix_with_host_relay_key sops decrypt --input-type json --output-type json "$store" > "$tmp_json"; then
+        rm -f "$tmp_json" "$out"
+        return 1
+    fi
+    if ! python3 - "$tmp_json" "$out" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as source:
+    payload = json.load(source)
+
+with open(sys.argv[2], "w") as fh:
+    fh.write(payload["identity"])
+PY
+    then
+        rm -f "$tmp_json" "$out"
+        return 1
+    fi
+    rm -f "$tmp_json"
+    chmod 600 "$out"
 }
 
 proxnix_write_if_changed() {

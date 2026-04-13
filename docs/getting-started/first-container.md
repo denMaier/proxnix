@@ -192,7 +192,7 @@ Expected output for a healthy container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   OK    container config dir present: /var/lib/proxnix/containers/100
-  OK    host relay container age identity present: /var/lib/proxnix/private/containers/100/age_identity.txt
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
   OK    guest container age identity present
   ...
   OK    guest file present: /etc/nixos/configuration.nix

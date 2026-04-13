@@ -98,6 +98,7 @@ It copies the staged assets into places such as:
 | `quadlet/*.container` etc. | `/etc/containers/systemd/` |
 | `quadlet/` (full tree) | `/etc/proxnix/quadlets/` |
 | `secrets/*.sops.yaml` | `/etc/proxnix/secrets/` |
+| `keys/identity` | `/etc/proxnix/secrets/identity` |
 | `keys/shared_identity.txt` | `/etc/proxnix/secrets/shared_identity` |
 
 It also installs a generated `proxnix-apply-config` service and runner inside the guest.
