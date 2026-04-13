@@ -135,7 +135,7 @@ usage() {
     "  --nesting                 Deprecated; nesting=1 is always enabled for NixOS" \
     "  --start                   Start the CT after creation (default)" \
     "  --no-start                Create the CT but do not start it" \
-    "  --no-config-dir           Skip creating /etc/pve/proxnix/containers/<vmid>/" \
+    "  --no-config-dir           Skip creating /var/lib/proxnix/containers/<vmid>/" \
     "  --dry-run                 Print the commands without running them" \
     "  --yes                     Skip the confirmation prompt" \
     "  --help                    Show this help" \
@@ -343,8 +343,8 @@ verify_host_side_dirs() {
   [[ $DRY_RUN -eq 1 ]] && return
   [[ $CREATE_CONFIG_DIR -eq 1 ]] || return
 
-  [[ -d "/etc/pve/proxnix/containers/${VMID}/quadlets" ]] || die "host-side quadlets dir was not created for VMID ${VMID}"
-  [[ -d "/etc/pve/proxnix/containers/${VMID}/dropins" ]] || die "host-side dropins dir was not created for VMID ${VMID}"
+  [[ -d "/var/lib/proxnix/containers/${VMID}/quadlets" ]] || die "host-side quadlets dir was not created for VMID ${VMID}"
+  [[ -d "/var/lib/proxnix/containers/${VMID}/dropins" ]] || die "host-side dropins dir was not created for VMID ${VMID}"
 }
 
 verify_container_started() {
@@ -556,8 +556,8 @@ create_container() {
 create_host_side_dirs() {
   [[ $CREATE_CONFIG_DIR -eq 1 ]] || return
   msg_info "Creating proxnix config directories for ${VMID}"
-  run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/quadlets"
-  run_cmd "$MKDIR_BIN" -p "/etc/pve/proxnix/containers/${VMID}/dropins"
+  run_cmd "$MKDIR_BIN" -p "/var/lib/proxnix/containers/${VMID}/quadlets"
+  run_cmd "$MKDIR_BIN" -p "/var/lib/proxnix/containers/${VMID}/dropins"
   verify_host_side_dirs
   msg_ok "Created host-side proxnix directories for ${VMID}"
 }

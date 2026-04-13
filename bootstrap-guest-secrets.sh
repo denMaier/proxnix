@@ -15,7 +15,7 @@
 set -euo pipefail
 
 VMID="${1:?Usage: $0 <vmid>}"
-NIXLXC_DIR="/etc/pve/proxnix"
+NIXLXC_DIR="/var/lib/proxnix"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 MASTER_PUBKEY_FILE="${NIXLXC_DIR}/master_age_pubkey"
 GUEST_PUBKEY_FILE="/etc/proxnix/secrets/identity.pub"

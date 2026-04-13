@@ -1,7 +1,7 @@
 #!/bin/bash
 
-NIXLXC_DIR="/etc/pve/proxnix"
-NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
+NIXLXC_DIR="/var/lib/proxnix"
+NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
 PROXNIX_STAGE_BASE_DIR="/run/proxnix"
 PROXNIX_SSH_KEYGEN_BIN="${PROXNIX_SSH_KEYGEN_BIN:-/usr/bin/ssh-keygen}"
 PROXNIX_SHARED_FILES=(
@@ -45,6 +45,8 @@ proxnix_ensure_container_age_identity() {
     identity_path="$(proxnix_container_age_identity_path "$vmid")"
 
     mkdir -p "$container_dir" "$container_priv_dir"
+    chmod 0755 "$container_dir"
+    chmod 0700 "$container_priv_dir"
 
     if [[ -f "$pubkey_path" ]]; then
         return 0

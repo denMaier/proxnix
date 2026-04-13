@@ -28,12 +28,12 @@ pct restart <vmid>  # restart any container that needs it
 
 ## Host-side secret stores
 
-The encrypted stores live under `/etc/pve/priv/proxnix/`.
+The encrypted stores live under `/var/lib/proxnix/private/`.
 
 | Store | Path | Encrypted to |
 |-------|------|-------------|
-| Shared | `/etc/pve/priv/proxnix/shared/secrets.sops.yaml` | shared pubkey + master pubkey |
-| Per-container | `/etc/pve/priv/proxnix/containers/<vmid>/secrets.sops.yaml` | container pubkey + master pubkey |
+| Shared | `/var/lib/proxnix/private/shared/secrets.sops.yaml` | shared pubkey + master pubkey |
+| Per-container | `/var/lib/proxnix/private/containers/<vmid>/secrets.sops.yaml` | container pubkey + master pubkey |
 
 ## Recipients model
 
@@ -47,8 +47,8 @@ proxnix-secrets set <vmid> <name>
 
 proxnix encrypts to:
 
-- the container's SSH public key used as an `age` recipient from `/etc/pve/proxnix/containers/<vmid>/age_pubkey`
-- the cluster master recovery key from `/etc/pve/proxnix/master_age_pubkey`
+- the container's SSH public key used as an `age` recipient from `/var/lib/proxnix/containers/<vmid>/age_pubkey`
+- the node's master recovery key from `/var/lib/proxnix/master_age_pubkey`
 
 ### Shared store recipients
 
@@ -60,8 +60,8 @@ proxnix-secrets set-shared <name>
 
 proxnix encrypts to:
 
-- the shared SSH public key used as an `age` recipient from `/etc/pve/proxnix/shared_age_pubkey`
-- the cluster master recovery key
+- the shared SSH public key used as an `age` recipient from `/var/lib/proxnix/shared_age_pubkey`
+- the node's master recovery key
 
 ## Bootstrap flow
 
@@ -71,8 +71,8 @@ When a container is created through `proxnix-create-lxc` — or on the first pro
 
 That produces:
 
-- `/etc/pve/proxnix/containers/<vmid>/age_pubkey`
-- `/etc/pve/priv/proxnix/containers/<vmid>/age_identity.txt`
+- `/var/lib/proxnix/containers/<vmid>/age_pubkey`
+- `/var/lib/proxnix/private/containers/<vmid>/age_identity.txt`
 
 ### 2. The host encrypts the store
 
@@ -83,15 +83,15 @@ Use `proxnix-secrets` to create, read, rotate, or remove entries.
 ```
 Host                                    Guest
 ────                                    ─────
-/etc/pve/priv/proxnix/                 
+/var/lib/proxnix/private/                 
   shared/secrets.sops.yaml        ──►   /etc/proxnix/secrets/shared.sops.yaml
   containers/<vmid>/              
     secrets.sops.yaml             ──►   /etc/proxnix/secrets/container.sops.yaml
                                         
-/etc/pve/priv/proxnix/                 
+/var/lib/proxnix/private/                 
   shared_age_identity.txt         ──►   /etc/proxnix/secrets/shared_identity
                                         
-/etc/pve/priv/proxnix/containers/<vmid>/
+/var/lib/proxnix/private/containers/<vmid>/
   age_identity.txt               ──►   /etc/proxnix/secrets/identity
                                         
                                         /etc/proxnix/secrets/ssh-keys.txt
@@ -181,4 +181,4 @@ proxnix-secrets rotate <vmid>
 proxnix-secrets rotate-shared
 ```
 
-That re-encrypts the existing store to the currently configured recipients. Use this after replacing a container's SSH-backed age identity or the master key.
+That re-encrypts the existing store to the configured recipients. Use this after replacing a container's SSH-backed age identity or the master key.

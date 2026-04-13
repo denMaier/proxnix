@@ -22,11 +22,11 @@ It does **not** support container definitions. If the app is containerized, use 
 
 For a target container VMID, host-side files live at:
 
-- `/etc/pve/proxnix/containers/<vmid>/user.yaml`
-- `/etc/pve/proxnix/containers/<vmid>/dropins/*.nix`
-- `/etc/pve/proxnix/containers/<vmid>/dropins/*.service`
-- `/etc/pve/proxnix/containers/<vmid>/dropins/*.{sh,py}`
-- optional `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`
+- `/var/lib/proxnix/containers/<vmid>/user.yaml`
+- `/var/lib/proxnix/containers/<vmid>/dropins/*.nix`
+- `/var/lib/proxnix/containers/<vmid>/dropins/*.service`
+- `/var/lib/proxnix/containers/<vmid>/dropins/*.{sh,py}`
+- optional `/var/lib/proxnix/containers/<vmid>/proxmox.yaml`
 
 Inside the guest, proxnix generates and imports:
 

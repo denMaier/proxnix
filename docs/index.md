@@ -95,9 +95,9 @@ Treat this repository as the **install repo**:
 
 In practice, live site data can be managed from a separate repo that writes:
 
-- `/etc/pve/proxnix/site.nix` for site-wide overrides
-- `/etc/pve/proxnix/containers/<vmid>/` for per-container config
-- `/etc/pve/priv/proxnix/` for encrypted secrets
+- `/var/lib/proxnix/site.nix` for site-wide overrides
+- `/var/lib/proxnix/containers/<vmid>/` for per-container config
+- `/var/lib/proxnix/private/` for encrypted secrets
 
 ## Main workflows
 

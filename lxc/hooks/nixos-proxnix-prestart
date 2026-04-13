@@ -186,9 +186,8 @@ if [[ -f "$CONTAINER_SECRETS_FILE" ]]; then
 fi
 
 # The mount hook runs as the container's subuid (e.g. host UID 100000), not as
-# root.  Files copied with 'cp' from pmxcfs inherit the source mode (0640),
-# which is not world-readable.  Make the entire stage dir world-readable so
-# the mount hook can access it.  Secrets are age-encrypted, so 0644 is fine.
+# root. Make the entire stage dir world-readable so the mount hook can access
+# it. Secrets are age-encrypted, so 0644 is fine.
 chmod -R a+rX "${STAGE_DIR}"
 
 DESIRED_CONFIG_HASH="$(proxnix_hash_tree "$RENDERED_DIR")"

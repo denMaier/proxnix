@@ -6,8 +6,8 @@ proxnix turns Proxmox container metadata, optional host-side YAML, and optional 
 
 This repository is the install/bootstrap layer. It owns the shared hooks,
 helpers, and baseline Nix modules. Site-specific data is meant to live
-separately under `/etc/pve/proxnix/site.nix`, `/etc/pve/proxnix/containers/`,
-and `/etc/pve/priv/proxnix/`.
+separately under `/var/lib/proxnix/site.nix`, `/var/lib/proxnix/containers/`,
+and `/var/lib/proxnix/private/`.
 
 ## What you get
 

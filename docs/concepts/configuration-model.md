@@ -39,7 +39,7 @@ Typical uses:
 
 - extending `proxnix.common.extraPackages`
 - changing the shared admin user defaults
-- setting cluster-wide policy overrides without editing the install repo
+- setting node-wide policy overrides without editing the install repo
 
 ### `user.yaml`
 

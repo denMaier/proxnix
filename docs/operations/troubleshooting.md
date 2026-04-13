@@ -96,7 +96,7 @@ pct restart <vmid>
 `proxnix-secrets set <vmid> ...` needs the container public recipient at:
 
 ```text
-/etc/pve/proxnix/containers/<vmid>/age_pubkey
+/var/lib/proxnix/containers/<vmid>/age_pubkey
 ```
 
 If it is missing, run:
@@ -207,7 +207,7 @@ After migrating a container to a different Proxmox node, make sure proxnix is in
 ./install.sh
 ```
 
-The shared cluster files (under `/etc/pve/`) replicate automatically via pmxcfs. Only the per-node hooks and helpers need to be present locally.
+proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a container to another node, make sure that node has both proxnix installed and the expected `/var/lib/proxnix/` data for that container.
 
 ## `yaml-to-nix.py` fails
 

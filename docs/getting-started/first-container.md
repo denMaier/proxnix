@@ -49,13 +49,13 @@ pct set <vmid> --ostype nixos
 
 ## 2. Create the host-side container directory
 
-proxnix looks for per-container configuration under `/etc/pve/proxnix/containers/<vmid>/`. Creating this directory is optional for a baseline container, but you'll need it for any customization.
+proxnix looks for per-container configuration under `/var/lib/proxnix/containers/<vmid>/`. Creating this directory is optional for a baseline container, but you'll need it for any customization.
 
 For VMID `100`:
 
 ```bash
 VMID=100
-mkdir -p /etc/pve/proxnix/containers/$VMID/quadlets
+mkdir -p /var/lib/proxnix/containers/$VMID/quadlets
 ```
 
 ### Optional files
@@ -73,9 +73,9 @@ Example setup for a container with native services:
 
 ```bash
 VMID=100
-mkdir -p /etc/pve/proxnix/containers/$VMID/{quadlets,dropins}
+mkdir -p /var/lib/proxnix/containers/$VMID/{quadlets,dropins}
 
-cat > /etc/pve/proxnix/containers/$VMID/user.yaml << 'EOF'
+cat > /var/lib/proxnix/containers/$VMID/user.yaml << 'EOF'
 runtime: native
 services:
   jellyfin:
@@ -97,11 +97,11 @@ At this point proxnix has already:
 3. Installed the `proxnix-apply-config` service inside the guest
 4. Generated the `proxnix-bootstrap.sh` script in `/root/` as a fallback recovery helper
 
-The guest now starts bootstrapping and applying the rendered NixOS configuration automatically on first boot.
+The guest bootstraps and applies the rendered NixOS configuration automatically on first boot.
 
 ## 4. Wait for the automatic first boot apply
 
-**Why:** The stock NixOS Proxmox template does not ship with the root channels configured. proxnix now seeds them automatically before the first `nixos-rebuild switch`.
+**Why:** The stock NixOS Proxmox template does not ship with the root channels configured. proxnix seeds them automatically before the first `nixos-rebuild switch`.
 
 Watch the service from the host:
 
@@ -141,7 +141,7 @@ When you log in after the first boot apply finishes, you'll see:
 
 ## 5. Add the first secret (optional)
 
-proxnix now generates the per-container SSH-backed age keypair on the host automatically, so you can encrypt secrets to the container immediately:
+proxnix generates the per-container SSH-backed age keypair on the host automatically, so you can encrypt secrets to the container immediately:
 
 ```bash
 # From your workstation (with proxnix-secrets configured)
@@ -186,8 +186,8 @@ Expected output for a healthy container:
 [ct 100]
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
-  OK    container config dir present: /etc/pve/proxnix/containers/100
-  OK    host age recipient present: /etc/pve/proxnix/containers/100/age_pubkey
+  OK    container config dir present: /var/lib/proxnix/containers/100
+  OK    host age recipient present: /var/lib/proxnix/containers/100/age_pubkey
   OK    guest container age identity present
   ...
   OK    guest file present: /etc/nixos/configuration.nix

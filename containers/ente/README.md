@@ -1,6 +1,6 @@
 # Ente container template
 
-Copy this folder into `/etc/pve/proxnix/containers/<vmid>/` for the target
+Copy this folder into `/var/lib/proxnix/containers/<vmid>/` for the target
 container.
 
 - `quadlets/*.container`, `*.network`, `*.pod`, and `*.volume` are the raw

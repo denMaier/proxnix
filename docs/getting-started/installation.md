@@ -1,6 +1,6 @@
 # Installation
 
-This page covers installing proxnix on Proxmox cluster nodes, preparing the shared configuration and secrets directories, and setting up your workstation for secret management.
+This page covers installing proxnix on a Proxmox node, preparing the node-local configuration and secrets directories, and setting up your workstation for secret management.
 
 ## Checklist
 
@@ -32,16 +32,16 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/sbin/proxnix-doctor`
 - `proxnix-gc.service` and `proxnix-gc.timer`
 
-### Shared cluster files
+### Node-local proxnix files
 
-These live under `pmxcfs`, so they replicate across the cluster.
+These live on the local node under `/var/lib/proxnix/`. If you want the same proxnix data on multiple nodes, keep these directories in sync yourself.
 
-- `/etc/pve/proxnix/base.nix`
-- `/etc/pve/proxnix/common.nix`
-- `/etc/pve/proxnix/configuration.nix`
-- `/etc/pve/proxnix/containers/`
-- `/etc/pve/priv/proxnix/shared/`
-- `/etc/pve/priv/proxnix/containers/`
+- `/var/lib/proxnix/base.nix`
+- `/var/lib/proxnix/common.nix`
+- `/var/lib/proxnix/configuration.nix`
+- `/var/lib/proxnix/containers/`
+- `/var/lib/proxnix/private/shared/`
+- `/var/lib/proxnix/private/containers/`
 
 ## Step 1: Install on the Proxmox host
 
@@ -53,7 +53,7 @@ cd proxnix
 ./install.sh
 ```
 
-On additional cluster nodes, run the same command. The installer skips recreating the shared tree unless you explicitly force it.
+Run the installer on every node that should host proxnix-managed containers.
 
 Use `--dry-run` to preview what would be installed without writing anything.
 
@@ -64,7 +64,7 @@ Use `--dry-run` to preview what would be installed without writing anything.
 **When to skip:** Never. Always set up the master key.
 
 ```bash
-ssh-keygen -y -f ~/.ssh/id_ed25519 > /etc/pve/proxnix/master_age_pubkey
+ssh-keygen -y -f ~/.ssh/id_ed25519 > /var/lib/proxnix/master_age_pubkey
 ```
 
 Use an SSH ed25519 key here. proxnix standardizes on SSH keys used as `age` recipients so SOPS only needs one identity mode end to end.
@@ -83,8 +83,8 @@ proxnix-secrets init-shared
 
 That creates:
 
-- `/etc/pve/priv/proxnix/shared_age_identity.txt` — SSH private key, staged into every guest
-- `/etc/pve/proxnix/shared_age_pubkey` — public key, used as encryption recipient
+- `/var/lib/proxnix/private/shared_age_identity.txt` — SSH private key, staged into every guest
+- `/var/lib/proxnix/shared_age_pubkey` — public key, used as encryption recipient
 
 ## Step 4: Set the admin user password hash
 
@@ -142,8 +142,8 @@ EOF
 |----------|---------|---------|
 | `PROXNIX_HOST` | SSH target for the Proxmox host | *(required)* |
 | `PROXNIX_IDENTITY` | Path to your local SSH private key used by SOPS | `~/.ssh/id_ed25519` |
-| `PROXNIX_DIR` | Shared config dir on the Proxmox host | `/etc/pve/proxnix` |
-| `PROXNIX_PRIV_DIR` | Private secret dir on the Proxmox host | `/etc/pve/priv/proxnix` |
+| `PROXNIX_DIR` | Node-local proxnix config dir on the Proxmox host | `/var/lib/proxnix` |
+| `PROXNIX_PRIV_DIR` | Node-local private proxnix dir on the Proxmox host | `/var/lib/proxnix/private` |
 
 ### Required workstation tools
 
@@ -162,34 +162,34 @@ proxnix-secrets ls
 
 This should show an empty list or the `common_admin_password_hash` secret you created earlier.
 
-## Upgrading shared proxnix files
+## Upgrading proxnix files
 
-If the repo changes `base.nix`, `common.nix`, or `configuration.nix`, push the updated shared copies with:
+If the repo changes `base.nix`, `common.nix`, or `configuration.nix`, reinstall proxnix on each node that should host proxnix-managed containers:
 
 ```bash
-./install.sh --force-shared
+./install.sh
 ```
 
-Run that on one node. Then run plain `./install.sh` on the remaining nodes so their local hooks and helpers stay in sync.
+The `--force-shared` flag is kept only as a deprecated compatibility no-op in node-local mode.
 
 After upgrading, restart managed containers so they pick up the new config.
 
 ## Uninstalling
 
-To remove proxnix from a node but keep the shared cluster data:
+To remove proxnix from a node but keep the node-local config data:
 
 ```bash
 ./uninstall.sh
 ```
 
-This removes only the per-node assets. It intentionally leaves `/etc/pve/proxnix` and `/etc/pve/priv/proxnix` alone.
+This removes only the installed hooks, helpers, and timers. It intentionally leaves `/var/lib/proxnix` alone.
 
 ## What you should have when done
 
 After completing all steps, your setup should look like this:
 
 ```
-/etc/pve/proxnix/
+/var/lib/proxnix/
 ├── base.nix                    ← shared NixOS baseline
 ├── common.nix                  ← shared operator module
 ├── configuration.nix           ← NixOS entrypoint
@@ -198,7 +198,7 @@ After completing all steps, your setup should look like this:
 ├── shared_age_pubkey           ← shared encryption recipient (step 3)
 ├── containers/                 ← per-container config (populated later)
 │
-/etc/pve/priv/proxnix/
+/var/lib/proxnix/private/
 ├── shared_age_identity.txt     ← shared SSH private key used as an age identity (step 3)
 ├── shared/
 │   └── secrets.sops.yaml       ← shared secrets including admin hash (step 4)

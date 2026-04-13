@@ -11,7 +11,7 @@ Useful flags:
 | Flag | Purpose |
 |------|---------|
 | `--dry-run` | Preview what would be installed without writing anything |
-| `--force-shared` | Overwrite shared pmxcfs content even if it already exists |
+| `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
 
 ### `remote/codeberg-install.sh`
 
@@ -34,7 +34,7 @@ PROXNIX_REPO_ARCHIVE_URL=https://codeberg.org/<owner>/<repo>/archive/main.tar.gz
 
 ### `./uninstall.sh`
 
-Remove proxnix's per-node assets from the current Proxmox node. Leaves shared cluster data intact.
+Remove proxnix's installed assets from the current Proxmox node. Leaves node-local proxnix data intact.
 
 Useful flag:
 
@@ -44,9 +44,9 @@ Useful flag:
 
 ### `./bootstrap-guest-secrets.sh <vmid>`
 
-Legacy repair helper. For older/manual containers, read the guest SSH public key used as an `age` recipient and store it under `/etc/pve/proxnix/containers/<vmid>/age_pubkey`.
+Legacy repair helper. For older/manual containers, read the guest SSH public key used as an `age` recipient and store it under `/var/lib/proxnix/containers/<vmid>/age_pubkey`.
 
-New containers created by `proxnix-create-lxc` do not need this step because proxnix now generates the per-container keypair on the host.
+Containers created by `proxnix-create-lxc` do not need this step because proxnix generates the per-container keypair on the host.
 
 ### `proxnix-doctor <vmid>`
 
@@ -74,7 +74,7 @@ Exit codes:
 | 1 | Warnings found, no hard failures |
 | 2 | One or more hard failures |
 
-`--host-only` is useful for automation that needs to verify a node has the proxnix hooks, helpers, and shared files in place before creating or starting a container.
+`--host-only` is useful for automation that needs to verify a node has the proxnix hooks, helpers, and node-local data files in place before creating or starting a container.
 
 ### `proxnix-create-lxc`
 
@@ -88,7 +88,7 @@ This helper:
 - creates the CT with `ostype=nixos`
 - always enables `features: nesting=1`
 - starts the CT by default after creating it
-- optionally creates `/etc/pve/proxnix/containers/<vmid>/{quadlets,dropins}`
+- optionally creates `/var/lib/proxnix/containers/<vmid>/{quadlets,dropins}`
 - never attempts to install proxnix itself
 
 Example:
@@ -131,10 +131,10 @@ Sample output for `proxnix-doctor`:
   OK    /usr/local/lib/proxnix/nixos-proxnix-common.sh present
   OK    /usr/local/lib/proxnix/proxnix-secrets-guest present
   OK    /usr/local/sbin/proxnix-doctor present
-  OK    /etc/pve/proxnix/base.nix present
-  OK    /etc/pve/proxnix/common.nix present
-  OK    /etc/pve/proxnix/configuration.nix present
-  OK    /etc/pve/priv/proxnix present
+  OK    /var/lib/proxnix/base.nix present
+  OK    /var/lib/proxnix/common.nix present
+  OK    /var/lib/proxnix/configuration.nix present
+  OK    /var/lib/proxnix/private present
 
 [ct 100]
   OK    PVE config present: /etc/pve/lxc/100.conf
@@ -143,7 +143,7 @@ Sample output for `proxnix-doctor`:
   INFO  state: running
   OK    guest file present: /etc/nixos/configuration.nix
   OK    guest file present: /etc/nixos/managed/base.nix
-  OK    host age recipient present: /etc/pve/proxnix/containers/100/age_pubkey
+  OK    host age recipient present: /var/lib/proxnix/containers/100/age_pubkey
   OK    guest container age identity present
   OK    applied managed config hash matches current hash
   OK    host identity marker present
@@ -195,8 +195,8 @@ proxnix-secrets rm-shared <name>        # remove from shared store
 ### Rotating recipients
 
 ```bash
-proxnix-secrets rotate <vmid>           # re-encrypt container store to current recipients
-proxnix-secrets rotate-shared           # re-encrypt shared store to current recipients
+proxnix-secrets rotate <vmid>           # re-encrypt container store to configured recipients
+proxnix-secrets rotate-shared           # re-encrypt shared store to configured recipients
 ```
 
 ### Shared key initialization

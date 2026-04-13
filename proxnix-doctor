@@ -15,8 +15,8 @@
 
 set -euo pipefail
 
-NIXLXC_DIR="/etc/pve/proxnix"
-NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
+NIXLXC_DIR="/var/lib/proxnix"
+NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"

@@ -113,7 +113,7 @@ proxnix-secrets ls <vmid>            # list secrets visible to a specific contai
 proxnix-secrets get <vmid> <name>    # read a decrypted secret value
 proxnix-secrets set <vmid> <name>    # create or update a secret
 proxnix-secrets rm <vmid> <name>     # remove a secret
-proxnix-secrets rotate <vmid>        # re-encrypt to current recipients
+proxnix-secrets rotate <vmid>        # re-encrypt to configured recipients
 
 # Shared secrets
 proxnix-secrets ls-shared
@@ -130,8 +130,8 @@ proxnix-secrets rotate-shared
 Typical sequence:
 
 1. Update the repo on the node where you manage proxnix
-2. Run `./install.sh --force-shared` once if shared Nix files changed
-3. Run `./install.sh` on every node so local hooks and helpers match the repo
+2. Run `./install.sh` on every node that should host proxnix-managed containers
+3. Treat `./install.sh --force-shared` as deprecated; it is accepted but ignored
 4. Restart managed containers as needed
 
 ## Updating the admin password

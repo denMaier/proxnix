@@ -2,17 +2,17 @@
 # install.sh — Install proxnix on a Proxmox host.
 #
 # Must be run as root on the Proxmox host from this repository directory.
-# Safe to re-run on additional cluster nodes — the shared /etc/pve/proxnix
-# tree and the private /etc/pve/priv/proxnix tree are only written on the
-# first node; subsequent nodes skip them.
+# proxnix now uses node-local storage. Run this on every node that should host
+# proxnix-managed containers. If you want identical config across nodes, keep
+# /var/lib/proxnix in sync yourself.
 #
 # Usage:
 #   ./install.sh [--dry-run] [--force-shared]
 #
-# --force-shared  overwrite shared pmxcfs content even if it already exists
-#                 (use after upgrading proxnix to push new shared .nix files)
+# --force-shared  deprecated compatibility flag; node-local config is written
+#                 on every install run
 #
-# Per-node (every cluster node, not replicated):
+# Per-node runtime assets:
 #   /usr/share/lxc/config/nixos.common.conf     — auto-included for ostype=nixos
 #   /usr/share/lxc/config/nixos.userns.conf     — auto-included for unprivileged
 #   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start render hook
@@ -25,14 +25,14 @@
 #   /usr/local/sbin/bootstrap-guest-secrets.sh  — guest age recipient bootstrap
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #
-# Shared (first node only, replicated via pmxcfs to all nodes):
-#   /etc/pve/proxnix/base.nix                   — shared install baseline
-#   /etc/pve/proxnix/common.nix                 — shared proxnix option module
-#   /etc/pve/proxnix/configuration.nix          — shared NixOS entrypoint
-#   /etc/pve/proxnix/site.nix                   — optional site/data-repo override
-#   /etc/pve/proxnix/containers/                — per-container config + pubkeys
-#   /etc/pve/priv/proxnix/shared/               — shared encrypted secrets
-#   /etc/pve/priv/proxnix/containers/           — per-container encrypted secrets
+# Node-local proxnix data:
+#   /var/lib/proxnix/base.nix                   — shared install baseline
+#   /var/lib/proxnix/common.nix                 — shared proxnix option module
+#   /var/lib/proxnix/configuration.nix          — shared NixOS entrypoint
+#   /var/lib/proxnix/site.nix                   — optional site/data-repo override
+#   /var/lib/proxnix/containers/                — per-container config + pubkeys
+#   /var/lib/proxnix/private/shared/            — shared encrypted secrets
+#   /var/lib/proxnix/private/containers/        — per-container encrypted secrets
 #
 set -euo pipefail
 
@@ -41,8 +41,8 @@ LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
 SYSTEMD_UNIT_DIR="/etc/systemd/system"
-NIXLXC_DIR="/etc/pve/proxnix"
-NIXLXC_PRIV_DIR="/etc/pve/priv/proxnix"
+NIXLXC_DIR="/var/lib/proxnix"
+NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
 
 DRY_RUN=0
 FORCE_SHARED=0
@@ -70,10 +70,6 @@ do_install() {
     fi
     mkdir -p "$(dirname "$dest")"
     cp "$src" "$dest"
-    if [[ "$dest" == /etc/pve/* ]]; then
-        log "$dest (mode managed by pmxcfs path policy)"
-        return
-    fi
     chmod "$mode" "$dest"
     log "$dest"
 }
@@ -92,12 +88,19 @@ do_systemd_timer() {
 }
 
 do_mkdir() {
-    local dir="$1"
+    local dir="$1" mode="${2:-}"
     if [[ $DRY_RUN -eq 1 ]]; then
-        log "[dry-run] mkdir -p $dir"
+        if [[ -n "$mode" ]]; then
+            log "[dry-run] mkdir -p $dir && chmod $mode $dir"
+        else
+            log "[dry-run] mkdir -p $dir"
+        fi
         return
     fi
     mkdir -p "$dir"
+    if [[ -n "$mode" ]]; then
+        chmod "$mode" "$dir"
+    fi
     log "$dir"
 }
 
@@ -130,8 +133,8 @@ do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-mount" \
 
 # ── Local runtime helper ──────────────────────────────────────────────────────
 # Must exist on every node because the hooks run locally during container
-# startup. Keep them out of pmxcfs so we never depend on executable metadata in
-# /etc/pve.
+# startup. Keep them outside the mutable node-local data tree so executable
+# metadata is managed like normal local files.
 
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
@@ -156,28 +159,24 @@ do_install "$SCRIPT_DIR/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lx
 action "GC timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-gc"
 
-# ── Shared proxnix files → /etc/pve/{proxnix,priv/proxnix}/ ──────────────────
-# Written on the first node only. pmxcfs replicates these directories to every
-# other cluster node automatically, so subsequent installs skip this section.
-# Keep only shared data here, not runnable scripts. In practice this repo owns
-# the install/bootstrap layer; a separate site/data repo can manage site.nix,
-# containers/, and the encrypted secrets trees. Place encrypted secrets under
-# /etc/pve/priv so pmxcfs keeps them root-only.
+# ── Node-local proxnix data → /var/lib/proxnix/ ──────────────────────────────
+# Keep only data here, not runnable scripts. This repo owns the install layer;
+# a separate site/data repo can manage site.nix, containers/, and the
+# encrypted secrets trees. Users are responsible for syncing those files across
+# nodes if they want shared behavior.
 
-if [[ -d "$NIXLXC_DIR" && $FORCE_SHARED -eq 0 ]]; then
-    action "Shared files → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/ (skipped — already exists, replicated via pmxcfs)"
-    echo "  (run with --force-shared to overwrite)"
-else
-    action "Shared files → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/  (first node)"
-    do_mkdir "$NIXLXC_DIR"
-    do_mkdir "$NIXLXC_PRIV_DIR"
-    do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
-    do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
-    do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
-    do_mkdir "$NIXLXC_DIR/containers"
-    do_mkdir "$NIXLXC_PRIV_DIR/shared"
-    do_mkdir "$NIXLXC_PRIV_DIR/containers"
+action "Node-local proxnix data → $NIXLXC_DIR/ + $NIXLXC_PRIV_DIR/"
+if [[ $FORCE_SHARED -eq 1 ]]; then
+    echo "  note: --force-shared is deprecated in node-local mode and is ignored"
 fi
+do_mkdir "$NIXLXC_DIR" "0755"
+do_mkdir "$NIXLXC_PRIV_DIR" "0700"
+do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
+do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
+do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
+do_mkdir "$NIXLXC_DIR/containers" "0755"
+do_mkdir "$NIXLXC_PRIV_DIR/shared" "0700"
+do_mkdir "$NIXLXC_PRIV_DIR/containers" "0700"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 

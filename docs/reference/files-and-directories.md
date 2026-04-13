@@ -6,7 +6,7 @@ This page maps every important proxnix path by role.
 
 | File | Purpose |
 |------|---------|
-| `install.sh` | Installs local hooks, helpers, and shared cluster files |
+| `install.sh` | Installs local hooks, helpers, and node-local proxnix files |
 | `uninstall.sh` | Removes the local installation from a node |
 | `bootstrap.sh` | Compatibility wrapper for `bootstrap-guest-secrets.sh` |
 | `bootstrap-guest-secrets.sh` | Legacy host-side helper for older/manual containers |
@@ -24,10 +24,10 @@ This page maps every important proxnix path by role.
 | `containers/` | Workload templates and examples |
 | `docs/` | Human-facing documentation site |
 
-## Shared cluster paths (replicated via pmxcfs)
+## Node-local host paths
 
 ```
-/etc/pve/proxnix/
+/var/lib/proxnix/
 ├── base.nix                           shared NixOS baseline
 ├── common.nix                         shared operator module
 ├── configuration.nix                  NixOS entrypoint
@@ -42,7 +42,7 @@ This page maps every important proxnix path by role.
         ├── dropins/                   extra Nix, services, scripts, Quadlets
         └── quadlets/                  main Podman workload tree
 
-/etc/pve/priv/proxnix/
+/var/lib/proxnix/private/
 ├── shared_age_identity.txt            shared SSH private key used as an age identity
 ├── shared/
 │   └── secrets.sops.yaml             shared encrypted secrets
@@ -52,7 +52,7 @@ This page maps every important proxnix path by role.
         └── secrets.sops.yaml         per-container encrypted secrets
 ```
 
-## Per-node paths (not replicated)
+## Per-node runtime paths
 
 ```
 /usr/share/lxc/config/

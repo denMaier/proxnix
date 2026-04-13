@@ -7,9 +7,9 @@ Use Quadlets for container-first applications.
 For VMID 100, create a simple nginx container:
 
 ```bash
-mkdir -p /etc/pve/proxnix/containers/100/quadlets
+mkdir -p /var/lib/proxnix/containers/100/quadlets
 
-cat > /etc/pve/proxnix/containers/100/quadlets/nginx.container << 'EOF'
+cat > /var/lib/proxnix/containers/100/quadlets/nginx.container << 'EOF'
 [Container]
 Image=docker.io/library/nginx:latest
 PublishPort=8080:80
@@ -29,7 +29,7 @@ pct restart 100
 For a container VMID, place workload files under:
 
 ```text
-/etc/pve/proxnix/containers/<vmid>/quadlets/
+/var/lib/proxnix/containers/<vmid>/quadlets/
 ```
 
 Supported unit types include:

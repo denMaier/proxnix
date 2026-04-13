@@ -14,10 +14,10 @@ Do **not** put container definitions in `user.yaml`.
 
 For a target container VMID, host-side files usually live at:
 
-- `/etc/pve/proxnix/containers/<vmid>/quadlets/` for the main Quadlet workload tree
-- `/etc/pve/proxnix/containers/<vmid>/dropins/` for optional NixOS integration (`*.nix`), attached units, or small supporting scripts
-- optional `/etc/pve/proxnix/containers/<vmid>/proxmox.yaml`
-- optional `/etc/pve/proxnix/containers/<vmid>/user.yaml` only for native services, not containers
+- `/var/lib/proxnix/containers/<vmid>/quadlets/` for the main Quadlet workload tree
+- `/var/lib/proxnix/containers/<vmid>/dropins/` for optional NixOS integration (`*.nix`), attached units, or small supporting scripts
+- optional `/var/lib/proxnix/containers/<vmid>/proxmox.yaml`
+- optional `/var/lib/proxnix/containers/<vmid>/user.yaml` only for native services, not containers
 
 Inside this repo, app templates should usually live under:
 

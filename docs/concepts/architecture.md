@@ -81,7 +81,7 @@ Important stage subtrees:
 | `keys/` | Shared SSH-backed age identity (if configured) |
 | `meta/` | Config hash, VMID, bootstrap marker |
 
-The pre-start hook copies the shared Nix files, runs `yaml-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
+The pre-start hook copies the node-local managed Nix files, runs `yaml-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
 
 ### 3. Mount hook syncs the stage into the guest rootfs
 
