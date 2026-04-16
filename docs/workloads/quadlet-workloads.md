@@ -2,6 +2,10 @@
 
 Use Quadlets for container-first applications.
 
+For new proxnix configs, prefer declaring Quadlets from `dropins/*.nix` via a
+Nix Quadlet module. Raw files under `quadlets/` remain fully supported and are
+the direct escape hatch when you want exact hand-written Quadlet text.
+
 ## Quick example
 
 For VMID 100, create a simple nginx container:
@@ -41,7 +45,11 @@ Supported unit types include:
 - `*.image`
 - `*.build`
 
-`quadlets/` is the preferred location for container workloads. You can also place the same unit types in `dropins/` when they are just a small supplement to an otherwise native-service container.
+`quadlets/` remains the raw-file path for container workloads. For new Nix-first
+configs, prefer `dropins/*.nix` plus a Quadlet Nix module, and use `quadlets/`
+when you want raw files or mirrored assets beside them. You can also place the
+same unit types in `dropins/` when they are just a small supplement to an
+otherwise native-service container.
 
 ## How proxnix maps them into the guest
 
@@ -50,12 +58,12 @@ The mount hook mirrors the workload in two ways:
 | Source | Guest destination | Purpose |
 |--------|------------------|---------|
 | Top-level Quadlet unit files | `/etc/containers/systemd/` | Systemd generator input — these become actual services |
-| Full `quadlets/` tree | `/etc/proxnix/quadlets/` | App config and version tracking with `jj` |
+| Full `quadlets/` tree | `/etc/proxnix/quadlets/` | App config mirror |
 
 That split is important:
 
 - `/etc/containers/systemd/` is the actual systemd generator input
-- `/etc/proxnix/quadlets/` is the host-managed config mirror, tracked inside the guest with `jj`
+- `/etc/proxnix/quadlets/` is the host-managed config mirror
 
 ## Proxmox requirement: `nesting=1`
 
@@ -124,4 +132,6 @@ That means you manage the secret once on the host, then consume it from Quadlets
 
 ## When Quadlets are absent
 
-If no top-level Quadlet unit files are staged, the pre-start hook generates a small Nix drop-in that disables Podman for that guest. This keeps service-only containers lighter.
+Podman is off by default in proxnix. Raw top-level Quadlet unit files cause the
+pre-start hook to generate a small Nix drop-in that enables Podman for that
+guest. Nix-authored Quadlet modules can also enable Podman directly.

@@ -62,10 +62,10 @@ mkdir -p ~/src/proxnix-site/containers/$VMID/quadlets
 
 | File | Purpose | When to use |
 |------|---------|-------------|
-| `dropins/*.nix` | Native NixOS service definitions and extra config modules | When running services like Jellyfin, Immich, or any other host-managed Nix config |
+| `dropins/*.nix` | Native NixOS service definitions, extra config modules, and the default place for Nix-authored Quadlets | When running services like Jellyfin, Immich, or any other host-managed Nix config |
 | `dropins/*.service` | Attached systemd units | When you need custom services |
 | `dropins/*.sh`, `*.py` | Scripts installed to `/usr/local/bin/` | For helper scripts |
-| `quadlets/` | Podman Quadlet workload files | For container-first applications |
+| `quadlets/` | Raw Podman Quadlet workload files | For direct Quadlet authoring or compatibility with existing raw Quadlet trees |
 
 Example setup for a container with native services:
 
@@ -97,7 +97,7 @@ pct start 100
 At this point proxnix has already:
 
 1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/`
-2. Run the **mount hook** — copied that rendered config into the guest's `/etc/nixos/`
+2. Run the **mount hook** — bind-mounted `configuration.nix` and `managed/` into the guest's `/etc/nixos/`
 3. Installed the `proxnix-apply-config` service inside the guest
 4. Generated the `proxnix-bootstrap.sh` script in `/root/` as a fallback recovery helper
 

@@ -77,8 +77,6 @@ Use this pattern:
 3. Mount it into the container read-only.
 4. Keep writable app state under `/var/lib/<app>/...` inside the guest.
 
-Track guest-side drift with `jj -R /etc/proxnix/quadlets status` when needed.
-
 Then in a Quadlet:
 
 ```ini
@@ -103,7 +101,7 @@ Do not hardcode secrets into Nix or checked-in YAML.
 
 ## Networking and runtime assumptions
 
-Base proxnix enables Podman by default.
+Base proxnix keeps Podman off by default unless the managed guest config enables it.
 If the workload uses Podman, the Proxmox CT should have `features: nesting=1`.
 The common pattern is:
 
@@ -120,7 +118,7 @@ When asked to generate a new container deployment, produce:
 - `containers/<app>/README.md`
 - `containers/<app>/quadlets/*.container`
 - any needed `*.network`, `*.volume`, `*.pod`, `*.image`, or `*.build`
-- optional `containers/<app>/dropins/*.nix` if the workload needs extra NixOS integration
+- optional or preferred `containers/<app>/dropins/*.nix` for extra NixOS integration or Nix-authored Quadlets
 - config files or helper scripts beside the Quadlets when they should be mirrored into `/etc/proxnix/quadlets/`
 - a short secrets section listing the exact secret names to create
 
@@ -129,13 +127,13 @@ When asked to generate a new container deployment, produce:
 - Do not invent extra proxnix plumbing unless explicitly asked
 - Do not assume files outside `quadlets/` are mirrored into the guest unless a drop-in type explicitly supports it
 - Do not inline secrets into repo files
-- Do not disable Podman unless the user explicitly wants a native-only container
+- Do not force Podman on when the workload is native-only and does not need it
 
 ## Minimal checklist
 
 Before finishing a container app config, verify:
 
-- the main workload is expressed as raw Quadlet files in `quadlets/`
+- the main workload is expressed either as Nix-authored Quadlets in `dropins/*.nix` or as raw Quadlet files in `quadlets/`
 - any extra NixOS integration lives in `dropins/*.nix`
 - secrets are named and documented
 - ports, pods, networks, and volumes are explicit

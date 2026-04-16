@@ -357,11 +357,6 @@ check_container() {
   if [[ "$mode" == "quadlet-dropins" ]]; then
     check_guest_quadlet_dropins "$vmid" "$dropin_dir"
     check_guest_quadlet_dropins "$vmid" "$quadlet_dir"
-    if guest_test "$vmid" -d /etc/proxnix/quadlets/.jj >/dev/null 2>&1; then
-      ok "guest Quadlet source is jj-tracked: /etc/proxnix/quadlets"
-    else
-      warn "guest Quadlet source is not jj-tracked yet: /etc/proxnix/quadlets"
-    fi
   fi
 }
 

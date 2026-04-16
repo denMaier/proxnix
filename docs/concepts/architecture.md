@@ -31,8 +31,9 @@ That gives proxnix these properties:
                          ▼
   ┌─────────────────────────────────────────────┐
   │  2. mount hook (host, writes to guest rootfs)│
-  │     Bind mounted config → /etc/nixos/         │
-  │     Bind mounted secrets → /etc/proxnix/secrets/ │
+  │     Bind mounted /etc/nixos/configuration.nix │
+  │     Bind mounted /etc/nixos/managed/          │
+  │     Bind mounted secrets under /etc/proxnix/  │
   │     Bind mounted Quadlets → /etc/containers/systemd/ │
   │     Install proxnix-apply-config service      │
   │     Reconcile Podman secrets.json             │
@@ -74,7 +75,7 @@ Important stage subtrees:
 | `rendered/configuration.nix` | NixOS entrypoint |
 | `rendered/managed/{base,common,security-policy,proxmox}.nix` | Core managed modules |
 | `rendered/managed/_template/` | Selected shared Nix templates from `containers/_template/` |
-| `rendered/managed/dropins/` | Extra Nix modules from host `dropins/` |
+| `rendered/managed/dropins/` | Extra Nix modules from host `dropins/`, including Nix-authored Quadlet definitions |
 | `runtime/systemd/` | Attached systemd units from host `dropins/*.service` |
 | `runtime/bin/` | Scripts from host `dropins/*.{sh,py}` |
 | `quadlet/` | Quadlet unit files and app config |
@@ -93,7 +94,7 @@ The mount hook is the only proxnix hook that writes into the guest filesystem.
 For host-rendered config trees and secret files, it now prefers read-only bind
 mounts over copying.
 
-It exposes the staged assets in places such as:
+It exposes the staged assets by binding individual files or subtrees into places such as:
 
 | Stage source | Guest destination |
 |-------------|-------------------|
@@ -122,7 +123,7 @@ At boot, the generated runner compares them.
 
 ## Persistent state and experimentation
 
-While `/etc/nixos/managed/` is read-only and overwritten on restart, proxnix **does not touch other parts of the guest rootfs**.
+While `/etc/nixos/configuration.nix` and `/etc/nixos/managed/` are read-only and overwritten on restart, proxnix **does not touch other parts of the guest rootfs**.
 
 - **`/var/lib/`**: Databases and application data stay persistent.
 - **`/etc/nixos/local.nix`**: This is your sandbox. You can add config here and run `nixos-rebuild switch` inside the guest to test it.
@@ -165,9 +166,15 @@ For additive package changes, prefer `proxnix.common.extraPackages` from `site.n
 
 ## Podman enablement rule
 
-proxnix enables Podman by default in the shared base config, but the pre-start hook writes a small Nix drop-in that disables Podman when no top-level Quadlet unit files are staged.
+proxnix keeps Podman off by default in the shared base config.
 
-That keeps service-only containers lighter while still making container workloads easy to add.
+- if raw top-level Quadlet unit files are staged, the pre-start hook writes a
+  small Nix drop-in that enables Podman
+- if a Nix-authored Quadlet module enables Podman itself, that is enough on its
+  own
+
+That keeps service-only containers lighter while letting either raw or
+Nix-managed Quadlet workloads activate Podman explicitly.
 
 ## Attached systemd units and scripts
 

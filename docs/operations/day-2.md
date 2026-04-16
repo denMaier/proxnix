@@ -50,7 +50,6 @@ Inside the guest, useful commands include:
 ```bash
 podman ps -a
 systemctl status podman-<name>.service
-jj -R /etc/proxnix/quadlets status
 ```
 
 ## Experimenting in the guest before committing

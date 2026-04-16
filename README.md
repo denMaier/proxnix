@@ -2,7 +2,7 @@
 
 Host-managed NixOS LXC containers for Proxmox.
 
-proxnix turns Proxmox container metadata, host-side Nix modules, and optional Quadlet files into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
+proxnix turns Proxmox container metadata, host-side Nix modules, and optional raw Quadlet files into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
 
 This repository is the install/bootstrap layer. It owns the shared hooks,
 helpers, and baseline Nix modules. Site-specific data is meant to live in a
@@ -13,7 +13,7 @@ on each Proxmox node as a relay cache.
 
 - Proxmox-first networking and SSH key management
 - Host-rendered NixOS config for each container
-- Native NixOS services or Podman Quadlet workloads
+- Native NixOS services, Nix-authored Quadlet workloads, or raw Quadlet files
 - SOPS + age secrets that work for both native services and containers
 - Shared admin user with password-hash-from-secret support
 - Small operational helpers for health checks, publishing, and secrets

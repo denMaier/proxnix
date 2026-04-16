@@ -34,6 +34,9 @@ Typical uses:
 
 `dropins/` is the primary host-side extension point for per-container Nix configuration.
 
+This is also the default place for Nix-authored Quadlet workloads when you use
+a Nix module layer such as `quadlet-nix`.
+
 Supported file types:
 
 | Extension | What happens |
@@ -83,14 +86,15 @@ still allowing each template to carry helper files beside it.
 
 ### `quadlets/`
 
-Use `quadlets/` for the main Podman workload tree.
+Use `quadlets/` for raw host-managed Quadlet files and nearby assets.
 
 proxnix copies:
 
 - top-level Quadlet unit files into `/etc/containers/systemd/`
 - the whole tree into `/etc/proxnix/quadlets/` for app config and nearby assets
 
-This is the preferred location for container-first workloads. Keep writable state out of this tree; put runtime data under `/var/lib/<app>/...` instead.
+This remains supported as the low-level compatibility path. Keep writable state
+out of this tree; put runtime data under `/var/lib/<app>/...` instead.
 
 ### `dropins/` vs `quadlets/` — when to use which
 
@@ -98,11 +102,13 @@ Both can hold Quadlet unit files, but they serve different roles:
 
 | | `dropins/` | `quadlets/` |
 |-|-----------|-------------|
-| **Primary use** | Nix modules, attached systemd units, scripts, and occasional supporting Quadlet units | Main Podman workload tree |
+| **Primary use** | Nix modules, attached systemd units, scripts, and default Nix-authored Quadlet definitions | Raw Quadlet files and nearby mirrored assets |
 | **Mirroring** | Quadlet unit files are copied into `/etc/containers/systemd/`; non-unit files stay in the managed drop-ins tree | Full tree mirrored to `/etc/proxnix/quadlets/`, with top-level unit files also copied into `/etc/containers/systemd/` |
-| **Best for** | A small supporting container alongside native services | A workload that is primarily container-based |
+| **Best for** | Native services, Nix-managed Quadlets, and supporting extras | Existing raw Quadlet trees, direct Quadlet authoring, and escape-hatch cases |
 
-**Rule of thumb:** If the app is container-first, use `quadlets/`. Use `dropins/` for Nix integration and small supporting extras.
+**Rule of thumb:** Prefer `dropins/*.nix` for new Nix-managed workloads,
+including Nix-authored Quadlets. Use `quadlets/` when you want to keep raw
+Quadlet files or mirrored non-Nix app assets beside them.
 
 ## Generated files
 
@@ -131,6 +137,10 @@ layer (`base.nix`, `common.nix`) and optional `site.nix`.
 
 - the application is container-first
 - a clean native NixOS module does not exist or is not what you want
+
+For new proxnix configs, prefer expressing those Quadlets in `dropins/*.nix`
+through a dedicated Nix Quadlet module. Keep raw files in `quadlets/` when you
+want exact hand-written Quadlet text or a minimal migration path.
 
 ### Use `/etc/nixos/local.nix` when
 

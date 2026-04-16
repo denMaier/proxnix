@@ -201,10 +201,3 @@ nixos-rebuild switch
 nixos-rebuild list-generations
 nix-collect-garbage -d
 ```
-
-### Quadlet config tracking
-
-```bash
-jj -R /etc/proxnix/quadlets status
-jj -R /etc/proxnix/quadlets diff
-```

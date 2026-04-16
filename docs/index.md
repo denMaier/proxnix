@@ -2,7 +2,7 @@
 
 proxnix manages NixOS LXC containers from the Proxmox host.
 
-Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, copies it into the mounted root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
+Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, bind-mounts the managed pieces into the mounted root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
 
 ## Who this is for
 
@@ -118,6 +118,7 @@ Use Quadlets when the workload is container-first.
 
 Typical inputs:
 
+- `dropins/*.nix` for Nix-authored Quadlet definitions
 - `quadlets/*.container`, `*.pod`, `*.network`, `*.volume`
 - optional host-side config files stored beside them
 - secrets surfaced through the proxnix Podman shell driver

@@ -184,14 +184,14 @@ if find "$QUADLET_DIR" -maxdepth 1 -type f \
     has_quadlet_units=1
 fi
 
-if [[ $has_quadlet_units -eq 0 ]]; then
-    cat > "${MANAGED_DROPIN_DIR}/proxnix-disable-podman.nix" <<'EOF'
+if [[ $has_quadlet_units -eq 1 ]]; then
+    cat > "${MANAGED_DROPIN_DIR}/proxnix-enable-podman.nix" <<'EOF'
 { lib, ... }: {
-  virtualisation.podman.enable = lib.mkOverride 90 false;
-  virtualisation.podman.dockerCompat = lib.mkOverride 90 false;
+  virtualisation.podman.enable = lib.mkOverride 90 true;
+  virtualisation.podman.dockerCompat = lib.mkOverride 90 true;
 }
 EOF
-else
+
     if [[ -f "$PVE_CONF" ]]; then
         FEATURES_LINE="$(sed -n 's/^features: //p' "$PVE_CONF" | head -n1)"
         if [[ ! "${FEATURES_LINE}" =~ (^|,)nesting=1($|,) ]]; then

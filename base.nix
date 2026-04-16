@@ -1,7 +1,6 @@
 { config, lib, pkgs, ... }:
 
 let
-  jjPackage = if pkgs ? jujutsu then pkgs.jujutsu else pkgs.jj;
   proxnixHelp = pkgs.writeShellScriptBin "proxnix-help" ''
     set -u
 
@@ -50,7 +49,7 @@ let
     printf '  podman logs     -f NAME\n'
     printf '  podman auto-update --dry-run\n'
     printf '  systemctl       status podman-NAME.service\n'
-    printf '  jj              -R /etc/proxnix/quadlets status\n\n'
+    printf '\n'
 
     printf 'Secrets\n'
     printf '  proxnix-secrets ls\n'
@@ -149,13 +148,11 @@ in {
   };
 
   # sops decrypts the staged YAML secret stores. age still provides the
-  # per-container identity used by SOPS. jj tracks guest-local Quadlet config
-  # under /etc/proxnix/quadlets.
+  # per-container identity used by SOPS.
   environment.systemPackages = [
     pkgs.age
     pkgs.sops
     pkgs.python3Minimal
-    jjPackage
     proxnixHelp
   ];
 
@@ -164,7 +161,9 @@ in {
   };
 
   # Ensure secret directories exist and normalize permissions for the
-  # host-staged SSH-backed age identities.
+  # host-staged SSH-backed age identities. The identity files themselves are
+  # already staged on the host with root-only ownership and mode before they
+  # are bind-mounted read-only into the guest.
   # /etc/proxnix/secrets/identity     — private key staged by the Proxmox host
   # /etc/proxnix/secrets/shared_identity — optional shared private key
   # /etc/proxnix/secrets/ — staged SOPS YAML stores
@@ -172,21 +171,6 @@ in {
   system.activationScripts.age-setup = ''
     mkdir -p /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
     chmod 700 /etc/proxnix/secrets /etc/secrets /etc/secrets/.ids
-    if [ -f /etc/proxnix/secrets/identity ]; then
-      chmod 600 /etc/proxnix/secrets/identity
-    fi
-    if [ -f /etc/proxnix/secrets/shared_identity ]; then
-      chmod 600 /etc/proxnix/secrets/shared_identity
-    fi
-  '';
-
-  system.activationScripts.proxnix-quadlet-jj = ''
-    mkdir -p /etc/proxnix/quadlets
-    if [ ! -d /etc/proxnix/quadlets/.jj ]; then
-      ${jjPackage}/bin/jj git init --colocate /etc/proxnix/quadlets >/dev/null 2>&1 \
-        || ${jjPackage}/bin/jj init --git /etc/proxnix/quadlets >/dev/null 2>&1 \
-        || true
-    fi
   '';
 
   # Wire the proxnix helper as the system-wide Podman secret backend.
@@ -207,10 +191,12 @@ in {
     '';
   };
 
-  # Podman with Docker-compat socket and container DNS.
+  # Podman stays off unless the guest config explicitly enables it. Raw staged
+  # Quadlets flip it on via a generated drop-in, and Nix-authored Quadlets can
+  # enable it through their module layer.
   virtualisation.podman = {
-    enable = lib.mkDefault true;
-    dockerCompat = lib.mkDefault true;
+    enable = lib.mkDefault false;
+    dockerCompat = lib.mkDefault false;
     defaultNetwork.settings.dns_enabled = true;
   };
 
@@ -308,7 +294,7 @@ in {
 
     Workloads
       /etc/containers/systemd    Quadlet units
-      /etc/proxnix/quadlets      jj-tracked app config
+      /etc/proxnix/quadlets      app config
 
     Secrets
       proxnix-secrets ls
