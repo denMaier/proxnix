@@ -1,0 +1,7 @@
+[Unit]
+Description=USB DAS target
+Requires=usb-das-discover.service usb-das-discover.path
+After=usb-das-discover.service
+
+[Install]
+WantedBy=multi-user.target

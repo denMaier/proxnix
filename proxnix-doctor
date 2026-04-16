@@ -102,40 +102,6 @@ conf_value() {
   "$SED_BIN" -n "s/^${key}: //p" "$conf" | "$HEAD_BIN" -n1
 }
 
-user_yaml_mode() {
-  local user_yaml="$1"
-  if [[ ! -f "$user_yaml" ]]; then
-    printf 'none'
-    return
-  fi
-  local runtime
-  runtime="$("$SED_BIN" -n 's/^[[:space:]]*runtime:[[:space:]]*//p' "$user_yaml" | "$HEAD_BIN" -n1 | "$TR_BIN" -d '"' | "$TR_BIN" -d "'")"
-
-  if "$GREP_BIN" -Eq '^[[:space:]]*containers:[[:space:]]*$' "$user_yaml"; then
-    printf 'legacy-container'
-    return
-  fi
-
-  case "$runtime" in
-    native)
-      printf 'native'
-      ;;
-    quadlet|oci)
-      printf 'legacy-container'
-      ;;
-    "")
-      if "$GREP_BIN" -Eq '^[[:space:]]*services:[[:space:]]*$' "$user_yaml"; then
-        printf 'native'
-      else
-        printf 'empty'
-      fi
-      ;;
-    *)
-      printf 'unknown'
-      ;;
-  esac
-}
-
 has_quadlet_dropins() {
   local dropin_dir="$1"
   [[ -d "$dropin_dir" ]] || return 1
@@ -168,30 +134,23 @@ check_guest_quadlet_dropins() {
   [[ $found -eq 1 ]] || info "no Quadlet drop-ins detected"
 }
 
-check_for_legacy_container_yaml() {
-  local user_yaml="$1"
-  local mode
-  mode="$(user_yaml_mode "$user_yaml")"
-  case "$mode" in
-    legacy-container)
-      fail "legacy container definitions found in ${user_yaml}; move them to dropins/*.container files"
-      ;;
-    unknown)
-      fail "unrecognized ${user_yaml}; user.yaml now only supports native services"
-      ;;
-  esac
+has_nix_dropins() {
+  local dropin_dir="$1"
+  [[ -d "$dropin_dir" ]] || return 1
+
+  "$FIND_BIN" "$dropin_dir" -maxdepth 1 \
+    \( -type f -name '*.nix' -o -type d \) \
+    | "$GREP_BIN" -q .
 }
 
 workload_mode() {
-  local user_yaml="$1" dropin_dir="$2"
-  local yaml_mode
-  yaml_mode="$(user_yaml_mode "$user_yaml")"
+  local dropin_dir="$1" quadlet_dir="$2"
   if has_quadlet_dropins "$dropin_dir"; then
     printf 'quadlet-dropins'
-  elif [[ "$yaml_mode" == "native" ]]; then
-    printf 'native'
-  elif [[ "$yaml_mode" == "empty" ]]; then
-    printf 'empty'
+  elif has_quadlet_dropins "$quadlet_dir"; then
+    printf 'quadlet-dropins'
+  elif has_nix_dropins "$dropin_dir"; then
+    printf 'nix-dropins'
   else
     printf 'baseline'
   fi
@@ -207,12 +166,13 @@ check_host_files() {
       "$LXC_CONFIG_DIR/nixos.userns.conf" \
       "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
       "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
-      "$PROXNIX_LIB_DIR/yaml-to-nix.py" \
+      "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" \
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
+      "$NIXLXC_DIR/security-policy.nix" \
     "$NIXLXC_DIR/configuration.nix" \
     "$NIXLXC_PRIV_DIR" \
     "$PROXNIX_HOST_STATE_DIR" \
@@ -238,8 +198,9 @@ check_container() {
   local cdir="${NIXLXC_DIR}/containers/${vmid}"
   local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
   local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
-  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.json"
+  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.yaml"
   local user_yaml="${cdir}/user.yaml"
+  local proxmox_yaml="${cdir}/proxmox.yaml"
   local dropin_dir="${cdir}/dropins"
   local quadlet_dir="${cdir}/quadlets"
   local mode state ostype features ssh_keys
@@ -260,11 +221,13 @@ check_container() {
   fi
 
   features="$(conf_value "$conf" features)"
-  check_for_legacy_container_yaml "$user_yaml"
-  mode="$(workload_mode "$user_yaml" "$dropin_dir")"
-  if [[ "$mode" != "quadlet-dropins" ]] && has_quadlet_dropins "$quadlet_dir"; then
-    mode="quadlet-dropins"
+  if [[ -f "$user_yaml" ]]; then
+    fail "legacy YAML config present: ${user_yaml}; move native config into dropins/*.nix"
   fi
+  if [[ -f "$proxmox_yaml" ]]; then
+    fail "legacy YAML config present: ${proxmox_yaml}; move overrides into dropins/*.nix or the Proxmox CT config"
+  fi
+  mode="$(workload_mode "$dropin_dir" "$quadlet_dir")"
   if [[ "$mode" == "quadlet-dropins" && ! "$features" =~ (^|,)nesting=1($|,) ]]; then
     warn "features: nesting=1 is not enabled; recommended for Quadlet container workloads"
   elif [[ "$mode" == "quadlet-dropins" ]]; then
@@ -277,13 +240,13 @@ check_container() {
   if [[ -n "$ssh_keys" ]]; then
     ok "ssh-public-keys set in PVE config"
   else
-    warn "no ssh-public-keys in PVE config; add keys there or in ${cdir}/proxmox.yaml"
+    warn "no ssh-public-keys in PVE config; add keys there or in a Nix drop-in"
   fi
 
   if [[ -d "$cdir" ]]; then
     ok "container config dir present: $cdir"
   else
-    info "no ${cdir}; proxnix will still seed baseline config, but there is no per-container YAML"
+    info "no ${cdir}; proxnix will still seed baseline config, but there is no per-container override tree"
   fi
 
   if [[ -d "$priv_cdir" ]]; then
@@ -294,8 +257,7 @@ check_container() {
 
   case "$mode" in
     quadlet-dropins) info "workload mode: quadlet drop-ins" ;;
-    native) info "workload mode: native services" ;;
-    empty) info "workload mode: empty user.yaml" ;;
+    nix-dropins) info "workload mode: nix drop-ins" ;;
     *) info "workload mode: baseline only" ;;
   esac
 
@@ -320,8 +282,8 @@ check_container() {
     /etc/nixos/configuration.nix \
     /etc/nixos/managed/base.nix \
     /etc/nixos/managed/common.nix \
+    /etc/nixos/managed/security-policy.nix \
     /etc/nixos/managed/proxmox.nix \
-    /etc/nixos/managed/user.nix \
     /etc/proxnix/vmid \
     /etc/proxnix/current-config-hash \
     /usr/local/bin/proxnix-secrets
@@ -362,16 +324,16 @@ check_container() {
     warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"
   fi
 
-  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.json" ]]; then
-    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.sops.json"
+  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
+    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.sops.yaml"
   fi
 
   if [[ -f "${shared_store}" && ! -f "${shared_identity}" ]]; then
     fail "shared secret store exists but host-relay-encrypted shared identity is missing: ${shared_identity}"
   fi
 
-  if [[ -f "${priv_cdir}/age_identity.sops.json" ]]; then
-    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.sops.json"
+  if [[ -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
+    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.sops.yaml"
     if guest_test "$vmid" -f /etc/proxnix/secrets/identity >/dev/null 2>&1; then
       ok "guest container age identity present"
     else

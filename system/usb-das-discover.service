@@ -1,0 +1,29 @@
+[Unit]
+Description=Discover USB-DAS members, mount them, and refresh layered VAULT mount
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+Requires=usb-das-mergerfs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c '
+set -euo pipefail
+shopt -s nullglob
+
+if [ ! -d /dev/disk/usb-das ]; then
+  exit 0
+fi
+
+for link in /dev/disk/usb-das/*; do
+  [ -L "${link}" ] || continue
+  name="${link##*/}"
+
+  /usr/bin/systemctl start "mnt-usb-das@${name}.mount" || true
+  /usr/bin/systemctl start "usb-das-keepalive@${name}.timer" || true
+done
+
+/usr/bin/systemctl start usb-das-mergerfs.service
+'
+
+[Install]
+WantedBy=usb-das.target

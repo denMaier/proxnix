@@ -9,7 +9,7 @@ This page maps every important proxnix path by role.
 | `install.sh` | Installs local hooks, helpers, and node-local proxnix files |
 | `ansible/install.yml` | Idempotent Ansible playbook that mirrors `install.sh` on one or more Proxmox nodes |
 | `uninstall.sh` | Removes the local installation from a node |
-| `yaml-to-nix.py` | Renders managed Nix files from Proxmox and YAML inputs |
+| `pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
 | `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `proxnix-doctor` | Host-side health check tool |
 | `proxnix-secrets` | Workstation-side secret and identity management tool |
@@ -18,7 +18,8 @@ This page maps every important proxnix path by role.
 | `proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `install.sh` |
 | `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
-| `common.nix` | Shared operator baseline module: admin user, SSH, journald, packages |
+| `common.nix` | Shared operator baseline module: proxnix options, admin defaults, secrets helpers |
+| `security-policy.nix` | Shared host-enforced security policy that is not meant to be relaxed from the guest |
 | `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
 | `docs/` | Human-facing documentation site |
 
@@ -30,22 +31,21 @@ These paths are the published host-side state on the Proxmox node. The workstati
 /var/lib/proxnix/
 ├── base.nix                           shared NixOS baseline
 ├── common.nix                         shared operator module
+├── security-policy.nix                host-enforced security policy
 ├── configuration.nix                  NixOS entrypoint
 ├── site.nix                           published site override
 └── containers/
     └── <vmid>/
-        ├── proxmox.yaml               optional extra PVE fields
-        ├── user.yaml                  native service definitions
         ├── dropins/                   extra Nix, services, scripts, Quadlets
         └── quadlets/                  main Podman workload tree
 
 /var/lib/proxnix/private/
-├── shared_age_identity.sops.json      host-relay-encrypted shared guest identity
+├── shared_age_identity.sops.yaml      host-relay-encrypted shared guest identity
 ├── shared/
 │   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
     └── <vmid>/
-        ├── age_identity.sops.json    host-relay-encrypted container guest identity
+        ├── age_identity.sops.yaml    host-relay-encrypted container guest identity
         └── secrets.sops.yaml         per-container encrypted secrets
 
 /etc/proxnix/
@@ -61,10 +61,11 @@ These paths are the published host-side state on the Proxmox node. The workstati
 
 /usr/share/lxc/hooks/
 ├── nixos-proxnix-prestart             pre-start render hook
-└── nixos-proxnix-mount                mount-time sync hook
+├── nixos-proxnix-mount                mount-time sync hook
+└── nixos-proxnix-poststop             post-stop cleanup hook
 
 /usr/local/lib/proxnix/
-├── yaml-to-nix.py                     local runtime helper
+├── pve-conf-to-nix.py                 local runtime helper
 ├── nixos-proxnix-common.sh            shared hook helper
 └── proxnix-secrets-guest              helper injected into guests
 
@@ -84,9 +85,9 @@ Created by the pre-start hook, consumed by the mount hook:
 │   └── managed/
 │       ├── base.nix
 │       ├── common.nix
+│       ├── security-policy.nix
 │       ├── site.nix
 │       ├── proxmox.nix
-│       ├── user.nix
 │       └── dropins/
 ├── runtime/
 │   ├── systemd/                       *.service files
@@ -111,9 +112,9 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── managed/                           host-managed modules (read-only)
 │   ├── base.nix
 │   ├── common.nix
+│   ├── security-policy.nix
 │   ├── site.nix
 │   ├── proxmox.nix
-│   ├── user.nix
 │   └── dropins/
 └── local.nix                          guest-only escape hatch (unmanaged)
 
@@ -123,7 +124,6 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── applied-config-hash
 ├── proxnix-apply-config-runner
 ├── secrets/
-│   ├── ssh-keys.txt                   combined SSH private keys used as age identities
 │   ├── shared.sops.yaml
 │   └── container.sops.yaml
 └── quadlets/                          jj-tracked app config mirror
@@ -159,8 +159,8 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── site.nix
 ├── containers/
 └── private/
-    ├── host_relay_identity.sops.json
-    ├── shared_age_identity.sops.json
+    ├── host_relay_identity.sops.yaml
+    ├── shared_age_identity.sops.yaml
     ├── shared/
     └── containers/
 ```

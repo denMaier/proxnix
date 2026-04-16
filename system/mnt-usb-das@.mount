@@ -1,0 +1,17 @@
+[Unit]
+Description=Mount USB-DAS member %i
+After=systemd-udevd.service
+Requires=systemd-udevd.service
+DefaultDependencies=no
+Conflicts=umount.target
+Before=umount.target
+ConditionPathExists=/dev/disk/usb-das/%i
+
+[Mount]
+What=/dev/disk/usb-das/%i
+Where=/mnt/usb-das/%i
+Type=ext4
+Options=defaults,noatime,lazytime
+
+[Install]
+WantedBy=usb-das.target

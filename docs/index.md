@@ -33,8 +33,8 @@ You will need these tools installed on your **workstation** (the machine you man
 
 There are four main layers:
 
-1. **Proxmox metadata**: hostname, IP, gateway, DNS, SSH keys, CT features, rootfs, and lifecycle
-2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `proxmox.yaml`, `user.yaml`, `dropins/`, and `quadlets/`
+1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
+2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/` and `quadlets/`
 3. **Rendered guest state**: generated Nix files, staged secrets, attached systemd units, helper scripts, and Quadlet files
 4. **Guest activation**: a guarded `nixos-rebuild switch` that runs only when the staged config hash changes
 
@@ -107,8 +107,7 @@ Use native services when the application already has a good NixOS module.
 
 Typical inputs:
 
-- `user.yaml`
-- optional `dropins/*.nix`
+- `dropins/*.nix`
 - optional secrets referenced from `/run/<service>-secrets/...`
 
 See [native services](workloads/native-services.md).

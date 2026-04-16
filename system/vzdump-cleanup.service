@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean up stale vzdump ZFS snapshots before backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cleanup-vzdump-snapshots.sh

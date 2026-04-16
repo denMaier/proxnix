@@ -1,0 +1,1 @@
+SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="ext4", ENV{ID_FS_LABEL}=="Disk*", ENV{ID_FS_UUID}!="", SYMLINK+="disk/usb-das/%E{ID_FS_UUID}"

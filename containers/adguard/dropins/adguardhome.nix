@@ -5,6 +5,7 @@ let
   configFile = "${workDir}/AdGuardHome.yaml";
   seedConfig = ./adguard/AdGuardHome.yaml;
   adminPasswordHashSecret = "common_adguard_admin_password_hash";
+  seedUnit = "proxnix-secret-template-adguardhome";
 in {
   services.adguardhome = {
     enable = true;
@@ -37,8 +38,8 @@ in {
 
   systemd.services.adguardhome = {
     wants = [ "network-online.target" ];
-    requires = [ "proxnix-adguardhome-seed.service" ];
-    after = [ "network-online.target" "proxnix-adguardhome-seed.service" ];
+    requires = [ seedUnit ];
+    after = [ "network-online.target" seedUnit ];
 
     serviceConfig = {
       DynamicUser = lib.mkForce false;
@@ -50,46 +51,24 @@ in {
     };
   };
 
-  systemd.services.proxnix-adguardhome-seed = {
+  proxnix.secrets.templates.adguardhome = {
     description = "Seed mutable AdGuard Home configuration from proxnix secrets";
+    unit = seedUnit;
+    source = seedConfig;
+    destination = configFile;
+    owner = "adguardhome";
+    group = "adguardhome";
+    mode = "0600";
+    createOnly = true;
     before = [ "adguardhome.service" ];
-    after = [ "local-fs.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
+    substitutions = {
+      "__PROXNIX_ADGUARD_ADMIN_PASSWORD_HASH__" = {
+        secret = adminPasswordHashSecret;
+        lookup = "get-shared";
+      };
     };
-    path = [
+    runtimeInputs = [
       pkgs.coreutils
-      pkgs.gnugrep
-      pkgs.gnused
     ];
-    script = ''
-      set -euo pipefail
-
-      if [ -e ${configFile} ] && ! grep -q '__PROXNIX_ADGUARD_ADMIN_PASSWORD_HASH__' ${configFile}; then
-        exit 0
-      fi
-
-      install -d -m 0750 -o adguardhome -g adguardhome ${workDir}
-      if [ ! -x /usr/local/bin/proxnix-secrets ]; then
-        echo "proxnix-adguardhome-seed: /usr/local/bin/proxnix-secrets is missing" >&2
-        exit 1
-      fi
-
-      hash="$(/usr/local/bin/proxnix-secrets get-shared ${lib.escapeShellArg adminPasswordHashSecret} | tr -d '\r\n')"
-      if [ -z "$hash" ]; then
-        echo "proxnix-adguardhome-seed: shared secret ${adminPasswordHashSecret} is empty" >&2
-        exit 1
-      fi
-
-      tmp="$(mktemp ${workDir}/AdGuardHome.yaml.XXXXXX)"
-      trap 'rm -f "$tmp"' EXIT
-
-      sed "s|__PROXNIX_ADGUARD_ADMIN_PASSWORD_HASH__|$hash|g" ${seedConfig} > "$tmp"
-      chown adguardhome:adguardhome "$tmp"
-      chmod 0600 "$tmp"
-      mv "$tmp" ${configFile}
-      trap - EXIT
-    '';
   };
 }

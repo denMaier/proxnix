@@ -23,7 +23,7 @@
 # hash and runs nixos-rebuild switch only when they differ.
 
 set -uo pipefail
-umask 022  # ensure staged files/dirs are world-readable by the mount hook (runs as subuid)
+umask 077  # staging content is private until explicitly chowned to the container's subuid
 
 VMID="${LXC_NAME:-}"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
@@ -45,9 +45,11 @@ fi
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
 
-YAML_TO_NIX="${PROXNIX_LIB_DIR}/yaml-to-nix.py"
+PVE_CONF_TO_NIX="${PROXNIX_LIB_DIR}/pve-conf-to-nix.py"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
+DROPIN_DIR="${CONTAINER_DIR}/dropins"
+QUADLET_SOURCE_DIR="${CONTAINER_DIR}/quadlets"
 STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
@@ -66,8 +68,8 @@ cleanup_stage() {
 
 trap 'status=$?; if [[ $status -ne 0 ]]; then cleanup_stage; fi; exit $status' EXIT
 
-if [[ ! -f "$YAML_TO_NIX" ]]; then
-    log "ERROR: ${YAML_TO_NIX} not found."
+if [[ ! -f "$PVE_CONF_TO_NIX" ]]; then
+    log "ERROR: ${PVE_CONF_TO_NIX} not found."
     log "Run ./install.sh on this Proxmox node to install local runtime files."
     exit 1
 fi
@@ -106,19 +108,20 @@ if [[ -f "${NIXLXC_DIR}/site.nix" ]]; then
     cp "${NIXLXC_DIR}/site.nix"      "${MANAGED_DIR}/site.nix"
 fi
 
-ARGS=("--out-dir" "$MANAGED_DIR")
-[[ -f "$PVE_CONF"                     ]] && ARGS+=("--pve-conf"     "$PVE_CONF")
-[[ -f "${CONTAINER_DIR}/proxmox.yaml" ]] && ARGS+=("--proxmox-yaml" "${CONTAINER_DIR}/proxmox.yaml")
-[[ -f "${CONTAINER_DIR}/user.yaml"    ]] && ARGS+=("--user-yaml"    "${CONTAINER_DIR}/user.yaml")
+for legacy_yaml in "${CONTAINER_DIR}/proxmox.yaml" "${CONTAINER_DIR}/user.yaml"; do
+    if [[ -f "$legacy_yaml" ]]; then
+        log "ERROR: legacy YAML config is no longer supported: ${legacy_yaml}"
+        log "Move container config into ${CONTAINER_DIR}/dropins/*.nix and keep base identity in the Proxmox CT config."
+        exit 1
+    fi
+done
 
 log "Rendering desired state (PVE conf: ${PVE_CONF})..."
-if ! python3 "$YAML_TO_NIX" "${ARGS[@]}"; then
-    log "ERROR: yaml-to-nix.py failed — check PVE conf and ${CONTAINER_DIR}/*.yaml"
+if ! python3 "$PVE_CONF_TO_NIX" --pve-conf "$PVE_CONF" --out-dir "$MANAGED_DIR"; then
+    log "ERROR: pve-conf-to-nix.py failed — check ${PVE_CONF}"
     exit 1
 fi
 
-DROPIN_DIR="${CONTAINER_DIR}/dropins"
-QUADLET_SOURCE_DIR="${CONTAINER_DIR}/quadlets"
 if [[ -d "$QUADLET_SOURCE_DIR" ]]; then
     cp -a "${QUADLET_SOURCE_DIR}/." "$QUADLET_DIR/"
 fi
@@ -176,6 +179,8 @@ else
     fi
 fi
 
+DESIRED_CONFIG_HASH="$(proxnix_hash_tree "$RENDERED_DIR")"
+
 SHARED_SECRETS_FILE="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
 CONTAINER_SECRETS_FILE="${CONTAINER_PRIV_DIR}/secrets.sops.yaml"
 
@@ -187,16 +192,8 @@ if [[ -f "$CONTAINER_SECRETS_FILE" ]]; then
     cp "$CONTAINER_SECRETS_FILE" "${SECRETS_STAGE_DIR}/container.sops.yaml"
 fi
 
-# The mount hook runs as the container's subuid (e.g. host UID 100000), not as
-# root. Make the entire stage dir world-readable so the mount hook can access
-# it. Secrets are age-encrypted, so 0644 is fine.
-chmod -R a+rX "${STAGE_DIR}"
-
-DESIRED_CONFIG_HASH="$(proxnix_hash_tree "$RENDERED_DIR")"
 printf '%s' "$DESIRED_CONFIG_HASH" > "${META_DIR}/current-config-hash"
-chmod 0644 "${META_DIR}/current-config-hash"
 printf '%s' "$VMID" > "${META_DIR}/vmid"
-chmod 0644 "${META_DIR}/vmid"
 
 CONTAINER_IDENTITY_STORE_PATH="$(proxnix_container_age_identity_store_path "$VMID")"
 if [[ -f "$CONTAINER_IDENTITY_STORE_PATH" ]]; then
@@ -204,23 +201,35 @@ if [[ -f "$CONTAINER_IDENTITY_STORE_PATH" ]]; then
         log "ERROR: failed to decrypt host-relay container identity: ${CONTAINER_IDENTITY_STORE_PATH}"
         exit 1
     fi
-    chmod 644 "${KEYS_STAGE_DIR}/identity"
 fi
 
-# Stage the shared SSH-backed age identity if one exists — every container gets
-# it.
-# chmod 644 explicitly: the source is mode 600 and chmod -R a+rX below uses
-# capital X which only sets execute on directories, leaving 600 files unreadable
-# by the mount hook (which runs as the container's subuid, not root).
 SHARED_IDENTITY_STORE_PATH="$(proxnix_shared_age_identity_store_path)"
 if [[ -f "$SHARED_IDENTITY_STORE_PATH" ]]; then
     if ! proxnix_decrypt_host_identity_store_to_file "$SHARED_IDENTITY_STORE_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"; then
         log "ERROR: failed to decrypt host-relay shared identity: ${SHARED_IDENTITY_STORE_PATH}"
         exit 1
     fi
-    chmod 644 "${KEYS_STAGE_DIR}/shared_identity.txt"
+fi
+
+# Restrict staging to the container's subuid — the exact UID that the mount hook
+# runs as. Any other subuid process (e.g. from a different container) cannot
+# read this container's staged keys or config even if a container escape occurs.
+HOST_SUBUID=""
+if [[ -f "$PVE_CONF" ]]; then
+    HOST_SUBUID=$(awk '/^lxc\.idmap: *u 0 / { print $4; exit }' "$PVE_CONF")
+fi
+
+if [[ -n "$HOST_SUBUID" && "$HOST_SUBUID" =~ ^[0-9]+$ ]]; then
+    chown -R "${HOST_SUBUID}" "${STAGE_DIR}"
+    find "${STAGE_DIR}" -type d -exec chmod 700 {} +
+    find "${STAGE_DIR}" -type f -exec chmod 400 {} +
+else
+    log "WARNING: could not determine container subuid from ${PVE_CONF}; staging is world-readable"
+    chmod -R a+rX "${STAGE_DIR}"
+    chmod 644 "${KEYS_STAGE_DIR}/identity" \
+              "${KEYS_STAGE_DIR}/shared_identity.txt" 2>/dev/null || true
 fi
 
 trap - EXIT
-log "Rendered staged state at ${STAGE_DIR}"
+log "Rendered staged state at ${STAGE_DIR} (subuid: ${HOST_SUBUID:-unknown})"
 exit 0

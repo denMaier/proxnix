@@ -15,7 +15,7 @@ This pattern is useful when the application wants to modify its own YAML at runt
 
 **Setup summary:**
 
-1. Copy `containers/adguard/user.yaml` and `containers/adguard/dropins/` into your container directory
+1. Copy `containers/adguard/dropins/` into your container directory
 2. Create the required shared secret: `proxnix-secrets set-shared common_adguard_admin_password_hash`
 3. Restart the container
 
@@ -65,3 +65,33 @@ It includes:
 4. Start the services inside the guest (see Ente README for the correct order)
 
 Use it as a reference when you need a non-trivial Podman stack rather than a single container unit.
+
+## Ente native: NixOS module plus native `versitygw`
+
+`containers/ente-native/` shows the native-service version.
+
+It demonstrates:
+
+- using a `dropins/*.nix` module for a nested NixOS service
+- running Ente through `services.ente.api` and `services.ente.web`
+- running `versitygw` as a native systemd service instead of a container
+- materializing proxnix secrets into `/run/ente-secrets/`
+- bootstrapping the expected S3 buckets before Museum starts
+
+**Setup summary:**
+
+1. Copy `containers/ente-native/dropins/` into your container directory
+2. Edit the placeholder domains in `dropins/ente.nix`
+3. Create the required secrets:
+   ```bash
+   VMID=<vmid>
+   proxnix-secrets set "$VMID" ente-s3-user
+   proxnix-secrets set "$VMID" ente-s3-pass
+   proxnix-secrets set "$VMID" ente-museum-key
+   proxnix-secrets set "$VMID" ente-museum-hash
+   proxnix-secrets set "$VMID" ente-museum-jwt-secret
+   ```
+4. Restart the container
+
+Use it when you want the Ente app itself to stay native to NixOS and only need
+an S3-compatible gateway beside it.

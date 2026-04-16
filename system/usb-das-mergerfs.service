@@ -1,0 +1,51 @@
+[Unit]
+Description=Assemble /mnt/VAULT from mounted USB-DAS members
+After=usb-das-discover.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=USB_DAS_MERGE_MOUNT=/mnt/VAULT
+Environment=USB_DAS_MERGE_OPTIONS=defaults,allow_other,use_ino,category.create=mfs
+ExecStart=/usr/bin/bash -c '
+set -euo pipefail
+shopt -s nullglob
+
+branches=()
+for mnt in /mnt/usb-das/*; do
+  if /usr/bin/mountpoint -q "${mnt}" 2>/dev/null; then
+    branches+=("${mnt}")
+  fi
+done
+
+if [ "${#branches[@]}" -eq 0 ]; then
+  if /usr/bin/mountpoint -q "${USB_DAS_MERGE_MOUNT}" 2>/dev/null; then
+    /usr/bin/umount "${USB_DAS_MERGE_MOUNT}" || true
+  fi
+  exit 0
+fi
+
+branch_list=""
+for path in "${branches[@]}"; do
+  if [ -z "${branch_list}" ]; then
+    branch_list="${path}"
+  else
+    branch_list="${branch_list}:${path}"
+  fi
+done
+
+mkdir -p "${USB_DAS_MERGE_MOUNT}"
+if /usr/bin/mountpoint -q "${USB_DAS_MERGE_MOUNT}" 2>/dev/null; then
+  /usr/bin/umount "${USB_DAS_MERGE_MOUNT}" || true
+fi
+
+/usr/bin/mergerfs -o "${USB_DAS_MERGE_OPTIONS}" "${branch_list}" "${USB_DAS_MERGE_MOUNT}"
+'
+ExecStop=/usr/bin/bash -c '
+if /usr/bin/mountpoint -q "${USB_DAS_MERGE_MOUNT}" 2>/dev/null; then
+  /usr/bin/umount "${USB_DAS_MERGE_MOUNT}" || true
+fi
+'
+
+[Install]
+WantedBy=usb-das.target

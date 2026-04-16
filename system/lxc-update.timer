@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Proxmox LXC Updater weekly
+
+[Timer]
+OnCalendar=Sun 03:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

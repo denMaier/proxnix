@@ -17,7 +17,7 @@
 #   /usr/share/lxc/config/nixos.userns.conf     — auto-included for unprivileged
 #   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start render hook
 #   /usr/share/lxc/hooks/nixos-proxnix-mount    — mount-time sync hook
-#   /usr/local/lib/proxnix/yaml-to-nix.py       — local runtime helper
+#   /usr/local/lib/proxnix/pve-conf-to-nix.py   — local runtime helper
 #   /usr/local/lib/proxnix/nixos-proxnix-common.sh
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
@@ -27,6 +27,7 @@
 # Node-local proxnix data:
 #   /var/lib/proxnix/base.nix                   — shared install baseline
 #   /var/lib/proxnix/common.nix                 — shared proxnix option module
+#   /var/lib/proxnix/security-policy.nix        — shared host-enforced security policy
 #   /var/lib/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /var/lib/proxnix/site.nix                   — optional site/data-repo override
 #   /var/lib/proxnix/containers/                — per-container config relay cache
@@ -123,14 +124,18 @@ do_install "$SCRIPT_DIR/lxc/config/nixos.common.conf"  "$LXC_CONFIG_DIR/nixos.co
 do_install "$SCRIPT_DIR/lxc/config/nixos.userns.conf"  "$LXC_CONFIG_DIR/nixos.userns.conf"
 
 # ── Host lifecycle hooks ──────────────────────────────────────────────────────
-# The pre-start hook renders desired state on the host into /run/proxnix/<vmid>.
-# The mount hook then copies that staged state into the mounted rootfs.
+# pre-start renders desired state on the host into /run/proxnix/<vmid>/, scoped
+# to the container's subuid. The mount hook moves that staged state into the
+# mounted rootfs and removes the staging dir. The post-stop hook removes any
+# staging artefacts left behind if the container failed to start.
 
 action "Lifecycle hooks → $LXC_HOOKS_DIR/"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \
            "$LXC_HOOKS_DIR/nixos-proxnix-prestart" "755"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-mount" \
            "$LXC_HOOKS_DIR/nixos-proxnix-mount" "755"
+do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-poststop" \
+           "$LXC_HOOKS_DIR/nixos-proxnix-poststop" "755"
 
 # ── Local runtime helper ──────────────────────────────────────────────────────
 # Must exist on every node because the hooks run locally during container
@@ -138,7 +143,7 @@ do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-mount" \
 # metadata is managed like normal local files.
 
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
-do_install "$SCRIPT_DIR/yaml-to-nix.py" "$PROXNIX_LIB_DIR/yaml-to-nix.py" "755"
+do_install "$SCRIPT_DIR/pve-conf-to-nix.py" "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" "755"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-common.sh" \
            "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" "644"
 do_install "$SCRIPT_DIR/proxnix-secrets-guest" \
@@ -151,9 +156,9 @@ do_install "$SCRIPT_DIR/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
 do_install "$SCRIPT_DIR/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
-# Cleans up stale /run/proxnix/<vmid>/ dirs every 15 min for stopped/deleted
-# containers.  Stage dirs live on tmpfs and the mount hook can't remove them
-# (runs as subuid, not root).
+# Belt-and-suspenders cleanup for orphaned /run/proxnix/<vmid>/ dirs (e.g. host
+# crash, Proxmox restart). The mount hook and poststop hook handle the normal
+# cases; this catches anything left behind by abnormal termination.
 
 action "GC timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-gc"
@@ -173,6 +178,7 @@ do_mkdir "$NIXLXC_PRIV_DIR" "0700"
 do_mkdir "$PROXNIX_HOST_STATE_DIR" "0700"
 do_install "$SCRIPT_DIR/base.nix"          "$NIXLXC_DIR/base.nix"
 do_install "$SCRIPT_DIR/common.nix"        "$NIXLXC_DIR/common.nix"
+do_install "$SCRIPT_DIR/security-policy.nix" "$NIXLXC_DIR/security-policy.nix"
 do_install "$SCRIPT_DIR/configuration.nix" "$NIXLXC_DIR/configuration.nix"
 do_mkdir "$NIXLXC_DIR/containers" "0755"
 do_mkdir "$NIXLXC_PRIV_DIR/shared" "0700"

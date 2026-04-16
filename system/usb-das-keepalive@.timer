@@ -1,0 +1,12 @@
+[Unit]
+Description=Run disk keepalive every 5 minutes (only if DAS disks are mounted)
+PartOf=usb-das-keepalive.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=usb-das-keepalive@%i.service
+
+[Install]
+WantedBy=usb-das-keepalive.target

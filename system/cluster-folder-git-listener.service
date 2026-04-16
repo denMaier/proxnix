@@ -1,0 +1,16 @@
+[Unit]
+Description=cluster-folder-git event listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CLUSTER_FOLDER_GIT_EVENT_TRANSPORT=none
+Environment=CLUSTER_FOLDER_GIT_EVENT_SUBJECT=cluster-folder-git.repo-updated
+Environment=CLUSTER_FOLDER_GIT_EVENT_NATS_URL=nats://127.0.0.1:4222
+ExecStart=/usr/local/bin/cluster-folder-git event-listen
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

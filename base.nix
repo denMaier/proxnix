@@ -24,7 +24,7 @@ let
 
     printf 'Managed config\n'
     printf '  Files:       /etc/nixos/configuration.nix\n'
-    printf '               /etc/nixos/managed/{base,common,site,proxmox,user}.nix\n'
+    printf '               /etc/nixos/managed/{base,common,security-policy,site,proxmox}.nix\n'
     printf '               /etc/nixos/managed/dropins/*.nix\n'
     printf '               host dropins/*.service -> /etc/systemd/system.attached/\n'
     printf '               host dropins/*.{sh,py} -> /usr/local/bin/\n'
@@ -74,37 +74,29 @@ in {
   ];
 
   # Shared cross-container operator baseline translated from the legacy
-  # Debian/Ansible bootstrap: admin user, SSH hardening, journald caps,
-  # timesync, swappiness, and a few convenience packages.
-  proxnix.common = {
-    enable = true;
-    adminPasswordHashSecretName = "common_admin_password_hash";
-    wheelNeedsPassword = true;
-  };
+  # Debian/Ansible bootstrap: admin user defaults, journald caps, timesync,
+  # swappiness, and a few convenience packages. Forced security posture lives
+  # in security-policy.nix so it stays easy to audit.
+  proxnix.common.enable = lib.mkDefault true;
 
-  # Networking: let Proxmox own it.  manageNetwork=false enables
-  # systemd-networkd, which picks up the IP/gateway/DNS that Proxmox injects
-  # at container start.  IP changes in the Proxmox UI take effect on a plain
-  # container restart — no NixOS rebuild required.
-  proxmoxLXC.manageNetwork = false;
-
-  # Hostname: NixOS owns it (set via proxmox.nix from the PVE conf hostname).
-  # manageHostName=true prevents the proxmox-lxc module from doing
-  # mkForce "" on networking.hostName, which would blank it if Proxmox
-  # doesn't write /etc/hostname for NixOS containers (per the NixOS wiki).
-  proxmoxLXC.manageHostName = true;
+  # Networking: let Proxmox own interface addresses and routes.
+  # manageNetwork=false enables systemd-networkd so the guest can consume the
+  # runtime link config that Proxmox injects at container start.  IP changes
+  # in the Proxmox UI take effect on a plain container restart — no NixOS
+  # rebuild required.
+  proxmoxLXC.manageNetwork = lib.mkDefault false;
 
   # Nix daemon — no sandbox inside LXC (kernel namespacing not available)
-  nix.settings.sandbox = false;
+  nix.settings.sandbox = lib.mkDefault false;
 
   # fstrim is a no-op in LXC and spams the journal
-  services.fstrim.enable = false;
+  services.fstrim.enable = lib.mkDefault false;
 
   # pct enter (lxc-attach) creates an interactive non-login shell, so PAM never
   # runs and /etc/set-environment is never sourced — PATH and NIX_PATH are bare.
   # Sourcing it from /etc/bashrc fixes this for every interactive bash session
   # without affecting normal SSH logins (double-sourcing is harmless).
-  programs.bash.interactiveShellInit = ''
+  programs.bash.interactiveShellInit = lib.mkAfter ''
     [ -f /etc/set-environment ] && . /etc/set-environment
     case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
     case ":$PATH:" in *:/usr/local/sbin:*) ;; *) PATH="$PATH:/usr/local/sbin" ;; esac
@@ -126,12 +118,15 @@ in {
     "sys-fs-fuse-connections.mount"
   ];
 
-  # Local DNS caching via systemd-resolved
+  # Local DNS caching via systemd-resolved.  Clear systemd's built-in public
+  # fallback resolvers so a broken Proxmox DNS handoff fails closed instead of
+  # silently leaking queries to public DNS.
   services.resolved = {
-    enable = true;
-    dnssec = "false";
+    enable = lib.mkDefault true;
+    dnssec = lib.mkDefault "false";
     extraConfig = ''
       Cache=yes
+      FallbackDNS=
     '';
   };
 
@@ -148,9 +143,9 @@ in {
 
   # Weekly Nix store GC: remove generations older than 7 days
   nix.gc = {
-    automatic = true;
-    dates = "weekly";
-    options = "--delete-older-than 7d";
+    automatic = lib.mkDefault true;
+    dates = lib.mkDefault "weekly";
+    options = lib.mkDefault "--delete-older-than 7d";
   };
 
   # sops decrypts the staged YAML secret stores. age still provides the
@@ -165,13 +160,13 @@ in {
   ];
 
   environment.variables = {
-    SOPS_AGE_SSH_PRIVATE_KEY_FILE = "/etc/proxnix/secrets/ssh-keys.txt";
     PROXNIX_GUEST_SECRET_DIR = "/etc/proxnix/secrets";
   };
 
-  # Ensure secret directories exist and combine the host-staged per-container
-  # SSH-backed age identity with the optional shared identity.
+  # Ensure secret directories exist and normalize permissions for the
+  # host-staged SSH-backed age identities.
   # /etc/proxnix/secrets/identity     — private key staged by the Proxmox host
+  # /etc/proxnix/secrets/shared_identity — optional shared private key
   # /etc/proxnix/secrets/ — staged SOPS YAML stores
   # /etc/secrets/.ids/    — UUID→name mappings written by the shell driver
   system.activationScripts.age-setup = ''
@@ -180,18 +175,9 @@ in {
     if [ -f /etc/proxnix/secrets/identity ]; then
       chmod 600 /etc/proxnix/secrets/identity
     fi
-    {
-      if [ -f /etc/proxnix/secrets/identity ]; then
-        cat /etc/proxnix/secrets/identity
-      fi
-      if [ -f /etc/proxnix/secrets/shared_identity ]; then
-        if [ -f /etc/proxnix/secrets/identity ]; then
-          printf '\n'
-        fi
-        cat /etc/proxnix/secrets/shared_identity
-      fi
-    } > /etc/proxnix/secrets/ssh-keys.txt
-    chmod 600 /etc/proxnix/secrets/ssh-keys.txt
+    if [ -f /etc/proxnix/secrets/shared_identity ]; then
+      chmod 600 /etc/proxnix/secrets/shared_identity
+    fi
   '';
 
   system.activationScripts.proxnix-quadlet-jj = ''
@@ -223,8 +209,8 @@ in {
 
   # Podman with Docker-compat socket and container DNS.
   virtualisation.podman = {
-    enable = true;
-    dockerCompat = true;
+    enable = lib.mkDefault true;
+    dockerCompat = lib.mkDefault true;
     defaultNetwork.settings.dns_enabled = true;
   };
 
@@ -313,7 +299,7 @@ in {
 
     Managed config
       /etc/nixos/configuration.nix
-      /etc/nixos/managed/{base,common,site,proxmox,user}.nix
+      /etc/nixos/managed/{base,common,security-policy,site,proxmox}.nix
       /etc/nixos/managed/dropins/*.nix
       host dropins/*.service -> /etc/systemd/system.attached/
       host dropins/*.{sh,py} -> /usr/local/bin/

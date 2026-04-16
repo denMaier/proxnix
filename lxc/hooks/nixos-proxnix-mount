@@ -110,8 +110,7 @@ if [[ $needs_managed_sync -eq 1 ]]; then
     rm -f \
         "${ROOTFS}/etc/nixos/base.nix" \
         "${ROOTFS}/etc/nixos/common.nix" \
-        "${ROOTFS}/etc/nixos/proxmox.nix" \
-        "${ROOTFS}/etc/nixos/user.nix"
+        "${ROOTFS}/etc/nixos/proxmox.nix"
     rm -rf "${ROOTFS}/etc/nixos/dropins"
     proxnix_set_tree_readonly "${ROOTFS}/etc/nixos/managed"
     chmod 0444 "${ROOTFS}/etc/nixos/configuration.nix"
@@ -176,6 +175,7 @@ TOUCH_BIN="${SYSTEM_BIN}/touch"
 TR_BIN="${SYSTEM_BIN}/tr"
 GREP_BIN="${SYSTEM_BIN}/grep"
 INSTALL_BIN="${SYSTEM_BIN}/install"
+SYSTEMCTL_BIN="${SYSTEM_BIN}/systemctl"
 NIX_CHANNEL_BIN="${SYSTEM_BIN}/nix-channel"
 NIXOS_REBUILD_BIN="${SYSTEM_BIN}/nixos-rebuild"
 RM_BIN="${SYSTEM_BIN}/rm"
@@ -190,8 +190,15 @@ export PATH="${SYSTEM_BIN}:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH
 
 "$MKDIR_BIN" -p "$STAMP_DIR"
 
-current="$("$TR_BIN" -d "\r\n" < "$CURRENT_HASH_FILE" 2>/dev/null || true)"
-applied="$("$TR_BIN" -d "\r\n" < "$APPLIED_HASH_FILE" 2>/dev/null || true)"
+current=""
+if [ -r "$CURRENT_HASH_FILE" ]; then
+    current="$("$TR_BIN" -d "\r\n" < "$CURRENT_HASH_FILE")"
+fi
+
+applied=""
+if [ -r "$APPLIED_HASH_FILE" ]; then
+    applied="$("$TR_BIN" -d "\r\n" < "$APPLIED_HASH_FILE")"
+fi
 
 if [ -z "$current" ]; then
     echo "proxnix-apply-config: no current config hash, skipping"
@@ -228,7 +235,7 @@ fi
 
 if [ ! -d "$ROOT_CHANNEL_DIR" ] || [ ! -d /nix/var/nix/profiles/per-user/root/channels/nixpkgs-unstable ]; then
     state_version="$("$GREP_BIN" -oP '"'"'system\.stateVersion\s*=\s*"\K[^"]+'"'"' /etc/nixos/configuration.nix 2>/dev/null || true)"
-    state_version="${state_version:-25.05}"
+    state_version="${state_version:-25.11}"
     echo "proxnix-apply-config: bootstrapping root channels for NixOS ${state_version}"
     "$NIX_CHANNEL_BIN" --add "https://nixos.org/channels/nixos-${state_version}" nixos
     "$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixpkgs-unstable nixpkgs-unstable
@@ -238,6 +245,8 @@ fi
 export NIX_PATH="nixpkgs=${ROOT_CHANNEL_DIR}:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels${NIX_PATH:+:$NIX_PATH}"
 
 echo "proxnix-apply-config: hash changed (${applied:-unset} -> ${current}), rebuilding..."
+"$SYSTEMCTL_BIN" stop nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1 || true
+"$SYSTEMCTL_BIN" reset-failed nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1 || true
 "$NIXOS_REBUILD_BIN" switch
 "$INSTALL_BIN" -m 0644 "$CURRENT_HASH_FILE" "$APPLIED_HASH_FILE"
 trap - EXIT INT TERM
@@ -457,6 +466,7 @@ if [[ -f "${KEYS_STAGE_DIR}/identity" ]]; then
     chmod 700 "${ROOTFS}/etc/proxnix/secrets"
     cp "${KEYS_STAGE_DIR}/identity" "${ROOTFS}/etc/proxnix/secrets/identity"
     chmod 600 "${ROOTFS}/etc/proxnix/secrets/identity"
+    rm -f "${KEYS_STAGE_DIR}/identity"
     log "Deployed staged container age identity"
 else
     rm -f "${ROOTFS}/etc/proxnix/secrets/identity" "${ROOTFS}/etc/proxnix/secrets/identity.pub"
@@ -469,13 +479,14 @@ if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
     chmod 700 "${ROOTFS}/etc/proxnix/secrets"
     cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/proxnix/secrets/shared_identity"
     chmod 600 "${ROOTFS}/etc/proxnix/secrets/shared_identity"
+    rm -f "${KEYS_STAGE_DIR}/shared_identity.txt"
     log "Deployed shared SSH-backed age identity"
 else
     rm -f "${ROOTFS}/etc/proxnix/secrets/shared_identity"
 fi
 
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"
-STATE_VERSION="${STATE_VERSION:-25.05}"
+STATE_VERSION="${STATE_VERSION:-25.11}"
 cat > "${ROOTFS}/root/proxnix-bootstrap.sh" << EOF
 #!/run/current-system/sw/bin/bash
 set -euo pipefail
@@ -503,5 +514,6 @@ fi
 EOF
 chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"
 
+rm -rf "${STAGE_DIR}"
 log "Mount-time sync complete."
 exit 0

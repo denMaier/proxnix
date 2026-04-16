@@ -63,7 +63,7 @@ Sample output for a healthy relay-backed container:
   OK    ostype=nixos
   INFO  state: running
   OK    guest file present: /etc/nixos/configuration.nix
-  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
   OK    guest container age identity present
   OK    applied managed config hash matches current hash
 ```
@@ -152,9 +152,20 @@ Publish the workstation-owned site repo to one or more Proxmox relay hosts.
 proxnix-publish
 proxnix-publish root@node1
 proxnix-publish --dry-run
+proxnix-publish --config-only
+proxnix-publish --vmid 100
+proxnix-publish --config-only --vmid 100
 ```
 
 It pushes config and encrypted secret stores into `/var/lib/proxnix`, stores the shared plaintext host relay key at `/etc/proxnix/host_relay_identity`, and stores guest identities re-encrypted to both the host relay key and the master recovery key under `/var/lib/proxnix/private/` on the target hosts.
+
+Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
+
+Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
+
+`--config-only --vmid <vmid>` syncs only `/var/lib/proxnix/containers/<vmid>/`.
+
+`--container-config <vmid>` remains as a compatibility alias for `--config-only --vmid <vmid>`.
 
 ## Guest commands
 

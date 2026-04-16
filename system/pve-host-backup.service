@@ -1,0 +1,16 @@
+[Unit]
+Description=Proxmox Host Backup
+After=network.target
+
+[Service]
+Type=oneshot
+Environment="PBS_REPOSITORY=root@pam!pve-backup@backlab.dmaier.top:backups"
+Environment="PBS_PASSWORD_FILE=/etc/proxmox-backup/token"
+ExecStart=proxmox-backup-client backup root.pxar:/ \
+       --exclude=/tmp --exclude=/var/tmp --exclude=/var/cache \
+       --exclude=/var/log --exclude=/var/spool --exclude=/var/crash \
+       --exclude=/var/mail --exclude=.git
+User=root
+
+[Install]
+WantedBy=multi-user.target

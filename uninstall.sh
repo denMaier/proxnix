@@ -67,10 +67,12 @@ do_rm "$LXC_CONFIG_DIR/nixos.userns.conf"
 action "Lifecycle hooks"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-mount"
+do_rm "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
 
 action "Local runtime helper"
-do_rm "$PROXNIX_LIB_DIR/yaml-to-nix.py"
+do_rm "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
 do_rm "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
+do_rm "$PROXNIX_LIB_DIR/proxnix-secrets-guest"
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 action "Local admin helper"

@@ -11,22 +11,11 @@ The Proxmox container config remains authoritative for:
 - VMID
 - hostname
 - IP addressing and gateway
-- nameservers injected by Proxmox
+- nameservers and search domain from Proxmox
 - CT features such as `nesting=1`
 - SSH public keys defined in the WebUI
 
 proxnix reads those values from `/etc/pve/lxc/<vmid>.conf` and turns the relevant subset into `proxmox.nix`.
-
-### `proxmox.yaml`
-
-Use `proxmox.yaml` only for fields that the WebUI cannot express.
-
-Typical uses:
-
-- `search_domain`
-- extra `ssh_keys`
-
-Do not try to redefine the CT's main IP or gateway here when Proxmox already owns those values.
 
 ### `site.nix`
 
@@ -41,20 +30,9 @@ Typical uses:
 - changing the shared admin user defaults
 - setting node-wide policy overrides without editing the install repo
 
-### `user.yaml`
-
-`user.yaml` is for native NixOS services only.
-
-It supports:
-
-- `runtime: native`
-- `services:` entries
-
-It does **not** support container definitions. Use Quadlets for that.
-
 ### `dropins/`
 
-`dropins/` is the extension point for cases that do not fit neatly into `user.yaml`.
+`dropins/` is the primary host-side extension point for per-container Nix configuration.
 
 Supported file types:
 
@@ -91,10 +69,9 @@ Both can hold Quadlet unit files, but they serve different roles:
 
 ## Generated files
 
-`yaml-to-nix.py` generates:
+`pve-conf-to-nix.py` generates:
 
 - `proxmox.nix`
-- `user.nix`
 
 The shared entrypoint imports them from `/etc/nixos/managed/`, after the install
 layer (`base.nix`, `common.nix`) and optional `site.nix`.
@@ -106,21 +83,12 @@ layer (`base.nix`, `common.nix`) and optional `site.nix`.
 - you are changing IP, gateway, nameservers, hostname, cores, RAM, or CT features
 - you are adding SSH keys that naturally belong to the container definition
 
-### Use `proxmox.yaml` when
-
-- Proxmox has no UI field for the setting
-- the data still conceptually belongs to base machine identity
-
-### Use `user.yaml` when
-
-- a native NixOS module already covers the application
-- the configuration maps cleanly to `services.<name>.*`
-
 ### Use `dropins/*.nix` when
 
-- you need options outside `services.<name>.*`
-- the Nix shape is awkward in YAML
+- a native NixOS module already covers the application
+- you need options outside a single `services.<name>.*` subtree
 - you need custom systemd, firewall, tmpfiles, users, or `environment.etc`
+- you want host-managed config to stay pure Nix
 
 ### Use Quadlets when
 
@@ -133,4 +101,8 @@ layer (`base.nix`, `common.nix`) and optional `site.nix`.
 - you need a temporary override for debugging
 - you have guest-specific state you don't want to manage from the host
 
-`local.nix` is the only file inside `/etc/nixos/` that is **never overwritten by proxnix**. You can use it to test configuration changes without needing to restart the container for every iteration. Once your config works, move it into `user.yaml` or `dropins/` on the host to make it permanent.
+`local.nix` is the only file inside `/etc/nixos/` that is **never overwritten by proxnix**. You can use it to test configuration changes without needing to restart the container for every iteration. Once your config works, move it into host-side `dropins/*.nix` to make it permanent.
+
+Do not treat `local.nix` as a trusted security-policy layer. Host-managed
+security settings should live in `site.nix`, generated `proxmox.nix`, or
+host-side `dropins/*.nix`.

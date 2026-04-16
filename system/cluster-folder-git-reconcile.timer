@@ -1,0 +1,11 @@
+[Unit]
+Description=Run cluster-folder-git periodic reconcile
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=30s
+Unit=cluster-folder-git-reconcile.service
+
+[Install]
+WantedBy=timers.target

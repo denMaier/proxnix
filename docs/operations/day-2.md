@@ -14,13 +14,12 @@ After making a change, restart the CT:
 pct restart <vmid>
 ```
 
-For extra SSH keys or search domains that are not modeled by Proxmox, update `proxmox.yaml` and restart.
+For host-managed config outside the Proxmox CT definition, update `dropins/*.nix` and restart.
 
 ## Change native service config
 
 Edit one of these on the host:
 
-- `user.yaml`
 - `dropins/*.nix`
 - `dropins/*.service`
 - `dropins/*.{sh,py}`
@@ -62,7 +61,7 @@ The most efficient workflow for complex changes is to experiment in the guest fi
 2. **Edit `local.nix`**: Add your new configuration to `/etc/nixos/local.nix`.
 3. **Apply changes**: Run `nixos-rebuild switch`.
 4. **Repeat**: Tweak and apply until the configuration is correct.
-5. **Commit to host**: Move the final configuration from `local.nix` into the host-side `user.yaml` or `dropins/*.nix`.
+5. **Commit to host**: Move the final configuration from `local.nix` into host-side `dropins/*.nix`.
 6. **Finalize**: Restart the container to apply the host-side config and clear your experiments from the guest.
 
 ## Applying temporary guest-only overrides
@@ -97,7 +96,7 @@ Sample output for a healthy container:
 [ct 100]
   OK    ostype=nixos
   OK    applied managed config hash matches current hash
-  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
 
 Summary: 0 fail(s), 0 warning(s)
 ```

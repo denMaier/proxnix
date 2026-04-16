@@ -4,88 +4,86 @@ Use native services when the application maps well to an existing NixOS module.
 
 ## Quick example
 
-```yaml
-# user.yaml
-runtime: native
-services:
-  jellyfin:
-    enable: true
-    hardware_acceleration: true
+```nix
+{ lib, ... }: {
+  services.jellyfin.enable = true;
+  users.users.jellyfin.extraGroups = [ "render" "video" ];
+  systemd.services.jellyfin.serviceConfig.PrivateDevices = lib.mkForce false;
+}
 ```
 
-That's it. Restart the container and Jellyfin is running.
+Put that in `containers/<vmid>/dropins/jellyfin.nix`, restart the container, and Jellyfin is running.
 
 ## Main input file
 
-The main declaration format is `user.yaml`.
+The main declaration format is `dropins/*.nix`.
 
 Minimal shape:
 
-```yaml
-runtime: native
-services:
-  jellyfin:
-    enable: true
+```nix
+{ ... }: {
+  services.jellyfin.enable = true;
+}
 ```
 
-## Supported keys per service
+## Typical patterns
 
-### `enable`
-
-Required for proxnix to emit the service configuration.
-
-### `options`
-
-Passes through to `services.<name>.<option>`.
-
-Example:
-
-```yaml
-runtime: native
-services:
-  immich:
-    enable: true
-    options:
-      openFirewall: true
-      port: 2283
-```
-
-### `hardware_acceleration`
-
-When `true`, proxnix adds:
-
-- `render` and `video` groups to `users.users.<service>.extraGroups`
-- `systemd.services.<service>.serviceConfig.PrivateDevices = lib.mkForce false`
-
-Use it for media services or anything that needs GPU or render node access.
-
-### `unstable_package`
-
-When `true`, proxnix fetches `nixos-unstable` and sets:
+### Basic service options
 
 ```nix
-services.<name>.package = pkgs.unstable.<name>
+{ ... }: {
+  services.immich = {
+    enable = true;
+    openFirewall = true;
+    port = 2283;
+  };
+}
 ```
 
-Use it only when the stable package is missing a required fix or version.
+### Hardware acceleration
 
-### `secrets`
+```nix
+{ lib, ... }: {
+  services.jellyfin.enable = true;
+  users.users.jellyfin.extraGroups = [ "render" "video" ];
+  systemd.services.jellyfin.serviceConfig.PrivateDevices = lib.mkForce false;
+}
+```
 
-Declares proxnix secrets that should be extracted into `/run/...` before the service starts.
+Use that pattern for media services or anything that needs GPU or render node access.
+
+### Unstable package selection
+
+```nix
+{ pkgs, ... }: {
+  services.immich = {
+    enable = true;
+    package = pkgs.unstable.immich;
+  };
+}
+```
+
+### Secrets
+
+Declare proxnix secrets that should be extracted into `/run/...` before the service starts.
 
 Example:
 
-```yaml
-runtime: native
-services:
-  immich:
-    enable: true
-    secrets:
-      - name: db_password
-        path: /run/immich-secrets/db_password
-```
+```nix
+{ ... }: {
+  proxnix.secrets.files.db-password = {
+    unit = "proxnix-immich-secrets";
+    path = "/run/immich-secrets/db_password";
+    owner = "root";
+    group = "immich";
+    mode = "0640";
+    before = [ "immich.service" ];
+    wantedBy = [ "immich.service" ];
+  };
 
-If `path` is omitted, proxnix defaults to `/run/<service>-secrets/<secret-name>`.
+  services.immich.database.passwordFile = "/run/immich-secrets/db_password";
+}
+```
 
 **Important:** You must also create the secret on the host:
 
@@ -93,20 +91,11 @@ If `path` is omitted, proxnix defaults to `/run/<service>-secrets/<secret-name>`
 proxnix-secrets set <vmid> db_password
 ```
 
-And point the service at the file path, either via `options` or a `dropins/*.nix` file:
-
-```nix
-{ ... }: {
-  services.immich.database.passwordFile = "/run/immich-secrets/db_password";
-}
-```
-
 ## When to use `dropins/*.nix`
 
 Use a Nix drop-in when:
 
 - a service needs configuration outside `services.<name>.*`
-- the YAML representation becomes awkward
 - you need firewall rules, users, tmpfiles, or custom units
 - you want to seed configuration files or wire secret paths into unrelated options
 
@@ -122,6 +111,6 @@ See `containers/adguard/` for a concrete example.
 
 ## What not to do
 
-- do not define container workloads in `user.yaml`
-- do not hardcode secrets into YAML or Nix
+- do not define container workloads in native-service drop-ins
+- do not hardcode secrets into Nix
 - do not put durable host-managed config into `/etc/nixos/local.nix`

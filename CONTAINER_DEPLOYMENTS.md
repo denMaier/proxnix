@@ -7,8 +7,7 @@ Use it instead of scanning the repo.
 
 Choose a **container deployment** when the app should run as one or more Podman containers managed by Quadlet.
 
-Do **not** put container definitions in `user.yaml`.
-`user.yaml` only supports native NixOS services.
+Keep container definitions in Quadlets. Native NixOS configuration belongs in `dropins/*.nix`.
 
 ## Where files go
 
@@ -16,8 +15,6 @@ For a target container VMID, host-side files usually live at:
 
 - `/var/lib/proxnix/containers/<vmid>/quadlets/` for the main Quadlet workload tree
 - `/var/lib/proxnix/containers/<vmid>/dropins/` for optional NixOS integration (`*.nix`), attached units, or small supporting scripts
-- optional `/var/lib/proxnix/containers/<vmid>/proxmox.yaml`
-- optional `/var/lib/proxnix/containers/<vmid>/user.yaml` only for native services, not containers
 
 Inside this repo, app templates should usually live under:
 
@@ -129,7 +126,6 @@ When asked to generate a new container deployment, produce:
 
 ## What not to do
 
-- Do not put container workloads under `user.yaml`
 - Do not invent extra proxnix plumbing unless explicitly asked
 - Do not assume files outside `quadlets/` are mirrored into the guest unless a drop-in type explicitly supports it
 - Do not inline secrets into repo files

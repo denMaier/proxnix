@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Proxmox Host Backup Daily
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

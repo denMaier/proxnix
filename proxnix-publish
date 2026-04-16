@@ -12,11 +12,65 @@ die() { echo "error: $*" >&2; exit 1; }
 info() { echo "$*"; }
 
 DRY_RUN=0
+REPORT_CHANGES=0
+CONFIG_ONLY=0
+TARGET_VMID=""
+TEMP_ROOT=""
+CONTROL_SOCKET=""
+
+append_host_change() {
+  local report="$1" kind="$2" path="$3"
+  printf '%s\t%s\n' "$kind" "$path" >> "$report"
+}
+
+should_report_change() {
+  local path="$1"
+
+  case "$path" in
+    "${PROXNIX_REMOTE_DIR}/site.nix"|\
+    "${PROXNIX_REMOTE_DIR}/containers/"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+note_remote_file_change() {
+  local host="$1" path="$2" report="$3"
+
+  if run_ssh "$host" "test -e '$path'"; then
+    if should_report_change "$path"; then
+      append_host_change "$report" "delete" "$path"
+    fi
+  fi
+}
+
+print_host_summary() {
+  local host="$1" report="$2"
+  local total creates updates deletes kind path
+
+  if [[ ! -s "$report" ]]; then
+    info "  No remote changes for ${host}"
+    return
+  fi
+
+  total="$(wc -l < "$report" | tr -d ' ')"
+  creates="$(awk -F '\t' '$1=="create"{count++} END{print count+0}' "$report")"
+  updates="$(awk -F '\t' '$1=="update"{count++} END{print count+0}' "$report")"
+  deletes="$(awk -F '\t' '$1=="delete"{count++} END{print count+0}' "$report")"
+
+  info "  Changes for ${host}: ${total} total (${creates} created, ${updates} updated, ${deletes} deleted)"
+  while IFS=$'\t' read -r kind path; do
+    info "    ${kind} ${path}"
+  done < "$report"
+}
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  $(basename "$0") [--dry-run] [<host> ...]
+  $(basename "$0") [--dry-run] [--report-changes] [--config-only] [--vmid <vmid>] [<host> ...]
 
 Config: $CONFIG_FILE
   PROXNIX_SITE_DIR      Local proxnix site repo
@@ -30,50 +84,108 @@ Config: $CONFIG_FILE
                         Remote proxnix private dir (default: /var/lib/proxnix/private)
   PROXNIX_REMOTE_HOST_RELAY_IDENTITY
                         Remote host relay identity path (default: /etc/proxnix/host_relay_identity)
+
+Flags:
+  --dry-run           Preview publish actions without writing
+  --report-changes    Show config changes after comparing remote state
+  --config-only       Sync config only; skip secret stores and identities
+  --vmid              Sync only one container VMID
+  --container-config  Deprecated alias for --vmid <vmid> --config-only
 EOF
   exit 1
 }
 
+setup_ssh_control() {
+  local host="$1"
+  CONTROL_SOCKET="${TEMP_ROOT}/ssh-$(printf '%s' "$host" | tr '/:@' '___').sock"
+  ssh -nNf \
+    -o ControlMaster=yes \
+    -o ControlPath="$CONTROL_SOCKET" \
+    -o ControlPersist=60 \
+    ${PROXNIX_SSH_IDENTITY:+-i "$PROXNIX_SSH_IDENTITY"} \
+    "$host"
+}
+
+teardown_ssh_control() {
+  [[ -S "$CONTROL_SOCKET" ]] || { CONTROL_SOCKET=""; return; }
+  ssh -o ControlPath="$CONTROL_SOCKET" -O exit placeholder 2>/dev/null || true
+  CONTROL_SOCKET=""
+}
+
 ssh_cmd() {
-  if [[ -n "$PROXNIX_SSH_IDENTITY" ]]; then
-    printf 'ssh -i %q' "$PROXNIX_SSH_IDENTITY"
-  else
-    printf 'ssh'
+  local opts="ssh"
+  if [[ -n "$CONTROL_SOCKET" ]]; then
+    opts+=" -o ControlMaster=no -o ControlPath=$(printf '%q' "$CONTROL_SOCKET")"
   fi
+  [[ -n "$PROXNIX_SSH_IDENTITY" ]] && opts+=" -i $(printf '%q' "$PROXNIX_SSH_IDENTITY")"
+  printf '%s' "$opts"
 }
 
 run_ssh() {
   local host="$1"
   shift
-  if [[ -n "$PROXNIX_SSH_IDENTITY" ]]; then
-    ssh -i "$PROXNIX_SSH_IDENTITY" "$host" "$@"
+  local -a ssh_args=()
+  if [[ -n "$CONTROL_SOCKET" ]]; then
+    ssh_args+=(-o ControlMaster=no -o ControlPath="$CONTROL_SOCKET")
+  fi
+  [[ -n "$PROXNIX_SSH_IDENTITY" ]] && ssh_args+=(-i "$PROXNIX_SSH_IDENTITY")
+  ssh "${ssh_args[@]}" "$host" "$@"
+}
+
+do_rsync() {
+  local source="$1" host="$2" dest="$3" delete="$4" report="$5"
+  local -a args=( -a --no-owner --no-group -e "$(ssh_cmd)" )
+  local is_dir=0 line item relpath remote_path kind
+
+  [[ "$source" == */ ]] && is_dir=1
+  [[ "$delete" == "delete" ]] && args+=(--delete)
+  [[ $DRY_RUN -eq 1 ]] && args+=(--dry-run)
+
+  if [[ -n "$report" ]]; then
+    args+=( --itemize-changes --out-format='%i %n%L' )
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      if [[ "$line" =~ ^\*deleting[[:space:]]+(.+)$ ]]; then
+        remote_path="${dest%/}/${BASH_REMATCH[1]}"
+        should_report_change "$remote_path" && append_host_change "$report" "delete" "$remote_path"
+        continue
+      fi
+      item="${line%% *}"
+      relpath="${line#* }"
+      if [[ $is_dir -eq 1 ]]; then
+        [[ "$relpath" == */ ]] && continue
+        remote_path="${dest%/}/${relpath}"
+      else
+        remote_path="$dest"
+      fi
+      if [[ "$item" == *+++++++++* ]]; then
+        kind="create"
+      elif [[ "$item" == .* ]]; then
+        continue
+      else
+        kind="update"
+      fi
+      should_report_change "$remote_path" && append_host_change "$report" "$kind" "$remote_path"
+    done < <(rsync "${args[@]}" "$source" "${host}:${dest}")
   else
-    ssh "$host" "$@"
+    rsync "${args[@]}" "$source" "${host}:${dest}" >/dev/null
   fi
 }
 
 sync_path() {
-  local source="$1" host="$2" dest="$3"
-  if [[ $DRY_RUN -eq 1 ]]; then
-    info "[dry-run] sync ${source} -> ${host}:${dest}"
-    return
-  fi
-  rsync -a --no-owner --no-group --delete -e "$(ssh_cmd)" "$source" "${host}:${dest}"
+  do_rsync "$1" "$2" "$3" "delete" "$4"
 }
 
 sync_file() {
-  local source="$1" host="$2" dest="$3"
-  if [[ $DRY_RUN -eq 1 ]]; then
-    info "[dry-run] copy ${source} -> ${host}:${dest}"
-    return
-  fi
-  rsync -a --no-owner --no-group -e "$(ssh_cmd)" "$source" "${host}:${dest}"
+  do_rsync "$1" "$2" "$3" "keep" "$4"
 }
 
 remove_remote_file() {
-  local host="$1" path="$2"
+  local host="$1" path="$2" report="$3"
+  if [[ $REPORT_CHANGES -eq 1 ]]; then
+    note_remote_file_change "$host" "$path" "$report"
+  fi
   if [[ $DRY_RUN -eq 1 ]]; then
-    info "[dry-run] remove ${host}:${path}"
     return
   fi
   run_ssh "$host" "rm -f '$path'"
@@ -110,11 +222,38 @@ validate_site_repo() {
     need_host_relay=1
   done < <(find "$(proxnix_site_private_dir)/containers" -name secrets.sops.yaml -type f 2>/dev/null || true)
 
-  if find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.json -type f -print -quit 2>/dev/null | grep -q .; then
+  if find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.yaml -type f -print -quit 2>/dev/null | grep -q .; then
     need_host_relay=1
   fi
 
   if [[ $need_host_relay -eq 1 && ! -f "$(proxnix_site_host_relay_identity_store)" ]]; then
+    die "host relay identity is missing: $(proxnix_site_host_relay_identity_store) — run: proxnix-secrets init-host-relay"
+  fi
+}
+
+validate_target_container_config() {
+  local vmid="$1"
+
+  [[ "$vmid" =~ ^[0-9]+$ ]] || die "container VMID must be numeric: ${vmid}"
+}
+
+validate_target_vmid_repo() {
+  local vmid="$1"
+  local secret_store identity_store
+
+  validate_target_container_config "$vmid"
+  [[ -d "${PROXNIX_SITE_DIR}/containers/${vmid}" || -f "$(proxnix_site_container_store "$vmid")" || -f "$(proxnix_site_container_identity_store "$vmid")" ]] \
+    || die "no local config or secret state found for container ${vmid}"
+
+  [[ $CONFIG_ONLY -eq 1 ]] && return 0
+
+  secret_store="$(proxnix_site_container_store "$vmid")"
+  identity_store="$(proxnix_site_container_identity_store "$vmid")"
+  if [[ -f "$secret_store" && ! -f "$identity_store" ]]; then
+    die "container ${vmid} secret store exists but identity is missing: ${identity_store}"
+  fi
+
+  if [[ ( -f "$secret_store" || -f "$identity_store" ) && ! -f "$(proxnix_site_host_relay_identity_store)" ]]; then
     die "host relay identity is missing: $(proxnix_site_host_relay_identity_store) — run: proxnix-secrets init-host-relay"
   fi
 }
@@ -128,28 +267,78 @@ build_publish_tree() {
   chmod 755 "${root}" "${root}/containers"
   chmod 700 "${private_root}" "${private_root}/shared" "${private_root}/containers"
 
-  if [[ -f "${PROXNIX_SITE_DIR}/site.nix" ]]; then
+  if [[ -z "$TARGET_VMID" && -f "${PROXNIX_SITE_DIR}/site.nix" ]]; then
     install -m 644 "${PROXNIX_SITE_DIR}/site.nix" "${root}/site.nix"
   fi
 
-  if [[ -d "${PROXNIX_SITE_DIR}/containers" ]]; then
+  if [[ -n "$TARGET_VMID" ]]; then
+    if [[ -d "${PROXNIX_SITE_DIR}/containers/${TARGET_VMID}" ]]; then
+      mkdir -p "${root}/containers/${TARGET_VMID}"
+      cp -a "${PROXNIX_SITE_DIR}/containers/${TARGET_VMID}/." "${root}/containers/${TARGET_VMID}/"
+    fi
+  elif [[ -d "${PROXNIX_SITE_DIR}/containers" ]]; then
     cp -a "${PROXNIX_SITE_DIR}/containers/." "${root}/containers/"
   fi
 
-  if [[ -f "$(proxnix_site_shared_store)" ]]; then
+  if [[ $CONFIG_ONLY -eq 1 ]]; then
+    return
+  fi
+
+  if [[ -z "$TARGET_VMID" && -f "$(proxnix_site_shared_store)" ]]; then
     install -m 600 "$(proxnix_site_shared_store)" "${private_root}/shared/secrets.sops.yaml"
   fi
 
-  while IFS= read -r store; do
-    vmid="${store#*/containers/}"
-    vmid="${vmid%%/*}"
-    mkdir -p "${private_root}/containers/${vmid}"
-    chmod 700 "${private_root}/containers/${vmid}"
-    install -m 600 "$store" "${private_root}/containers/${vmid}/secrets.sops.yaml"
-  done < <(find "$(proxnix_site_private_dir)/containers" -name secrets.sops.yaml -type f 2>/dev/null || true)
+  if [[ -n "$TARGET_VMID" ]]; then
+    store="$(proxnix_site_container_store "$TARGET_VMID")"
+    if [[ -f "$store" ]]; then
+      mkdir -p "${private_root}/containers/${TARGET_VMID}"
+      chmod 700 "${private_root}/containers/${TARGET_VMID}"
+      install -m 600 "$store" "${private_root}/containers/${TARGET_VMID}/secrets.sops.yaml"
+    fi
+  else
+    while IFS= read -r store; do
+      vmid="${store#*/containers/}"
+      vmid="${vmid%%/*}"
+      mkdir -p "${private_root}/containers/${vmid}"
+      chmod 700 "${private_root}/containers/${vmid}"
+      install -m 600 "$store" "${private_root}/containers/${vmid}/secrets.sops.yaml"
+    done < <(find "$(proxnix_site_private_dir)/containers" -name secrets.sops.yaml -type f 2>/dev/null || true)
+  fi
 
   find "${private_root}" -type d -exec chmod 700 {} +
   find "${private_root}" -type f -exec chmod 600 {} +
+}
+
+# Re-encrypt an identity store for the relay, but only when necessary.
+#
+# SOPS produces a fresh random ciphertext on every encryption even when the
+# plaintext and recipient list are identical.  Calling this unconditionally
+# would make every publish write a "new" identity file, causing prestart to
+# see a changed store and re-decrypt on every container start.
+#
+# Instead we keep a local cache of the last relay-encrypted output.  If the
+# source store hash AND the intended recipients are the same as when the cache
+# was written, we reuse the cached file without calling sops.
+stage_identity_for_relay() {
+  local source_store="$1" recipients="$2" dest="$3" cache_file="$4"
+  local source_hash sorted_recipients inputs_hash
+
+  source_hash=$(sha256sum "$source_store" | awk '{print $1}')
+  sorted_recipients=$(printf '%s\n' ${recipients//,/ } | sort | tr '\n' ':')
+  inputs_hash="${source_hash}  ${sorted_recipients}"
+
+  if [[ -f "$cache_file" && -f "${cache_file}.inputs" ]]; then
+    if [[ "$(cat "${cache_file}.inputs")" == "$inputs_hash" ]]; then
+      install -m 600 "$cache_file" "$dest"
+      return 0
+    fi
+  fi
+
+  proxnix_reencrypt_identity_store_to_file "$source_store" "$recipients" "$dest"
+  mkdir -p "$(dirname "$cache_file")"
+  install -m 600 "$dest" "$cache_file"
+  printf '%s' "$inputs_hash" > "${cache_file}.inputs"
+  chmod 600 "${cache_file}.inputs"
 }
 
 stage_publish_identities() (
@@ -158,7 +347,7 @@ stage_publish_identities() (
   local private_root="${tree}/private"
   local store vmid dest relay_store relay_recipient identity_recipients relay_private
 
-  trap 'rm -f "${private_root}/host_relay_identity" "${private_root}/shared_age_identity.sops.json"; find "${private_root}/containers" \( -name age_identity.sops.json -o -name host_relay_identity \) -type f -delete 2>/dev/null || true' EXIT
+  trap 'rm -f "${private_root}/host_relay_identity" "${private_root}/shared_age_identity.sops.yaml"; find "${private_root}/containers" \( -name age_identity.sops.yaml -o -name host_relay_identity \) -type f -delete 2>/dev/null || true' EXIT
 
   relay_store="$(proxnix_site_host_relay_identity_store)"
   relay_recipient="$(proxnix_identity_public_key_from_store "$relay_store")"
@@ -167,63 +356,172 @@ stage_publish_identities() (
   proxnix_decrypt_identity_to_file "$relay_store" "$relay_private"
   chmod 600 "$relay_private"
 
-  if [[ -f "$(proxnix_site_shared_identity_store)" ]]; then
-    dest="${private_root}/shared_age_identity.sops.json"
-    proxnix_reencrypt_identity_store_to_file "$(proxnix_site_shared_identity_store)" "$identity_recipients" "$dest"
-    chmod 600 "$dest"
+  if [[ -z "$TARGET_VMID" && -f "$(proxnix_site_shared_identity_store)" ]]; then
+    dest="${private_root}/shared_age_identity.sops.yaml"
+    stage_identity_for_relay \
+      "$(proxnix_site_shared_identity_store)" "$identity_recipients" "$dest" \
+      "$(proxnix_site_relay_cache_shared_identity)"
   fi
 
-  while IFS= read -r store; do
-    vmid="${store#*/containers/}"
-    vmid="${vmid%%/*}"
-    mkdir -p "${private_root}/containers/${vmid}"
-    chmod 700 "${private_root}/containers/${vmid}"
-    dest="${private_root}/containers/${vmid}/age_identity.sops.json"
-    proxnix_reencrypt_identity_store_to_file "$store" "$identity_recipients" "$dest"
-    chmod 600 "$dest"
-  done < <(find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.json -type f 2>/dev/null || true)
+  if [[ -n "$TARGET_VMID" ]]; then
+    store="$(proxnix_site_container_identity_store "$TARGET_VMID")"
+    if [[ -f "$store" ]]; then
+      mkdir -p "${private_root}/containers/${TARGET_VMID}"
+      chmod 700 "${private_root}/containers/${TARGET_VMID}"
+      dest="${private_root}/containers/${TARGET_VMID}/age_identity.sops.yaml"
+      stage_identity_for_relay \
+        "$store" "$identity_recipients" "$dest" \
+        "$(proxnix_site_relay_cache_container_identity "$TARGET_VMID")"
+    fi
+  else
+    while IFS= read -r store; do
+      vmid="${store#*/containers/}"
+      vmid="${vmid%%/*}"
+      mkdir -p "${private_root}/containers/${vmid}"
+      chmod 700 "${private_root}/containers/${vmid}"
+      dest="${private_root}/containers/${vmid}/age_identity.sops.yaml"
+      stage_identity_for_relay \
+        "$store" "$identity_recipients" "$dest" \
+        "$(proxnix_site_relay_cache_container_identity "$vmid")"
+    done < <(find "$(proxnix_site_private_dir)/containers" -name age_identity.sops.yaml -type f 2>/dev/null || true)
+  fi
 
-  publish_host "$host" "$tree"
+  publish_selected_host "$host" "$tree"
 )
 
 publish_host() {
   local host="$1" tree="$2"
+  local report=""
+
+  if [[ $REPORT_CHANGES -eq 1 ]]; then
+    report="${TEMP_ROOT}/$(printf '%s' "$host" | tr '/:@' '___').changes"
+    : > "$report"
+  fi
 
   info "Publishing relay cache to ${host}"
   ensure_remote_dirs "$host"
 
   if [[ -f "${tree}/site.nix" ]]; then
-    sync_file "${tree}/site.nix" "$host" "${PROXNIX_REMOTE_DIR}/site.nix"
+    sync_file "${tree}/site.nix" "$host" "${PROXNIX_REMOTE_DIR}/site.nix" "$report"
   else
-    remove_remote_file "$host" "${PROXNIX_REMOTE_DIR}/site.nix"
+    remove_remote_file "$host" "${PROXNIX_REMOTE_DIR}/site.nix" "$report"
   fi
 
-  sync_path "${tree}/containers/" "$host" "${PROXNIX_REMOTE_DIR}/containers/"
-  sync_path "${tree}/private/shared/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared/"
-  sync_path "${tree}/private/containers/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/containers/"
+  sync_path "${tree}/containers/" "$host" "${PROXNIX_REMOTE_DIR}/containers/" "$report"
+
+  if [[ $CONFIG_ONLY -eq 1 ]]; then
+    if [[ $REPORT_CHANGES -eq 1 ]]; then
+      print_host_summary "$host" "$report"
+    fi
+    return
+  fi
+
+  sync_path "${tree}/private/shared/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared/" "$report"
+  sync_path "${tree}/private/containers/" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/containers/" "$report"
 
   if [[ -f "${tree}/private/host_relay_identity" ]]; then
-    sync_file "${tree}/private/host_relay_identity" "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}"
+    sync_file "${tree}/private/host_relay_identity" "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}" "$report"
   else
-    remove_remote_file "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}"
+    remove_remote_file "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}" "$report"
   fi
 
-  if [[ -f "${tree}/private/shared_age_identity.sops.json" ]]; then
-    sync_file "${tree}/private/shared_age_identity.sops.json" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.json"
+  if [[ -f "${tree}/private/shared_age_identity.sops.yaml" ]]; then
+    sync_file "${tree}/private/shared_age_identity.sops.yaml" "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.yaml" "$report"
   else
-    remove_remote_file "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.json"
+    remove_remote_file "$host" "${PROXNIX_REMOTE_PRIV_DIR}/shared_age_identity.sops.yaml" "$report"
+  fi
+
+  if [[ $REPORT_CHANGES -eq 1 ]]; then
+    print_host_summary "$host" "$report"
+  fi
+}
+
+publish_vmid_host() {
+  local host="$1" vmid="$2" tree="$3"
+  local report=""
+  local source_dir="${tree}/containers/${vmid}"
+  local remote_dir="${PROXNIX_REMOTE_DIR}/containers/${vmid}"
+  local source_private_dir="${tree}/private/containers/${vmid}"
+  local remote_private_dir="${PROXNIX_REMOTE_PRIV_DIR}/containers/${vmid}"
+
+  if [[ $REPORT_CHANGES -eq 1 ]]; then
+    report="${TEMP_ROOT}/$(printf '%s.%s' "$host" "$vmid" | tr '/:@' '___').changes"
+    : > "$report"
+  fi
+
+  if [[ $CONFIG_ONLY -eq 1 ]]; then
+    info "Publishing config for container ${vmid} to ${host}"
+  else
+    info "Publishing container ${vmid} to ${host}"
+  fi
+  ensure_remote_dirs "$host"
+
+  if [[ -d "$source_dir" ]]; then
+    sync_path "${source_dir}/" "$host" "${remote_dir}/" "$report"
+  else
+    if [[ $REPORT_CHANGES -eq 1 ]]; then
+      note_remote_file_change "$host" "$remote_dir" "$report"
+    fi
+    if [[ $DRY_RUN -eq 0 ]]; then
+      run_ssh "$host" "rm -rf '$remote_dir'"
+    fi
+  fi
+
+  if [[ $CONFIG_ONLY -eq 0 ]]; then
+    if [[ -d "$source_private_dir" ]]; then
+      sync_path "${source_private_dir}/" "$host" "${remote_private_dir}/" "$report"
+    elif [[ $DRY_RUN -eq 0 ]]; then
+      run_ssh "$host" "rm -rf '$remote_private_dir'"
+    fi
+
+    if [[ -f "${tree}/private/host_relay_identity" ]]; then
+      sync_file "${tree}/private/host_relay_identity" "$host" "${PROXNIX_REMOTE_HOST_RELAY_IDENTITY}" "$report"
+    fi
+  fi
+
+  if [[ $REPORT_CHANGES -eq 1 ]]; then
+    print_host_summary "$host" "$report"
+  fi
+}
+
+publish_selected_host() {
+  local host="$1" tree="$2"
+
+  if [[ -n "$TARGET_VMID" ]]; then
+    publish_vmid_host "$host" "$TARGET_VMID" "$tree"
+  else
+    publish_host "$host" "$tree"
   fi
 }
 
 main() {
   local hosts=()
-  local temp_root relay_tree host
+  local relay_tree host
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run)
         DRY_RUN=1
         shift
+        ;;
+      --report-changes)
+        REPORT_CHANGES=1
+        shift
+        ;;
+      --config-only)
+        CONFIG_ONLY=1
+        shift
+        ;;
+      --vmid)
+        [[ $# -ge 2 ]] || die "--vmid requires a VMID"
+        TARGET_VMID="$2"
+        shift 2
+        ;;
+      --container-config)
+        [[ $# -ge 2 ]] || die "--container-config requires a VMID"
+        TARGET_VMID="$2"
+        CONFIG_ONLY=1
+        shift 2
         ;;
       --help|-h)
         usage
@@ -236,7 +534,13 @@ main() {
   done
 
   proxnix_need_publish_tools
-  validate_site_repo
+  if [[ -n "$TARGET_VMID" ]]; then
+    validate_target_vmid_repo "$TARGET_VMID"
+  elif [[ $CONFIG_ONLY -eq 1 ]]; then
+    :
+  else
+    validate_site_repo
+  fi
 
   if [[ ${#hosts[@]} -eq 0 ]]; then
     # shellcheck disable=SC2206
@@ -245,20 +549,20 @@ main() {
   [[ ${#hosts[@]} -gt 0 ]] || die "no publish hosts configured"
 
   umask 077
-  temp_root="$(mktemp -d /tmp/proxnix-publish.XXXXXX)"
-  relay_tree="${temp_root}/relay"
-  trap "rm -rf '${temp_root}'" EXIT
+  TEMP_ROOT="$(mktemp -d /tmp/proxnix-publish.XXXXXX)"
+  relay_tree="${TEMP_ROOT}/relay"
+  trap "rm -rf '${TEMP_ROOT}'" EXIT
 
   build_publish_tree "$relay_tree"
 
   for host in "${hosts[@]}"; do
-    if [[ $DRY_RUN -eq 1 ]]; then
-      publish_host "$host" "$relay_tree"
-    elif [[ -f "$(proxnix_site_host_relay_identity_store)" ]]; then
+    setup_ssh_control "$host"
+    if [[ $CONFIG_ONLY -eq 0 && -f "$(proxnix_site_host_relay_identity_store)" ]]; then
       stage_publish_identities "$relay_tree" "$host"
     else
-      publish_host "$host" "$relay_tree"
+      publish_selected_host "$host" "$relay_tree"
     fi
+    teardown_ssh_control
   done
 
   info "Publish complete"

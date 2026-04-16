@@ -21,8 +21,8 @@ That gives proxnix these properties:
        ▼
   ┌─────────────────────────────────────────────┐
   │  1. pre-start hook (host)                    │
-  │     Read PVE conf + YAML + dropins           │
-  │     Run yaml-to-nix.py                       │
+  │     Read PVE conf + Nix drop-ins             │
+  │     Run pve-conf-to-nix.py                   │
   │     Stage secrets, Quadlets, scripts          │
   │     Compute config hash                       │
   │     Output: /run/proxnix/<vmid>/              │
@@ -72,7 +72,7 @@ Important stage subtrees:
 | Path | Contents |
 |------|----------|
 | `rendered/configuration.nix` | NixOS entrypoint |
-| `rendered/managed/{base,common,proxmox,user}.nix` | Core managed modules |
+| `rendered/managed/{base,common,security-policy,proxmox}.nix` | Core managed modules |
 | `rendered/managed/dropins/` | Extra Nix modules from host `dropins/` |
 | `runtime/systemd/` | Attached systemd units from host `dropins/*.service` |
 | `runtime/bin/` | Scripts from host `dropins/*.{sh,py}` |
@@ -81,7 +81,7 @@ Important stage subtrees:
 | `keys/` | Shared SSH-backed age identity (if configured) |
 | `meta/` | Config hash, VMID, bootstrap marker |
 
-The pre-start hook copies the node-local managed Nix files, runs `yaml-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
+The pre-start hook copies the node-local managed Nix files, runs `pve-conf-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
 
 ### 3. Mount hook syncs the stage into the guest rootfs
 
@@ -130,32 +130,33 @@ The guest entrypoint is intentionally small. It imports:
 
 - `base.nix` — install-layer guest baseline: LXC adjustments, age setup, Podman config, login summary
 - `common.nix` — proxnix option module for the shared operator baseline
+- `security-policy.nix` — host-enforced security posture that guest-local overrides should not relax
 - optional `site.nix` — site-wide overrides, typically managed from a separate repo
-- `proxmox.nix` — generated from PVE conf (hostname, IP, DNS, SSH keys)
-- `user.nix` — generated from `user.yaml` (native services)
+- `proxmox.nix` — generated from PVE conf (hostname, DNS, SSH keys)
 - every managed drop-in `*.nix`
 - optional `/etc/nixos/local.nix`
 
 That last file is the escape hatch for guest-only experimentation. proxnix does not manage it.
 
-`base.nix` and `common.nix` are separate on purpose:
+`base.nix`, `common.nix`, and `security-policy.nix` are separate on purpose:
 
 - `common.nix` defines the reusable `proxnix.common.*` options and applies them
-- `base.nix` is the install repo's default consumer of those options
+- `security-policy.nix` is the trust-boundary layer that forcefully keeps host-managed security settings in place
+- `base.nix` is the install repo's default runtime baseline and convenience layer
 
 That keeps the baseline policy amendable. A separate site repo can add a `site.nix`
 that changes `proxnix.common.*` without needing to fork the install-layer files.
 
 ## The admin user
 
-`common.nix` creates a shared operator account (default: `admin`, UID 1000) on every proxnix-managed container. Key behaviors:
+`common.nix` and `security-policy.nix` create a shared operator account (default: `admin`, UID 1000) on every proxnix-managed container. Key behaviors:
 
 - **SSH keys:** By default, inherits the same authorized keys as `root` (which come from the Proxmox CT config)
 - **Password:** Locked by default. Set via the `common_admin_password_hash` shared secret (see [installation](../getting-started/installation.md#step-4-set-the-admin-user-password-hash))
 - **sudo:** Member of `wheel`. By default, `wheelNeedsPassword = true`, so the admin password hash secret must be set for `sudo` to work
 - **Root:** Root password is locked, SSH root login is key-only (`prohibit-password`)
 
-These defaults are configurable via `proxnix.common.*` options in `common.nix`.
+These defaults are exposed via `proxnix.common.*` options in `common.nix`, while the enforced security posture lives in `security-policy.nix`.
 For additive package changes, prefer `proxnix.common.extraPackages` from `site.nix`.
 
 ## Podman enablement rule

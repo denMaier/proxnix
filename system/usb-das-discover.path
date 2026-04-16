@@ -1,0 +1,13 @@
+[Unit]
+Description=Track USB-DAS link changes and trigger discovery
+After=systemd-udevd.service
+Requires=systemd-udevd.service
+
+[Path]
+PathExists=/dev/disk/usb-das
+PathDirectoryNotEmpty=/dev/disk/usb-das
+PathChanged=/dev/disk/usb-das
+Unit=usb-das-discover.service
+
+[Install]
+WantedBy=usb-das.target

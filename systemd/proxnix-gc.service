@@ -11,7 +11,9 @@ ExecStart=/bin/bash -c '\
   for dir in /run/proxnix/*/; do \
     [[ -d "$dir" ]] || continue; \
     vmid=$(basename "$dir"); \
-    pct status "$vmid" 2>/dev/null | grep -q running && continue; \
+    pct status "$vmid" 2>/dev/null | grep -q running && \
+      echo "proxnix-gc: WARNING: stale stage dir for running CT $vmid (mount hook may have failed)" && \
+      continue; \
     rm -rf "$dir"; \
-    echo "proxnix-gc: removed stale stage dir for CT $vmid"; \
+    echo "proxnix-gc: removed orphaned stage dir for CT $vmid"; \
   done'

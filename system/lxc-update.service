@@ -1,0 +1,19 @@
+[Unit]
+Description=Proxmox LXC Updater (non-interactive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lxc-updater.sh
+WorkingDirectory=/root
+User=root
+Group=root
+Environment=DEBIAN_FRONTEND=noninteractive
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

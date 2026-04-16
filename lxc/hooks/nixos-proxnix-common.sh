@@ -31,11 +31,11 @@ proxnix_host_relay_identity_path() {
 
 proxnix_container_age_identity_store_path() {
     local vmid="$1"
-    printf '%s/age_identity.sops.json' "$(proxnix_container_priv_dir "$vmid")"
+    printf '%s/age_identity.sops.yaml' "$(proxnix_container_priv_dir "$vmid")"
 }
 
 proxnix_shared_age_identity_store_path() {
-    printf '%s/shared_age_identity.sops.json' "$NIXLXC_PRIV_DIR"
+    printf '%s/shared_age_identity.sops.yaml' "$NIXLXC_PRIV_DIR"
 }
 
 proxnix_with_host_relay_key() {
@@ -46,28 +46,42 @@ proxnix_with_host_relay_key() {
 }
 
 proxnix_decrypt_host_identity_store_to_file() {
-    local store="$1" out="$2" tmp_json
+    local store="$1" out="$2" tmp_yaml
     [[ -f "$store" ]] || return 1
-    tmp_json="$(mktemp /tmp/proxnix-host-identity-json.XXXXXX)"
-    if ! proxnix_with_host_relay_key sops decrypt --input-type json --output-type json "$store" > "$tmp_json"; then
-        rm -f "$tmp_json" "$out"
+    tmp_yaml="$(mktemp /tmp/proxnix-host-identity.XXXXXX.yaml)"
+    if ! proxnix_with_host_relay_key sops decrypt --input-type yaml --output-type yaml "$store" > "$tmp_yaml"; then
+        rm -f "$tmp_yaml" "$out"
         return 1
     fi
-    if ! python3 - "$tmp_json" "$out" <<'PY'
-import json
+    if ! python3 - "$tmp_yaml" "$out" <<'PY'
 import sys
 
 with open(sys.argv[1]) as source:
-    payload = json.load(source)
+    lines = source.readlines()
 
+if not lines or not lines[0].strip().startswith("identity: |"):
+    raise SystemExit("invalid proxnix identity payload")
+
+base_indent = None
 with open(sys.argv[2], "w") as fh:
-    fh.write(payload["identity"])
+    for line in lines[1:]:
+        if line.strip() == "":
+            fh.write("\n")
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if base_indent is None:
+            if indent == 0:
+                raise SystemExit("invalid proxnix identity payload")
+            base_indent = indent
+        if indent < base_indent:
+            raise SystemExit("invalid proxnix identity payload")
+        fh.write(line[base_indent:])
 PY
     then
-        rm -f "$tmp_json" "$out"
+        rm -f "$tmp_yaml" "$out"
         return 1
     fi
-    rm -f "$tmp_json"
+    rm -f "$tmp_yaml"
     chmod 600 "$out"
 }
 

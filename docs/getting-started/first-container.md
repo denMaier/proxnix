@@ -62,9 +62,7 @@ mkdir -p ~/src/proxnix-site/containers/$VMID/quadlets
 
 | File | Purpose | When to use |
 |------|---------|-------------|
-| `proxmox.yaml` | Fields the WebUI can't express (e.g., `search_domain`, extra SSH keys) | When you need search domains or additional SSH keys |
-| `user.yaml` | Native NixOS service definitions | When running services like Jellyfin, Immich, etc. |
-| `dropins/*.nix` | Extra Nix configuration modules | When `user.yaml` isn't expressive enough |
+| `dropins/*.nix` | Native NixOS service definitions and extra config modules | When running services like Jellyfin, Immich, or any other host-managed Nix config |
 | `dropins/*.service` | Attached systemd units | When you need custom services |
 | `dropins/*.sh`, `*.py` | Scripts installed to `/usr/local/bin/` | For helper scripts |
 | `quadlets/` | Podman Quadlet workload files | For container-first applications |
@@ -75,12 +73,12 @@ Example setup for a container with native services:
 VMID=100
 mkdir -p ~/src/proxnix-site/containers/$VMID/{quadlets,dropins}
 
-cat > ~/src/proxnix-site/containers/$VMID/user.yaml << 'EOF'
-runtime: native
-services:
-  jellyfin:
-    enable: true
-    hardware_acceleration: true
+cat > ~/src/proxnix-site/containers/$VMID/dropins/jellyfin.nix << 'EOF'
+{ ... }: {
+  services.jellyfin.enable = true;
+  users.users.jellyfin.extraGroups = [ "render" "video" ];
+  systemd.services.jellyfin.serviceConfig.PrivateDevices = false;
+}
 EOF
 ```
 
@@ -117,7 +115,7 @@ pct exec 100 -- journalctl -u proxnix-apply-config.service -b -f
 
 On first boot the service:
 
-1. Adds the NixOS channel matching the system's `stateVersion`
+1. Adds the NixOS channel matching the system's `stateVersion` (currently `25.11` in this repo)
 2. Adds the `nixpkgs-unstable` channel for packages exposed via `pkgs.unstable`
 3. Runs `nix-channel --update`
 4. Runs `nixos-rebuild switch` to apply the full proxnix-managed configuration
@@ -192,7 +190,7 @@ Expected output for a healthy container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   OK    container config dir present: /var/lib/proxnix/containers/100
-  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.json
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
   OK    guest container age identity present
   ...
   OK    guest file present: /etc/nixos/configuration.nix

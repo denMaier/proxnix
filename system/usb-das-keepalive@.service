@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll the usb drive %i to keep them alive
+Requires=mnt-usb-das@%i.mount
+After=mnt-usb-das@%i.mount
+PartOf=usb-das-keepalive.target
+ConditionPathIsMountPoint=/mnt/usb-das/%i
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '\
+      dd if=/dev/zero of="/mnt/usb-das/%i/.keepalive" bs=4k count=1 oflag=direct conv=notrunc status=none;'
+Restart=on-failure
+RestartSec=5

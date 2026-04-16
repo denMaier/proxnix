@@ -98,7 +98,7 @@ pct restart <vmid>
 Check:
 
 ```bash
-ls "$PROXNIX_SITE_DIR/private/containers/<vmid>/age_identity.sops.json"
+ls "$PROXNIX_SITE_DIR/private/containers/<vmid>/age_identity.sops.yaml"
 ls "$PROXNIX_MASTER_IDENTITY"
 ```
 
@@ -155,13 +155,19 @@ Check three things:
    proxnix-secrets ls <vmid>
    ```
 
-2. The service declared it under `user.yaml`:
-   ```yaml
-   services:
-     myservice:
-       secrets:
-         - name: the_secret
-           path: /run/myservice-secrets/the_secret
+2. The service declared it in a host-side `dropins/*.nix` module:
+   ```nix
+   {
+     proxnix.secrets.files.the-secret = {
+       unit = "proxnix-myservice-secrets";
+       path = "/run/myservice-secrets/the_secret";
+       owner = "root";
+       group = "myservice";
+       mode = "0640";
+       before = [ "myservice.service" ];
+       wantedBy = [ "myservice.service" ];
+     };
+   }
    ```
 
 3. The service configuration actually points at the generated `/run/...` path
@@ -220,7 +226,7 @@ After migrating a container to a different Proxmox node, make sure proxnix is in
 
 proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a container to another node, make sure that node has both proxnix installed and the expected `/var/lib/proxnix/` data for that container.
 
-## `yaml-to-nix.py` fails
+## `pve-conf-to-nix.py` fails
 
 Check the pre-start hook log:
 
@@ -230,7 +236,6 @@ journalctl -t lxc-<vmid>-start -n 50
 
 Common causes:
 
-- Malformed YAML in `proxmox.yaml` or `user.yaml`
 - Missing PVE config file for the VMID
 - Python3 not installed on the Proxmox host
 

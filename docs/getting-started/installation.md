@@ -27,7 +27,8 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/share/lxc/config/nixos.userns.conf`
 - `/usr/share/lxc/hooks/nixos-proxnix-prestart`
 - `/usr/share/lxc/hooks/nixos-proxnix-mount`
-- `/usr/local/lib/proxnix/yaml-to-nix.py`
+- `/usr/share/lxc/hooks/nixos-proxnix-poststop`
+- `/usr/local/lib/proxnix/pve-conf-to-nix.py`
 - `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
 - `/usr/local/sbin/proxnix-create-lxc`
@@ -40,11 +41,12 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 
 - `/var/lib/proxnix/base.nix`
 - `/var/lib/proxnix/common.nix`
+- `/var/lib/proxnix/security-policy.nix`
 - `/var/lib/proxnix/configuration.nix`
 - `/var/lib/proxnix/site.nix`
 - `/var/lib/proxnix/containers/`
 - `/etc/proxnix/host_relay_identity`
-- `/var/lib/proxnix/private/shared_age_identity.sops.json`
+- `/var/lib/proxnix/private/shared_age_identity.sops.yaml`
 - `/var/lib/proxnix/private/shared/`
 - `/var/lib/proxnix/private/containers/`
 
@@ -92,18 +94,16 @@ proxnix-site/
 ├── site.nix
 ├── containers/
 │   └── <vmid>/
-│       ├── proxmox.yaml
-│       ├── user.yaml
 │       ├── dropins/
 │       └── quadlets/
 └── private/
-    ├── host_relay_identity.sops.json
-    ├── shared_age_identity.sops.json
+    ├── host_relay_identity.sops.yaml
+    ├── shared_age_identity.sops.yaml
     ├── shared/
     │   └── secrets.sops.yaml
     └── containers/
         └── <vmid>/
-            ├── age_identity.sops.json
+            ├── age_identity.sops.yaml
             └── secrets.sops.yaml
 ```
 
@@ -201,7 +201,7 @@ That means each Proxmox host persistently stores only one plaintext relay key. G
 
 ## Upgrading proxnix files
 
-If the install repo changes `base.nix`, `common.nix`, or `configuration.nix`,
+If the install repo changes `base.nix`, `common.nix`, `security-policy.nix`, or `configuration.nix`,
 reinstall proxnix on each node:
 
 ```bash
@@ -244,11 +244,12 @@ On each Proxmox node:
 /var/lib/proxnix/
 ├── base.nix
 ├── common.nix
+├── security-policy.nix
 ├── configuration.nix
 ├── site.nix
 ├── containers/
 └── private/
-    ├── shared_age_identity.sops.json
+    ├── shared_age_identity.sops.yaml
     ├── shared/
     └── containers/
 
