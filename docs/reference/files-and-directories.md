@@ -35,8 +35,10 @@ These paths are the published host-side state on the Proxmox node. The workstati
 ├── configuration.nix                  NixOS entrypoint
 ├── site.nix                           published site override
 └── containers/
+    ├── _template/                     shared managed Nix template snippets
     └── <vmid>/
         ├── dropins/                   extra Nix, services, scripts, Quadlets
+        ├── templates/                 `*.template` selectors for shared templates
         └── quadlets/                  main Podman workload tree
 
 /var/lib/proxnix/private/
@@ -76,7 +78,8 @@ These paths are the published host-side state on the Proxmox node. The workstati
 
 ## Stage directory on the host (tmpfs)
 
-Created by the pre-start hook, consumed by the mount hook:
+Created by the pre-start hook. The mount hook bind-mounts paths from here into
+the guest and the post-stop hook removes the tree after the container stops:
 
 ```text
 /run/proxnix/<vmid>/
@@ -88,6 +91,7 @@ Created by the pre-start hook, consumed by the mount hook:
 │       ├── security-policy.nix
 │       ├── site.nix
 │       ├── proxmox.nix
+│       ├── _template/                 selected shared templates only
 │       └── dropins/
 ├── runtime/
 │   ├── systemd/                       *.service files
@@ -95,10 +99,9 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── quadlet/                           Quadlet units and app config
 ├── secrets/
 │   ├── shared.sops.yaml
-│   └── container.sops.yaml
-├── keys/
+│   ├── container.sops.yaml
 │   ├── identity
-│   └── shared_identity.txt
+│   └── shared_identity
 └── meta/
     ├── current-config-hash
     └── vmid
@@ -109,12 +112,13 @@ Created by the pre-start hook, consumed by the mount hook:
 ```text
 /etc/nixos/
 ├── configuration.nix                  NixOS entrypoint (read-only)
-├── managed/                           host-managed modules (read-only)
+├── managed/                           host-managed modules (read-only bind mount)
 │   ├── base.nix
 │   ├── common.nix
 │   ├── security-policy.nix
 │   ├── site.nix
 │   ├── proxmox.nix
+│   ├── _template/                     selected shared Nix templates (read-only)
 │   └── dropins/
 └── local.nix                          guest-only escape hatch (unmanaged)
 
@@ -126,7 +130,7 @@ Created by the pre-start hook, consumed by the mount hook:
 ├── secrets/
 │   ├── shared.sops.yaml
 │   └── container.sops.yaml
-└── quadlets/                          jj-tracked app config mirror
+└── quadlets/                          read-only bind-backed app config mirror
 
 /etc/proxnix/secrets/
 ├── identity                           host-staged container SSH private key used as an age identity

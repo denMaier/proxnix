@@ -272,6 +272,10 @@ build_publish_tree() {
   fi
 
   if [[ -n "$TARGET_VMID" ]]; then
+    if [[ -d "${PROXNIX_SITE_DIR}/containers/_template" ]]; then
+      mkdir -p "${root}/containers/_template"
+      cp -a "${PROXNIX_SITE_DIR}/containers/_template/." "${root}/containers/_template/"
+    fi
     if [[ -d "${PROXNIX_SITE_DIR}/containers/${TARGET_VMID}" ]]; then
       mkdir -p "${root}/containers/${TARGET_VMID}"
       cp -a "${PROXNIX_SITE_DIR}/containers/${TARGET_VMID}/." "${root}/containers/${TARGET_VMID}/"
@@ -439,6 +443,8 @@ publish_host() {
 publish_vmid_host() {
   local host="$1" vmid="$2" tree="$3"
   local report=""
+  local template_source_dir="${tree}/containers/_template"
+  local template_remote_dir="${PROXNIX_REMOTE_DIR}/containers/_template"
   local source_dir="${tree}/containers/${vmid}"
   local remote_dir="${PROXNIX_REMOTE_DIR}/containers/${vmid}"
   local source_private_dir="${tree}/private/containers/${vmid}"
@@ -455,6 +461,10 @@ publish_vmid_host() {
     info "Publishing container ${vmid} to ${host}"
   fi
   ensure_remote_dirs "$host"
+
+  if [[ -d "$template_source_dir" ]]; then
+    sync_path "${template_source_dir}/" "$host" "${template_remote_dir}/" "$report"
+  fi
 
   if [[ -d "$source_dir" ]]; then
     sync_path "${source_dir}/" "$host" "${remote_dir}/" "$report"

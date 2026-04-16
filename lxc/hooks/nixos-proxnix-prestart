@@ -6,16 +6,17 @@
 # the PVE config is available, but before the rootfs mount is required.
 #
 # This hook does not touch the guest rootfs directly. It stages the desired
-# state under /run/proxnix/<vmid>/ for the matching mount hook to copy into the
-# mounted rootfs:
+# state under /run/proxnix/<vmid>/ for the matching mount hook to bind-mount
+# into the guest rootfs read-only where appropriate:
 #   rendered/configuration.nix
 #   rendered/managed/{base,common,proxmox,user}.nix
+#   rendered/managed/_template/          selected shared Nix template trees
 #   rendered/managed/dropins/*.nix
 #   runtime/systemd/*.service
 #   runtime/bin/*.{sh,py}
 #   quadlet/                             recursive Quadlet source tree
 #   secrets/{container,shared}.sops.yaml
-#   keys/{identity,shared_identity.txt}    transient plaintext guest identities
+#   secrets/{identity,shared_identity}   transient plaintext guest identities
 #   meta/{current-config-hash,vmid,proxnix-apply-config.service}
 #
 # Managed Nix files are hashed from the rendered tree only. The guest-side
@@ -46,14 +47,17 @@ fi
 source "$COMMON_LIB"
 
 PVE_CONF_TO_NIX="${PROXNIX_LIB_DIR}/pve-conf-to-nix.py"
+CONTAINER_TEMPLATE_DIR="${NIXLXC_DIR}/containers/_template"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
+TEMPLATE_SELECTOR_DIR="${CONTAINER_DIR}/templates"
 DROPIN_DIR="${CONTAINER_DIR}/dropins"
 QUADLET_SOURCE_DIR="${CONTAINER_DIR}/quadlets"
 STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
 MANAGED_DROPIN_DIR="${MANAGED_DIR}/dropins"
+MANAGED_TEMPLATE_DIR="${MANAGED_DIR}/_template"
 QUADLET_DIR="${STAGE_DIR}/quadlet"
 RUNTIME_DIR="${STAGE_DIR}/runtime"
 RUNTIME_SYSTEMD_DIR="${RUNTIME_DIR}/systemd"
@@ -80,8 +84,6 @@ if ! command -v sops >/dev/null 2>&1; then
     exit 1
 fi
 
-KEYS_STAGE_DIR="${STAGE_DIR}/keys"
-
 cleanup_stage
 mkdir -p \
     "$MANAGED_DROPIN_DIR" \
@@ -89,7 +91,6 @@ mkdir -p \
     "$RUNTIME_SYSTEMD_DIR" \
     "$RUNTIME_BIN_DIR" \
     "$SECRETS_STAGE_DIR" \
-    "$KEYS_STAGE_DIR" \
     "$META_DIR"
 
 for f in "${PROXNIX_SHARED_FILES[@]}"; do
@@ -124,6 +125,27 @@ fi
 
 if [[ -d "$QUADLET_SOURCE_DIR" ]]; then
     cp -a "${QUADLET_SOURCE_DIR}/." "$QUADLET_DIR/"
+fi
+
+if [[ -d "$TEMPLATE_SELECTOR_DIR" ]]; then
+    if [[ ! -d "$CONTAINER_TEMPLATE_DIR" ]]; then
+        log "ERROR: ${TEMPLATE_SELECTOR_DIR} exists but ${CONTAINER_TEMPLATE_DIR} is missing."
+        exit 1
+    fi
+
+    while IFS= read -r -d '' selector; do
+        selector_name="$(basename "$selector")"
+        template_name="${selector_name%.template}"
+        template_source="${CONTAINER_TEMPLATE_DIR}/${template_name}"
+
+        if [[ ! -d "$template_source" ]]; then
+            log "ERROR: selected template not found: ${template_source}"
+            exit 1
+        fi
+
+        mkdir -p "$MANAGED_TEMPLATE_DIR"
+        cp -a "$template_source" "${MANAGED_TEMPLATE_DIR}/${template_name}"
+    done < <(find "$TEMPLATE_SELECTOR_DIR" -maxdepth 1 -type f -name '*.template' -print0 2>/dev/null | sort -z)
 fi
 
 if [[ -d "$DROPIN_DIR" ]]; then
@@ -197,7 +219,7 @@ printf '%s' "$VMID" > "${META_DIR}/vmid"
 
 CONTAINER_IDENTITY_STORE_PATH="$(proxnix_container_age_identity_store_path "$VMID")"
 if [[ -f "$CONTAINER_IDENTITY_STORE_PATH" ]]; then
-    if ! proxnix_decrypt_host_identity_store_to_file "$CONTAINER_IDENTITY_STORE_PATH" "${KEYS_STAGE_DIR}/identity"; then
+    if ! proxnix_decrypt_host_identity_store_to_file "$CONTAINER_IDENTITY_STORE_PATH" "${SECRETS_STAGE_DIR}/identity"; then
         log "ERROR: failed to decrypt host-relay container identity: ${CONTAINER_IDENTITY_STORE_PATH}"
         exit 1
     fi
@@ -205,7 +227,7 @@ fi
 
 SHARED_IDENTITY_STORE_PATH="$(proxnix_shared_age_identity_store_path)"
 if [[ -f "$SHARED_IDENTITY_STORE_PATH" ]]; then
-    if ! proxnix_decrypt_host_identity_store_to_file "$SHARED_IDENTITY_STORE_PATH" "${KEYS_STAGE_DIR}/shared_identity.txt"; then
+    if ! proxnix_decrypt_host_identity_store_to_file "$SHARED_IDENTITY_STORE_PATH" "${SECRETS_STAGE_DIR}/shared_identity"; then
         log "ERROR: failed to decrypt host-relay shared identity: ${SHARED_IDENTITY_STORE_PATH}"
         exit 1
     fi
@@ -226,8 +248,8 @@ if [[ -n "$HOST_SUBUID" && "$HOST_SUBUID" =~ ^[0-9]+$ ]]; then
 else
     log "WARNING: could not determine container subuid from ${PVE_CONF}; staging is world-readable"
     chmod -R a+rX "${STAGE_DIR}"
-    chmod 644 "${KEYS_STAGE_DIR}/identity" \
-              "${KEYS_STAGE_DIR}/shared_identity.txt" 2>/dev/null || true
+    chmod 644 "${SECRETS_STAGE_DIR}/identity" \
+              "${SECRETS_STAGE_DIR}/shared_identity" 2>/dev/null || true
 fi
 
 trap - EXIT

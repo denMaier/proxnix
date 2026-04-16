@@ -44,6 +44,43 @@ Supported file types:
 | `*.container`, `*.volume`, `*.network`, `*.pod`, `*.image`, `*.build` | Treated as Quadlet units |
 | Subdirectories | Copied into the managed drop-ins tree (for Nix files or assets they reference) |
 
+Top-level `dropins/*.nix` files are still the auto-imported entrypoints. proxnix
+does not auto-import `dropins/<dir>/default.nix`; use subdirectories for assets
+or import them explicitly from a top-level drop-in.
+
+### `containers/_template/`
+
+`containers/_template/` is an optional shared host-side template tree for
+managed Nix snippets that should be visible to more than one container.
+
+Templates are selected per-container by marker files under
+`containers/<vmid>/templates/*.template`.
+
+For example:
+
+```text
+containers/
+  _template/
+    postgres-common/
+      default.nix
+  123/
+    templates/
+      postgres-common.template
+    dropins/
+      app.nix
+```
+
+The marker file just selects which shared template tree proxnix stages into
+`/etc/nixos/managed/_template/` for that guest. Your container drop-in still
+imports it explicitly, for example:
+
+```nix
+imports = [ ../_template/postgres-common ];
+```
+
+Using `default.nix` inside a template directory keeps the import short while
+still allowing each template to carry helper files beside it.
+
 ### `quadlets/`
 
 Use `quadlets/` for the main Podman workload tree.

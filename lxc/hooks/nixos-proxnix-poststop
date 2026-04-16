@@ -1,10 +1,10 @@
 #!/bin/bash
 # LXC post-stop hook: remove any proxnix staging artefacts left for this container.
 #
-# Normally the mount hook wipes the staging dir before exiting. This hook covers
-# the case where the container failed to start (so the mount hook never ran) or
-# where the mount hook itself aborted partway through, leaving decrypted key
-# material under /run/proxnix/<vmid>/keys/.
+# The mount hook leaves the staging dir in place for the container lifetime
+# because read-only bind mounts may use it as their source. This hook removes
+# that staged state after the container stops, and also covers the case where
+# the container failed to start after pre-start rendered the tree.
 
 set -uo pipefail
 

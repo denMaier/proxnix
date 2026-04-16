@@ -31,9 +31,9 @@ That gives proxnix these properties:
                          ▼
   ┌─────────────────────────────────────────────┐
   │  2. mount hook (host, writes to guest rootfs)│
-  │     Copy rendered config → /etc/nixos/        │
-  │     Copy secrets → /etc/proxnix/secrets/      │
-  │     Copy Quadlets → /etc/containers/systemd/  │
+  │     Bind mounted config → /etc/nixos/         │
+  │     Bind mounted secrets → /etc/proxnix/secrets/ │
+  │     Bind mounted Quadlets → /etc/containers/systemd/ │
   │     Install proxnix-apply-config service      │
   │     Reconcile Podman secrets.json             │
   └──────────────────────┬──────────────────────┘
@@ -73,21 +73,27 @@ Important stage subtrees:
 |------|----------|
 | `rendered/configuration.nix` | NixOS entrypoint |
 | `rendered/managed/{base,common,security-policy,proxmox}.nix` | Core managed modules |
+| `rendered/managed/_template/` | Selected shared Nix templates from `containers/_template/` |
 | `rendered/managed/dropins/` | Extra Nix modules from host `dropins/` |
 | `runtime/systemd/` | Attached systemd units from host `dropins/*.service` |
 | `runtime/bin/` | Scripts from host `dropins/*.{sh,py}` |
 | `quadlet/` | Quadlet unit files and app config |
 | `secrets/` | Encrypted SOPS YAML stores |
-| `keys/` | Shared SSH-backed age identity (if configured) |
+| `secrets/{identity,shared_identity}` | Decrypted guest age identities (if configured) |
 | `meta/` | Config hash, VMID, bootstrap marker |
 
-The pre-start hook copies the node-local managed Nix files, runs `pve-conf-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret stores, and computes a hash of the rendered managed tree.
+The pre-start hook copies the node-local managed Nix files, runs
+`pve-conf-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret
+stores plus any selected shared templates, and computes a hash of the rendered
+managed tree.
 
 ### 3. Mount hook syncs the stage into the guest rootfs
 
 The mount hook is the only proxnix hook that writes into the guest filesystem.
+For host-rendered config trees and secret files, it now prefers read-only bind
+mounts over copying.
 
-It copies the staged assets into places such as:
+It exposes the staged assets in places such as:
 
 | Stage source | Guest destination |
 |-------------|-------------------|
@@ -96,10 +102,8 @@ It copies the staged assets into places such as:
 | `runtime/systemd/*.service` | `/etc/systemd/system.attached/` |
 | `runtime/bin/*.{sh,py}` | `/usr/local/bin/` |
 | `quadlet/*.container` etc. | `/etc/containers/systemd/` |
-| `quadlet/` (full tree) | `/etc/proxnix/quadlets/` |
-| `secrets/*.sops.yaml` | `/etc/proxnix/secrets/` |
-| `keys/identity` | `/etc/proxnix/secrets/identity` |
-| `keys/shared_identity.txt` | `/etc/proxnix/secrets/shared_identity` |
+| `quadlet/` top-level entries | `/etc/proxnix/quadlets/` |
+| `secrets/*` | `/etc/proxnix/secrets/` |
 
 It also installs a generated `proxnix-apply-config` service and runner inside the guest.
 

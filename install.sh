@@ -125,9 +125,9 @@ do_install "$SCRIPT_DIR/lxc/config/nixos.userns.conf"  "$LXC_CONFIG_DIR/nixos.us
 
 # ── Host lifecycle hooks ──────────────────────────────────────────────────────
 # pre-start renders desired state on the host into /run/proxnix/<vmid>/, scoped
-# to the container's subuid. The mount hook moves that staged state into the
-# mounted rootfs and removes the staging dir. The post-stop hook removes any
-# staging artefacts left behind if the container failed to start.
+# to the container's subuid. The mount hook bind-mounts that staged state into
+# the mounted rootfs where appropriate, and the post-stop hook removes the
+# staging dir after the container stops (or if start-up aborts).
 
 action "Lifecycle hooks → $LXC_HOOKS_DIR/"
 do_install "$SCRIPT_DIR/lxc/hooks/nixos-proxnix-prestart" \

@@ -1,10 +1,10 @@
 #!/bin/bash
-# LXC mount hook: copy proxnix's rendered state into the mounted guest rootfs.
+# LXC mount hook: expose proxnix's rendered state inside the mounted guest rootfs.
 #
 # Consumes the staging directory produced by nixos-proxnix-prestart under
-# /run/proxnix/<vmid>/ and syncs it into the mounted rootfs exposed at
-# $LXC_ROOTFS_MOUNT. This hook is the only proxnix hook that writes into the
-# guest filesystem.
+# /run/proxnix/<vmid>/ and bind-mounts the host-rendered state into the mounted
+# rootfs exposed at $LXC_ROOTFS_MOUNT. This hook is the only proxnix hook that
+# writes into the guest filesystem.
 
 set -uo pipefail
 umask 022  # ensure files written into the container rootfs have sane default permissions
@@ -31,6 +31,94 @@ fi
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
 
+bind_ro_file() {
+    local src="$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if mountpoint -q "$dest" 2>/dev/null; then
+        umount "$dest"
+    fi
+    rm -f "$dest"
+    : > "$dest"
+    mount --bind "$src" "$dest"
+    mount -o remount,bind,ro "$dest"
+}
+
+bind_ro_dir() {
+    local src="$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if mountpoint -q "$dest" 2>/dev/null; then
+        umount "$dest"
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    mount --bind "$src" "$dest"
+    mount -o remount,bind,ro "$dest"
+}
+
+sync_bound_file_manifest() {
+    local src_dir="$1" dest_dir="$2" manifest="$3"
+    shift 3
+    local find_expr=("$@")
+    local current_manifest="" name src dest
+
+    if [[ -f "$manifest" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            if [[ ! -f "${src_dir}/${name}" ]]; then
+                dest="${dest_dir}/${name}"
+                if mountpoint -q "$dest" 2>/dev/null; then
+                    umount "$dest"
+                fi
+                rm -f "$dest"
+            fi
+        done < "$manifest"
+    fi
+
+    if [[ -d "$src_dir" ]]; then
+        while IFS= read -r -d '' src; do
+            name="$(basename "$src")"
+            dest="${dest_dir}/${name}"
+            bind_ro_file "$src" "$dest"
+            current_manifest+="${name}"$'\n'
+        done < <(find "$src_dir" -maxdepth 1 -type f "${find_expr[@]}" -print0 2>/dev/null | sort -z)
+    fi
+
+    proxnix_write_text_if_changed "$current_manifest" "$manifest" "644" >/dev/null || true
+}
+
+sync_bound_entry_manifest() {
+    local src_dir="$1" dest_dir="$2" manifest="$3"
+    local current_manifest="" name src dest
+
+    if [[ -f "$manifest" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            if [[ ! -e "${src_dir}/${name}" ]]; then
+                dest="${dest_dir}/${name}"
+                if mountpoint -q "$dest" 2>/dev/null; then
+                    umount "$dest"
+                fi
+                rm -rf "$dest"
+            fi
+        done < "$manifest"
+    fi
+
+    if [[ -d "$src_dir" ]]; then
+        while IFS= read -r -d '' src; do
+            name="$(basename "$src")"
+            dest="${dest_dir}/${name}"
+            if [[ -d "$src" ]]; then
+                bind_ro_dir "$src" "$dest"
+            else
+                bind_ro_file "$src" "$dest"
+            fi
+            current_manifest+="${name}"$'\n'
+        done < <(find "$src_dir" -mindepth 1 -maxdepth 1 ! -name '.jj' ! -name '.git' -print0 2>/dev/null | sort -z)
+    fi
+
+    proxnix_write_text_if_changed "$current_manifest" "$manifest" "644" >/dev/null || true
+}
+
 STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 RENDERED_DIR="${STAGE_DIR}/rendered"
 MANAGED_DIR="${RENDERED_DIR}/managed"
@@ -41,11 +129,9 @@ RUNTIME_BIN_DIR="${RUNTIME_DIR}/bin"
 QUADLET_ROOT_DIR="${ROOTFS}/etc/proxnix/quadlets"
 QUADLET_SYSTEMD_DIR="${ROOTFS}/etc/containers/systemd"
 SECRETS_STAGE_DIR="${STAGE_DIR}/secrets"
-KEYS_STAGE_DIR="${STAGE_DIR}/keys"
 META_DIR="${STAGE_DIR}/meta"
 DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${META_DIR}/current-config-hash" 2>/dev/null || true)"
 CURRENT_CONFIG_HASH=""
-needs_managed_sync=0
 
 if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
     log "ERROR: rootfs mount not accessible."
@@ -96,24 +182,14 @@ else
 fi
 
 CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${ROOTFS}/etc/proxnix/current-config-hash" 2>/dev/null || true)"
-if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" \
-   || ! -f "${ROOTFS}/etc/nixos/configuration.nix" \
-   || ! -d "${ROOTFS}/etc/nixos/managed" ]]; then
-    needs_managed_sync=1
-fi
-
-if [[ $needs_managed_sync -eq 1 ]]; then
-    rm -rf "${ROOTFS}/etc/nixos/managed"
-    mkdir -p "${ROOTFS}/etc/nixos/managed"
-    cp "${RENDERED_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix"
-    cp -a "${MANAGED_DIR}/." "${ROOTFS}/etc/nixos/managed/"
-    rm -f \
-        "${ROOTFS}/etc/nixos/base.nix" \
-        "${ROOTFS}/etc/nixos/common.nix" \
-        "${ROOTFS}/etc/nixos/proxmox.nix"
-    rm -rf "${ROOTFS}/etc/nixos/dropins"
-    proxnix_set_tree_readonly "${ROOTFS}/etc/nixos/managed"
-    chmod 0444 "${ROOTFS}/etc/nixos/configuration.nix"
+bind_ro_file "${RENDERED_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix"
+bind_ro_dir "$MANAGED_DIR" "${ROOTFS}/etc/nixos/managed"
+rm -f \
+    "${ROOTFS}/etc/nixos/base.nix" \
+    "${ROOTFS}/etc/nixos/common.nix" \
+    "${ROOTFS}/etc/nixos/proxmox.nix"
+rm -rf "${ROOTFS}/etc/nixos/dropins"
+if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" ]]; then
     log "Updated managed NixOS config (hash ${DESIRED_CONFIG_HASH})"
 else
     log "Managed NixOS config unchanged (hash ${DESIRED_CONFIG_HASH})"
@@ -122,44 +198,10 @@ proxnix_write_text_if_changed "${DESIRED_CONFIG_HASH}" "${ROOTFS}/etc/proxnix/cu
 
 SYSTEMD_MANIFEST="${ROOTFS}/etc/proxnix/managed-systemd-attached.list"
 BIN_MANIFEST="${ROOTFS}/etc/proxnix/managed-local-bin.list"
-
-if [[ -f "$SYSTEMD_MANIFEST" ]]; then
-    while IFS= read -r name; do
-        [[ -n "$name" ]] || continue
-        if [[ ! -f "${RUNTIME_SYSTEMD_DIR}/${name}" ]]; then
-            rm -f "${ROOTFS}/etc/systemd/system.attached/${name}"
-        fi
-    done < "$SYSTEMD_MANIFEST"
-fi
-
-current_systemd_manifest=""
-if [[ -d "$RUNTIME_SYSTEMD_DIR" ]]; then
-    while IFS= read -r -d '' f; do
-        name="$(basename "$f")"
-        proxnix_write_if_changed "$f" "${ROOTFS}/etc/systemd/system.attached/${name}" "644" >/dev/null || true
-        current_systemd_manifest+="${name}"$'\n'
-    done < <(find "$RUNTIME_SYSTEMD_DIR" -maxdepth 1 -type f -name '*.service' -print0 2>/dev/null | sort -z)
-fi
-proxnix_write_text_if_changed "$current_systemd_manifest" "$SYSTEMD_MANIFEST" "644" >/dev/null || true
-
-if [[ -f "$BIN_MANIFEST" ]]; then
-    while IFS= read -r name; do
-        [[ -n "$name" ]] || continue
-        if [[ ! -f "${RUNTIME_BIN_DIR}/${name}" ]]; then
-            rm -f "${ROOTFS}/usr/local/bin/${name}"
-        fi
-    done < "$BIN_MANIFEST"
-fi
-
-current_bin_manifest=""
-if [[ -d "$RUNTIME_BIN_DIR" ]]; then
-    while IFS= read -r -d '' f; do
-        name="$(basename "$f")"
-        proxnix_write_if_changed "$f" "${ROOTFS}/usr/local/bin/${name}" "755" >/dev/null || true
-        current_bin_manifest+="${name}"$'\n'
-    done < <(find "$RUNTIME_BIN_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null | sort -z)
-fi
-proxnix_write_text_if_changed "$current_bin_manifest" "$BIN_MANIFEST" "644" >/dev/null || true
+sync_bound_file_manifest "$RUNTIME_SYSTEMD_DIR" "${ROOTFS}/etc/systemd/system.attached" "$SYSTEMD_MANIFEST" \
+    -name '*.service'
+sync_bound_file_manifest "$RUNTIME_BIN_DIR" "${ROOTFS}/usr/local/bin" "$BIN_MANIFEST" \
+    \( -name '*.sh' -o -name '*.py' \)
 
 if [[ -f "${META_DIR}/vmid" ]]; then
     proxnix_write_if_changed "${META_DIR}/vmid" "${ROOTFS}/etc/proxnix/vmid" "644" >/dev/null || true
@@ -302,46 +344,15 @@ if [[ -e "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-con
     rm -f "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer"
 fi
 
-if [[ -d "$QUADLET_DIR" ]]; then
-    find "$QUADLET_ROOT_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name .jj \
-        ! -name .git \
-        -exec rm -rf {} +
-    cp -a "${QUADLET_DIR}/." "$QUADLET_ROOT_DIR/"
-    find "$QUADLET_ROOT_DIR" -type f \
-        \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
-        -delete
-    chmod -R a+rX "$QUADLET_ROOT_DIR"
+QUADLET_MANIFEST="${ROOTFS}/etc/proxnix/managed-quadlets.list"
+QUADLET_SYSTEMD_MANIFEST="${ROOTFS}/etc/proxnix/managed-quadlet-units.list"
+SECRETS_MANIFEST="${ROOTFS}/etc/proxnix/managed-secrets.list"
 
-    while IFS= read -r -d '' f; do
-        fname="$(basename "$f")"
-        systemd_dest="${QUADLET_SYSTEMD_DIR}/${fname}"
-        dest="$systemd_dest"
-        if proxnix_write_if_changed "$f" "$dest" "644"; then
-            log "Updated Quadlet drop-in: ${fname}"
-        fi
-    done < <(find "$QUADLET_DIR" -maxdepth 1 -type f \
-        \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) \
-        -print0 2>/dev/null)
-    log "Synced Quadlet config tree"
-fi
-
-proxnix_remove_missing_matching_files "$QUADLET_DIR" "$QUADLET_SYSTEMD_DIR" \
-    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \) || true
-
-if [[ -d "$SECRETS_STAGE_DIR" ]]; then
-    for secret_store in shared.sops.yaml container.sops.yaml; do
-        src="${SECRETS_STAGE_DIR}/${secret_store}"
-        dest="${ROOTFS}/etc/proxnix/secrets/${secret_store}"
-        if [[ -f "$src" ]]; then
-            if proxnix_write_if_changed "$src" "$dest" "400"; then
-                log "Updated secret store: ${secret_store}"
-            fi
-        else
-            rm -f "$dest"
-        fi
-    done
-fi
+sync_bound_entry_manifest "$QUADLET_DIR" "$QUADLET_ROOT_DIR" "$QUADLET_MANIFEST"
+sync_bound_file_manifest "$QUADLET_DIR" "$QUADLET_SYSTEMD_DIR" "$QUADLET_SYSTEMD_MANIFEST" \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \)
+sync_bound_file_manifest "$SECRETS_STAGE_DIR" "${ROOTFS}/etc/proxnix/secrets" "$SECRETS_MANIFEST" \
+    \( -name 'shared.sops.yaml' -o -name 'container.sops.yaml' -o -name 'identity' -o -name 'shared_identity' \)
 
 rm -f "${ROOTFS}/etc/containers/containers.conf.d/age-secrets.conf" 2>/dev/null || true
 find "${ROOTFS}/etc/secrets" -maxdepth 1 -type f -name '*.age' -delete 2>/dev/null || true
@@ -461,30 +472,6 @@ if changed:
     )
 PYEOF
 
-if [[ -f "${KEYS_STAGE_DIR}/identity" ]]; then
-    mkdir -p "${ROOTFS}/etc/proxnix/secrets"
-    chmod 700 "${ROOTFS}/etc/proxnix/secrets"
-    cp "${KEYS_STAGE_DIR}/identity" "${ROOTFS}/etc/proxnix/secrets/identity"
-    chmod 600 "${ROOTFS}/etc/proxnix/secrets/identity"
-    rm -f "${KEYS_STAGE_DIR}/identity"
-    log "Deployed staged container age identity"
-else
-    rm -f "${ROOTFS}/etc/proxnix/secrets/identity" "${ROOTFS}/etc/proxnix/secrets/identity.pub"
-fi
-
-# Deploy the shared SSH-backed age identity — every container gets it when one
-# exists.
-if [[ -f "${KEYS_STAGE_DIR}/shared_identity.txt" ]]; then
-    mkdir -p "${ROOTFS}/etc/proxnix/secrets"
-    chmod 700 "${ROOTFS}/etc/proxnix/secrets"
-    cp "${KEYS_STAGE_DIR}/shared_identity.txt" "${ROOTFS}/etc/proxnix/secrets/shared_identity"
-    chmod 600 "${ROOTFS}/etc/proxnix/secrets/shared_identity"
-    rm -f "${KEYS_STAGE_DIR}/shared_identity.txt"
-    log "Deployed shared SSH-backed age identity"
-else
-    rm -f "${ROOTFS}/etc/proxnix/secrets/shared_identity"
-fi
-
 STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${RENDERED_DIR}/configuration.nix" || true)"
 STATE_VERSION="${STATE_VERSION:-25.11}"
 cat > "${ROOTFS}/root/proxnix-bootstrap.sh" << EOF
@@ -514,6 +501,5 @@ fi
 EOF
 chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"
 
-rm -rf "${STAGE_DIR}"
-log "Mount-time sync complete."
+log "Mount-time bind setup complete."
 exit 0

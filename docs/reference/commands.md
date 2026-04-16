@@ -161,9 +161,9 @@ It pushes config and encrypted secret stores into `/var/lib/proxnix`, stores the
 
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 
-Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
+Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the shared `/var/lib/proxnix/containers/_template/` tree and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
 
-`--config-only --vmid <vmid>` syncs only `/var/lib/proxnix/containers/<vmid>/`.
+`--config-only --vmid <vmid>` syncs only `/var/lib/proxnix/containers/<vmid>/` plus `/var/lib/proxnix/containers/_template/`.
 
 `--container-config <vmid>` remains as a compatibility alias for `--config-only --vmid <vmid>`.
 

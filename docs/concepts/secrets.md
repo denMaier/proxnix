@@ -125,9 +125,9 @@ Host relay cache                           Guest
 
 The pre-start hook stages the relay cache into `/run/proxnix/<vmid>/`.
 
-During that step, the host uses `/etc/proxnix/host_relay_identity` to decrypt the host-relay-encrypted guest identity files into transient plaintext under `/run/proxnix/<vmid>/keys/`.
+During that step, the host uses `/etc/proxnix/host_relay_identity` to decrypt the host-relay-encrypted guest identity files into transient plaintext under `/run/proxnix/<vmid>/secrets/`.
 
-The mount hook copies the encrypted stores and those staged guest identities into the guest.
+The mount hook exposes the encrypted stores and those staged guest identities inside the guest via the staged mount-time delivery path.
 
 Inside the guest, proxnix keeps the container identity and shared identity as separate files and tries both when decrypting a secret store.
 
