@@ -36,9 +36,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://codeberg.org/maieretal/proxnix"
-Repository = "https://codeberg.org/maieretal/proxnix"
-Documentation = "https://codeberg.org/maieretal/proxnix/src/branch/main/docs"
+Homepage = "https://github.com/denMaier/proxnix"
+Repository = "https://github.com/denMaier/proxnix"
+Documentation = "https://github.com/denMaier/proxnix/tree/main/docs"
 
 [project.scripts]
 proxnix = "proxnix_workstation.cli:main"

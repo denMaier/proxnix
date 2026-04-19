@@ -10,7 +10,8 @@ This page maps every important proxnix path by role.
 | `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-uninstall` |
 | `host/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
 | `host/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
-| `host/remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `host/install.sh` |
+| `host/remote/github-install.sh` | Curl-friendly GitHub wrapper that downloads the repo archive and runs `host/install.sh` |
+| `host/remote/codeberg-install.sh` | Deprecated compatibility wrapper that forwards to `github-install.sh` |
 | `host/remote/install-host-package.sh` | Helper-script style installer for the published `proxnix-host` Debian package |
 | `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
@@ -62,6 +63,7 @@ Current top-level layout:
 │   ├── ansible/install.yml
 │   ├── inventory.proxmox.ini
 │   ├── packaging/
+│   ├── remote/github-install.sh
 │   ├── remote/codeberg-install.sh
 │   ├── lxc/
 │   ├── system/

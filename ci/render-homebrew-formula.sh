@@ -28,8 +28,8 @@ die() {
 version="$(<"${ROOT_DIR}/VERSION")"
 sha256=""
 output=""
-repo_host="${PROXNIX_REPO_HOST:-https://codeberg.org}"
-repo_owner="${PROXNIX_REPO_OWNER:-maieretal}"
+repo_host="${PROXNIX_REPO_HOST:-https://github.com}"
+repo_owner="${PROXNIX_REPO_OWNER:-denMaier}"
 repo_name="${PROXNIX_REPO_NAME:-proxnix}"
 
 while [[ $# -gt 0 ]]; do

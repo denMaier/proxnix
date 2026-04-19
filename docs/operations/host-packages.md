@@ -17,13 +17,13 @@ For the tag-driven release flow, see [Releases](releases.md).
 On the Proxmox host:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
 ```
 
 Install a specific version:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
 ```
 
 The helper script installer:

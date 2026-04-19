@@ -47,14 +47,16 @@ cp host/ansible/ai-agent-deploy.vars.example.yml host/ansible/ai-agent-deploy.va
 ansible-playbook -i host/inventory.proxmox.ini host/ansible/ai-agent-deploy.yml -e @host/ansible/ai-agent-deploy.vars.yml
 ```
 
-### `host/remote/codeberg-install.sh`
+### `host/remote/github-install.sh`
 
 Curl-friendly wrapper for `install.sh`.
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)"
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)" -- --dry-run
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)" -- --dry-run
 ```
+
+`host/remote/codeberg-install.sh` remains as a deprecated compatibility wrapper.
 
 ### `host/remote/install-host-package.sh`
 
@@ -62,8 +64,8 @@ Canonical host helper-script install. It resolves and installs the published
 `proxnix-host` Debian package for the current node architecture:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
 ```
 
 ### `host/packaging/package-deb.sh`

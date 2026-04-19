@@ -65,13 +65,13 @@ installs it with `apt`.
 Install the latest tagged release directly on the Proxmox node:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
 ```
 
 Install a specific version:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
 ```
 
 This keeps the user-facing install to one command while retaining package-owned
@@ -102,13 +102,13 @@ See [Host Packages](../operations/host-packages.md).
 ### Option C: Run the remote bootstrapper
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)"
 ```
 
 Use `--dry-run` to preview what would be installed without writing anything:
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)" -- --dry-run
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)" -- --dry-run
 ```
 
 ### Option D: Run the shell installer from a local checkout

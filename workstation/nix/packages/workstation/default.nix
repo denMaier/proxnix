@@ -100,7 +100,7 @@ EOF
 
       meta = {
         description = "proxnix workstation CLI and TUI tools";
-        homepage = "https://codeberg.org/maieretal/proxnix";
+        homepage = "https://github.com/denMaier/proxnix";
         license = lib.licenses.mit;
         platforms = lib.platforms.unix;
         inherit mainProgram;
