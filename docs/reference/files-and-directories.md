@@ -11,7 +11,6 @@ This page maps every important proxnix path by role.
 | `host/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
 | `host/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
 | `host/remote/github-install.sh` | Curl-friendly GitHub wrapper that downloads the repo archive and runs `host/install.sh` |
-| `host/remote/codeberg-install.sh` | Deprecated compatibility wrapper that forwards to `github-install.sh` |
 | `host/remote/install-host-package.sh` | Helper-script style installer for the published `proxnix-host` Debian package |
 | `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
@@ -47,8 +46,8 @@ This page maps every important proxnix path by role.
 | `workstation/src/` | Publishable Python package source |
 | `workstation/apps/ProxnixManager/` | SwiftUI macOS app |
 | `packaging/homebrew/` | Homebrew tap scaffold for `ProxnixManager` |
-| `.forgejo/workflows/host-packages.yml` | Self-hosted Forgejo Actions workflow for host Debian package builds |
-| `.forgejo/workflows/workstation-packages.yml` | Self-hosted Forgejo Actions workflow for workstation Python package builds and PyPI publishing |
+| `.github/workflows/host-packages.yml` | GitHub Actions workflow for host Debian package builds and GitHub release assets |
+| `.github/workflows/pypi-publish.yml` | GitHub Actions workflow for workstation Python package builds and PyPI publishing |
 | `.githooks/` | Repo-managed git hooks, currently release-tag validation on push |
 | `docs/ai/` | AI-agent-focused reference notes and evaluations |
 | `docs/` | Human-facing documentation site |
@@ -64,7 +63,6 @@ Current top-level layout:
 │   ├── inventory.proxmox.ini
 │   ├── packaging/
 │   ├── remote/github-install.sh
-│   ├── remote/codeberg-install.sh
 │   ├── lxc/
 │   ├── system/
 │   ├── systemd/

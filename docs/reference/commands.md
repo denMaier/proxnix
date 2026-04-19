@@ -56,8 +56,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/ho
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)" -- --dry-run
 ```
 
-`host/remote/codeberg-install.sh` remains as a deprecated compatibility wrapper.
-
 ### `host/remote/install-host-package.sh`
 
 Canonical host helper-script install. It resolves and installs the published

@@ -93,19 +93,10 @@ Published relay-cache data remains outside the package payload:
 
 ## CI publishing
 
-The package can be built and published from the self-hosted Forgejo Actions
-workflow at `.forgejo/workflows/host-packages.yml`.
+The package is built and published from the GitHub Actions workflow at
+`.github/workflows/host-packages.yml`.
 
-Published package name:
+Tagged releases upload these assets to the matching GitHub release:
 
-- `proxnix-host-deb`
-- `proxnix-host-meta`
-
-Published versions:
-
-- tags publish as the tag name
-- non-tag builds publish as `sha-<12-char-commit>`
-
-Tagged releases also refresh `proxnix-host-meta/latest/proxnix-host-latest.env`,
-which is what the curl-friendly installer uses to resolve the latest stable
-host package.
+- `proxnix-host_<version>_<arch>.deb`
+- `SHA256SUMS-host.txt`

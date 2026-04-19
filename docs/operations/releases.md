@@ -4,7 +4,7 @@ The ergonomic release path is:
 
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
-3. let Forgejo publish the host package and the workstation Python package from the pushed tag
+3. let GitHub Actions publish the host package, the workstation Python package, and GitHub release assets from the pushed tag
 4. render and update the Homebrew tap formula for `ProxnixManager`
 
 ## Install the git hooks

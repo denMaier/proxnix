@@ -1,8 +1,7 @@
 # Workstation Packages
 
-The workstation tools can now be built and published from a self-hosted Linux
-Forgejo Actions runner. The workflow lives at
-`.forgejo/workflows/workstation-packages.yml`.
+The workstation tools are built and published from the GitHub Actions workflow
+at `.github/workflows/pypi-publish.yml`.
 
 For the tag-driven release flow, see [Releases](releases.md).
 
@@ -43,20 +42,11 @@ Runtime requirements still need to exist on the workstation:
 - `ssh`
 - `rsync`
 
-## Self-hosted runner labels
-
-Register one Forgejo runner with these labels:
-
-- `self-hosted`, `linux`, `proxnix-linux`
-
-The runner can stay on your own machine. Codeberg’s self-hosted Actions model
-uses outbound runner connections, so it does not need inbound network access.
-
 ## PyPI publishing
 
-Create a repository secret named `PYPI_TOKEN` containing a PyPI API token.
-
 Tagged releases publish `proxnix-workstation` to PyPI.
+This repo uses PyPI Trusted Publishing from GitHub Actions rather than a stored
+API token.
 
 The workflow validates that the pushed `v*` tag matches
 `workstation/pyproject.toml`:

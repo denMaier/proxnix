@@ -1,0 +1,61 @@
+name: host-packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional Git tag to attach host package assets to, for example v0.1.0"
+        required: false
+        type: string
+      package_version:
+        description: "Optional package version override, for example 0.1.0"
+        required: false
+        type: string
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve package version
+        run: |
+          if [ -n "${{ inputs.package_version }}" ]; then
+            echo "PACKAGE_VERSION=${{ inputs.package_version }}" >> "$GITHUB_ENV"
+          else
+            echo "PACKAGE_VERSION=$(./ci/package-version.sh)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build host Debian package
+        run: |
+          VERSION="$PACKAGE_VERSION" ./host/packaging/package-deb.sh
+          shasum -a 256 dist/proxnix-host_*.deb > dist/SHA256SUMS-host.txt
+
+      - name: Upload host package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxnix-host-dist-${{ env.PACKAGE_VERSION }}
+          path: |
+            dist/proxnix-host_*.deb
+            dist/SHA256SUMS-host.txt
+          if-no-files-found: error
+
+      - name: Publish host release assets
+        if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag="${RELEASE_TAG:-${GITHUB_REF_NAME}}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "Release ${tag}" --generate-notes
+          gh release upload "$tag" dist/proxnix-host_*.deb dist/SHA256SUMS-host.txt --clobber

@@ -7,21 +7,19 @@
 #   PROXNIX_PACKAGE_OWNER=myorg bash -c "$(curl -fsSL .../install-host-package.sh)"
 #
 # This is the canonical host bootstrap path. The user-facing script is fetched
-# from GitHub, while the underlying .deb artifacts are still downloaded from
-# the published package registry configured below.
+# from GitHub, and the underlying `.deb` artifacts are resolved from GitHub
+# release assets.
 
 set -euo pipefail
 
 SELF_NAME="${0##*/}"
 
-: "${PROXNIX_PACKAGE_SERVER:=https://codeberg.org}"
-: "${PROXNIX_PACKAGE_OWNER:=maieretal}"
-: "${PROXNIX_PACKAGE_NAME:=proxnix-host-deb}"
-: "${PROXNIX_PACKAGE_META_NAME:=proxnix-host-meta}"
+: "${PROXNIX_PACKAGE_SERVER:=https://api.github.com}"
+: "${PROXNIX_PACKAGE_OWNER:=denMaier}"
+: "${PROXNIX_PACKAGE_REPO:=proxnix}"
 
 VERSION=""
 DRY_RUN=0
-REGISTRY_VERSION=""
 
 die() {
   echo "ERROR: $*" >&2
@@ -36,8 +34,7 @@ Usage:
 Environment overrides:
   PROXNIX_PACKAGE_SERVER
   PROXNIX_PACKAGE_OWNER
-  PROXNIX_PACKAGE_NAME
-  PROXNIX_PACKAGE_META_NAME
+  PROXNIX_PACKAGE_REPO
 EOF
 }
 
@@ -80,18 +77,43 @@ resolve_arch() {
   map_arch "$arch"
 }
 
-parse_latest_metadata() {
-  local content="$1" key value line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    key="${line%%=*}"
-    value="${line#*=}"
-    case "$key" in
-      VERSION) LATEST_VERSION="$value" ;;
-      FILENAME) LATEST_FILENAME="$value" ;;
-      SHA256) LATEST_SHA256="$value" ;;
-    esac
-  done <<< "$content"
+resolve_release_json() {
+  local release_url="$1"
+  "$curl_bin" -fsSL \
+    -H "Accept: application/vnd.github+json" \
+    "$release_url"
+}
+
+parse_release_json() {
+  local release_json="$1" arch="$2"
+  python3 - <<'PY' "$release_json" "$arch"
+import json
+import re
+import sys
+
+payload = json.loads(sys.argv[1])
+arch = sys.argv[2]
+assets = payload.get("assets", [])
+deb_pattern = re.compile(rf"^proxnix-host_[^/]+_{re.escape(arch)}\.deb$")
+
+deb_asset = None
+sha_asset = None
+for asset in assets:
+    name = asset.get("name", "")
+    if deb_pattern.match(name):
+        deb_asset = asset
+    elif name == "SHA256SUMS-host.txt":
+        sha_asset = asset
+
+if deb_asset is None:
+    raise SystemExit(f"error: no proxnix-host release asset found for architecture {arch}")
+
+print(f"TAG_NAME={payload['tag_name']}")
+print(f"FILENAME={deb_asset['name']}")
+print(f"PACKAGE_URL={deb_asset['browser_download_url']}")
+if sha_asset is not None:
+    print(f"CHECKSUM_URL={sha_asset['browser_download_url']}")
+PY
 }
 
 while [[ $# -gt 0 ]]; do
@@ -125,30 +147,34 @@ apt_get_bin="$(pick_bin /usr/bin/apt-get /bin/apt-get || true)"
 arch="$(resolve_arch)"
 
 if [[ -z "$VERSION" ]]; then
-  latest_url="${PROXNIX_PACKAGE_SERVER%/}/api/packages/${PROXNIX_PACKAGE_OWNER}/generic/${PROXNIX_PACKAGE_META_NAME}/latest/proxnix-host-latest.env"
-  latest_content="$("$curl_bin" -fsSL "$latest_url")" || die "failed to fetch latest release metadata from ${latest_url}"
-  LATEST_VERSION=""
-  LATEST_FILENAME=""
-  LATEST_SHA256=""
-  parse_latest_metadata "$latest_content"
-  [[ -n "$LATEST_VERSION" ]] || die "latest metadata is missing VERSION"
-  VERSION="$LATEST_VERSION"
-  REGISTRY_VERSION="$LATEST_VERSION"
-  filename="${LATEST_FILENAME:-proxnix-host_${VERSION}_${arch}.deb}"
-  expected_sha256="${LATEST_SHA256:-}"
+  release_url="${PROXNIX_PACKAGE_SERVER%/}/repos/${PROXNIX_PACKAGE_OWNER}/${PROXNIX_PACKAGE_REPO}/releases/latest"
 else
-  if [[ "$VERSION" == sha-* || "$VERSION" == v* ]]; then
-    REGISTRY_VERSION="$VERSION"
+  if [[ "$VERSION" == v* ]]; then
+    VERSION_TAG="$VERSION"
   else
-    REGISTRY_VERSION="v${VERSION}"
+    VERSION_TAG="v${VERSION}"
   fi
-  filename="proxnix-host_${VERSION#v}_${arch}.deb"
-  expected_sha256=""
+  release_url="${PROXNIX_PACKAGE_SERVER%/}/repos/${PROXNIX_PACKAGE_OWNER}/${PROXNIX_PACKAGE_REPO}/releases/tags/${VERSION_TAG}"
 fi
 
-package_url="${PROXNIX_PACKAGE_SERVER%/}/api/packages/${PROXNIX_PACKAGE_OWNER}/generic/${PROXNIX_PACKAGE_NAME}/${REGISTRY_VERSION}/${filename}"
+release_json="$(resolve_release_json "$release_url")" || die "failed to fetch release metadata from ${release_url}"
+CHECKSUM_URL=""
+while IFS='=' read -r key value; do
+  case "$key" in
+    TAG_NAME) TAG_NAME="$value" ;;
+    FILENAME) filename="$value" ;;
+    PACKAGE_URL) package_url="$value" ;;
+    CHECKSUM_URL) CHECKSUM_URL="$value" ;;
+  esac
+done < <(parse_release_json "$release_json" "$arch")
+
+[[ -n "${TAG_NAME:-}" ]] || die "release metadata missing tag name"
+[[ -n "${filename:-}" ]] || die "release metadata missing package filename"
+[[ -n "${package_url:-}" ]] || die "release metadata missing package url"
+
 tmp_dir="$("$mktemp_bin" -d)"
 deb_path="${tmp_dir}/${filename}"
+checksum_path="${tmp_dir}/SHA256SUMS-host.txt"
 
 cleanup() {
   "$rm_bin" -rf "$tmp_dir"
@@ -164,9 +190,12 @@ fi
 
 "$curl_bin" -fsSL "$package_url" -o "$deb_path" || die "failed to download ${package_url}"
 
-if [[ -n "$expected_sha256" && -n "$sha256sum_bin" ]]; then
-  actual_sha256="$("$sha256sum_bin" "$deb_path" | awk '{print $1}')"
-  [[ "$actual_sha256" == "$expected_sha256" ]] || die "sha256 mismatch for ${filename}"
+if [[ -n "${CHECKSUM_URL:-}" && -n "$sha256sum_bin" ]]; then
+  "$curl_bin" -fsSL "$CHECKSUM_URL" -o "$checksum_path" || die "failed to download ${CHECKSUM_URL}"
+  (
+    cd "$tmp_dir"
+    grep " ${filename}$" "$checksum_path" | "$sha256sum_bin" --check --status
+  ) || die "sha256 mismatch for ${filename}"
 fi
 
 if [[ -n "$apt_bin" ]]; then
@@ -180,4 +209,4 @@ else
   die "neither apt nor dpkg found"
 fi
 
-echo "Installed proxnix-host ${VERSION#v}"
+echo "Installed proxnix-host ${TAG_NAME#v}"
