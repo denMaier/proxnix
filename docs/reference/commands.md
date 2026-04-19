@@ -127,7 +127,7 @@ Render the Homebrew tap formula for `ProxnixManager`:
 ```bash
 ./ci/render-homebrew-formula.sh --version 0.1.0
 ./ci/render-homebrew-formula.sh --version 0.1.0 --sha256 <sha256>
-./ci/render-homebrew-formula.sh --version 0.1.0 --output ../homebrew-proxnix/Formula/proxnix-manager.rb
+./ci/render-homebrew-formula.sh --version 0.1.0 --output ../homebrew-tap/Formula/proxnix-manager.rb
 ```
 
 ### `ci/bootstrap-workstation-venv.sh`

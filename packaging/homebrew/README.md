@@ -4,7 +4,7 @@
 install it with a single command:
 
 ```bash
-brew install <owner>/proxnix/proxnix-manager
+brew install denMaier/tap/proxnix-manager
 ```
 
 This repository keeps the formula scaffold here so the tap can be updated from
@@ -34,19 +34,23 @@ Write directly into a tap checkout:
 ```bash
 ./ci/render-homebrew-formula.sh \
   --version 0.1.0 \
-  --output ../homebrew-proxnix/Formula/proxnix-manager.rb
+  --output ../homebrew-tap/Formula/proxnix-manager.rb
 ```
 
 ## Recommended tap layout
 
-Create a separate public tap repository, ideally named `homebrew-proxnix`.
+Create a separate public tap repository. In this setup the live tap is:
+
+```text
+denMaier/homebrew-tap
+```
 
 The simplest flow is:
 
 1. tag a release in this repo
 2. render the matching formula with `ci/render-homebrew-formula.sh`
 3. commit the rendered formula into the tap repo
-4. users install with `brew install <owner>/proxnix/proxnix-manager`
+4. users install with `brew install denMaier/tap/proxnix-manager`
 
 If you want the shortest possible Homebrew syntax and easy ecosystem
 integration, publish the tap on GitHub. A Codeberg-hosted tap also works, but

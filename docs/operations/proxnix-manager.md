@@ -4,7 +4,7 @@
 a Homebrew tap so users can install it with one command:
 
 ```bash
-brew install <owner>/proxnix/proxnix-manager
+brew install denMaier/tap/proxnix-manager
 ```
 
 ## What the formula installs
@@ -48,12 +48,16 @@ Example:
 ```bash
 ./ci/render-homebrew-formula.sh \
   --version 0.1.0 \
-  --output ../homebrew-proxnix/Formula/proxnix-manager.rb
+  --output ../homebrew-tap/Formula/proxnix-manager.rb
 ```
 
 ## Recommended repository setup
 
-Use a dedicated public tap repository, ideally named `homebrew-proxnix`.
+The live tap repo is:
+
+```text
+denMaier/homebrew-tap
+```
 
 If you want the shortest Homebrew syntax and the least friction with the wider
 ecosystem, publish the tap on GitHub. A public GitHub mirror of the main
