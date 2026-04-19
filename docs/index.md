@@ -132,7 +132,9 @@ Common tasks:
 - restart a CT after changing host-side proxnix files
 - run `proxnix doctor` from the workstation or `proxnix-doctor` from the host
 - manage workstation-side secrets with `proxnix secrets`
-- build or install the host `.deb` package when updating the Proxmox-side runtime
+- run the host helper-script installer when bootstrapping a Proxmox node
+- use the raw host `.deb` when you want manual or offline package control
 - cut annotated `v*` release tags to publish host and workstation artifacts
+- refresh the Homebrew tap formula when releasing `ProxnixManager`
 
-See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
+See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [ProxnixManager](operations/proxnix-manager.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).

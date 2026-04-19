@@ -58,7 +58,8 @@ bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/r
 
 ### `host/remote/install-host-package.sh`
 
-Download and install the published `proxnix-host` Debian package:
+Canonical host helper-script install. It resolves and installs the published
+`proxnix-host` Debian package for the current node architecture:
 
 ```bash
 bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
@@ -106,6 +107,27 @@ Install or upgrade the workstation Python package:
 ```bash
 ./ci/install-workstation.sh
 ./ci/install-workstation.sh --version 1.2.3
+```
+
+For the normal end-user install, prefer:
+
+```bash
+pip install proxnix-workstation
+```
+
+That installs both:
+
+- `proxnix`
+- `proxnix-tui`
+
+### `ci/render-homebrew-formula.sh`
+
+Render the Homebrew tap formula for `ProxnixManager`:
+
+```bash
+./ci/render-homebrew-formula.sh --version 0.1.0
+./ci/render-homebrew-formula.sh --version 0.1.0 --sha256 <sha256>
+./ci/render-homebrew-formula.sh --version 0.1.0 --output ../homebrew-proxnix/Formula/proxnix-manager.rb
 ```
 
 ### `ci/bootstrap-workstation-venv.sh`

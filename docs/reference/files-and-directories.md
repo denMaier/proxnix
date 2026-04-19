@@ -11,7 +11,7 @@ This page maps every important proxnix path by role.
 | `host/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
 | `host/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
 | `host/remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `host/install.sh` |
-| `host/remote/install-host-package.sh` | Curl-friendly installer for the published `proxnix-host` Debian package |
+| `host/remote/install-host-package.sh` | Helper-script style installer for the published `proxnix-host` Debian package |
 | `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
 | `ci/project-version.sh` | Prints the canonical version from `VERSION` |
@@ -22,6 +22,7 @@ This page maps every important proxnix path by role.
 | `ci/release-tag.sh` | One-command annotated release tag creator and optional pusher |
 | `ci/install-git-hooks.sh` | Installs the repo-managed git hooks via `core.hooksPath` |
 | `ci/install-workstation.sh` | Installs or upgrades the workstation Python package with pip |
+| `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `ProxnixManager` from the template |
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/pyproject.toml` |
 | `host/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
 | `host/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
@@ -44,6 +45,7 @@ This page maps every important proxnix path by role.
 | `workstation/packaging/` | Workstation packaging scripts used by CI and release builds |
 | `workstation/src/` | Publishable Python package source |
 | `workstation/apps/ProxnixManager/` | SwiftUI macOS app |
+| `packaging/homebrew/` | Homebrew tap scaffold for `ProxnixManager` |
 | `.forgejo/workflows/host-packages.yml` | Self-hosted Forgejo Actions workflow for host Debian package builds |
 | `.forgejo/workflows/workstation-packages.yml` | Self-hosted Forgejo Actions workflow for workstation Python package builds and PyPI publishing |
 | `.githooks/` | Repo-managed git hooks, currently release-tag validation on push |
@@ -80,6 +82,7 @@ Current top-level layout:
 │   ├── nix/
 │   ├── packaging/
 │   └── src/
+├── packaging/homebrew/
 ├── ci/
 ├── .githooks/
 ├── docs/ai/

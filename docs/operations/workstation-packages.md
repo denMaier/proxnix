@@ -20,7 +20,7 @@ PyPI.
 Preferred install:
 
 ```bash
-python3 -m pip install --user --upgrade proxnix-workstation
+pip install proxnix-workstation
 ```
 
 Repo helper:
@@ -28,6 +28,14 @@ Repo helper:
 ```bash
 ./ci/install-workstation.sh
 ```
+
+That single package installs both the workstation CLI and the terminal UI:
+
+- `proxnix`
+- `proxnix-tui`
+
+Compatibility aliases such as `proxnix-publish` and `proxnix-secrets` are
+installed too.
 
 Runtime requirements still need to exist on the workstation:
 
@@ -85,6 +93,11 @@ Module outputs:
 
 - `inputs.proxnix.nixosModules.proxnix-workstation`
 - `inputs.proxnix.darwinModules.proxnix-workstation`
+
+## macOS app
+
+`ProxnixManager` is distributed separately through a Homebrew tap. See
+[ProxnixManager](proxnix-manager.md).
 
 ### NixOS example
 

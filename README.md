@@ -9,9 +9,10 @@ helpers, and baseline Nix modules. Site-specific data is meant to live in a
 separate workstation-owned site repo and gets published into `/var/lib/proxnix/`
 on each Proxmox node as a relay cache.
 
-For host installs, the preferred distribution path is now the published
-`proxnix-host` Debian package, consumed via the curl-friendly installer under
-`host/remote/`.
+For host installs, the preferred distribution path is the helper-script style
+entrypoint under `host/remote/`, which installs the published `proxnix-host`
+Debian package for you. The `.deb` remains the underlying package-managed
+upgrade and uninstall path.
 
 ## Repo layout
 

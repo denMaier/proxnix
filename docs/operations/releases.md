@@ -5,6 +5,7 @@ The ergonomic release path is:
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
 3. let Forgejo publish the host package and the workstation Python package from the pushed tag
+4. render and update the Homebrew tap formula for `ProxnixManager`
 
 ## Install the git hooks
 
@@ -106,6 +107,13 @@ Pushing a matching `v*` tag triggers:
 - [Workstation Packages](workstation-packages.md)
 
 Those workflows publish artifacts using the tag as the package version.
+
+The Homebrew tap remains a separate repo. After tagging a release here, render
+the matching formula with:
+
+```bash
+./ci/render-homebrew-formula.sh --version 0.1.0
+```
 
 ## Local dry runs
 

@@ -1,12 +1,14 @@
 # Host Packages
 
-The preferred host-side install path is now a Debian package:
+The preferred host-side install path is now a helper-script entrypoint that
+installs a Debian package:
 
+- entrypoint: `host/remote/install-host-package.sh`
 - package name: `proxnix-host`
 - artifact pattern: `proxnix-host_<version>_<arch>.deb`
 
-It installs the same host runtime assets as `host/install.sh`, but lets `apt`
-or `dpkg` own upgrades and removal.
+The helper script keeps the first install to one command, while `apt` or `dpkg`
+still own upgrades and removal underneath.
 
 For the tag-driven release flow, see [Releases](releases.md).
 
@@ -24,12 +26,17 @@ Install a specific version:
 bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
 ```
 
-The installer:
+The helper script installer:
 
 - resolves the matching `.deb` for the host architecture
 - downloads it from the Codeberg package registry
 - verifies the checksum when latest-release metadata is available
 - installs it with `apt`
+
+## Manual Debian package path
+
+If you want the raw package artifact for offline install, testing, or manual
+administration, use the `.deb` directly.
 
 ## Build locally
 

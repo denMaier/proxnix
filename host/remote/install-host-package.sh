@@ -1,10 +1,13 @@
 #!/bin/bash
-# install-host-package.sh — curl-friendly installer for the published proxnix-host .deb
+# install-host-package.sh — helper-script style installer for the published proxnix-host .deb
 #
 # Examples:
 #   bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
 #   bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 1.2.3
 #   PROXNIX_PACKAGE_OWNER=myorg bash -c "$(curl -fsSL .../install-host-package.sh)"
+#
+# This is the canonical host bootstrap path. It keeps installation to one
+# command while still delegating upgrades and removal to the underlying .deb.
 
 set -euo pipefail
 

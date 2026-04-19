@@ -43,8 +43,20 @@ Generated local-only paths:
 ## Install
 
 ```bash
-python3 -m pip install --user --upgrade proxnix-workstation
+pip install proxnix-workstation
 ```
+
+That installs both the workstation CLI and the terminal UI:
+
+- `proxnix`
+- `proxnix-tui`
+
+The split commands remain available too:
+
+- `proxnix-publish`
+- `proxnix-secrets`
+- `proxnix-doctor`
+- `proxnix-lxc-exercise`
 
 Or with the repo helper:
 
@@ -124,3 +136,5 @@ python3 -m twine upload dist/*
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.
+- `ProxnixManager` is intended to ship separately from a Homebrew tap; see
+  `../docs/operations/proxnix-manager.md`.

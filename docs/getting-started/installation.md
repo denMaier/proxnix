@@ -4,7 +4,7 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 
 ## Checklist
 
-- [ ] Install proxnix on every Proxmox node, preferably from the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml` once from your control machine
+- [ ] Install proxnix on every Proxmox node, preferably from the helper-script entrypoint that installs the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml` once from your control machine
 - [ ] Create a separate workstation-owned site repo, or stop after workstation config if you only want a fresh host/bootstrap first
 - [ ] Configure your workstation for `proxnix-secrets` and `proxnix-publish`
 - [ ] Initialize the host relay identity
@@ -13,9 +13,11 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 ## What the node install does
 
 Every Proxmox node that may start proxnix-managed containers needs the same
-installed assets. You can put them there from the `proxnix-host` Debian
-package, by running `host/install.sh` directly on the node, or by using
-`host/ansible/install.yml` from an Ansible control machine over SSH.
+installed assets. The canonical path is the helper-script entrypoint, which
+downloads and installs the `proxnix-host` Debian package for the local
+architecture. You can also install the package manually, run `host/install.sh`
+directly on the node, or use `host/ansible/install.yml` from an Ansible
+control machine over SSH.
 
 It installs two kinds of assets:
 
@@ -54,9 +56,11 @@ Choose one of the supported installation paths. After installation, the node no
 longer depends on the original proxnix repo checkout for normal use or
 uninstall.
 
-### Option A: Install the Debian package
+### Option A: Run the host helper script
 
-The preferred host install path is the published `proxnix-host` Debian package.
+This is the preferred host install path. The helper script resolves the latest
+matching `proxnix-host` `.deb` for the node architecture, downloads it, and
+installs it with `apt`.
 
 Install the latest tagged release directly on the Proxmox node:
 
@@ -69,6 +73,11 @@ Install a specific version:
 ```bash
 bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
 ```
+
+This keeps the user-facing install to one command while retaining package-owned
+upgrades and removal underneath.
+
+### Option B: Install the Debian package manually
 
 If you want to build the `.deb` locally from the repo root:
 
@@ -90,7 +99,7 @@ apt remove proxnix-host
 
 See [Host Packages](../operations/host-packages.md).
 
-### Option B: Run the remote bootstrapper
+### Option C: Run the remote bootstrapper
 
 ```bash
 bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)"
@@ -102,7 +111,7 @@ Use `--dry-run` to preview what would be installed without writing anything:
 bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)" -- --dry-run
 ```
 
-### Option C: Run the shell installer from a local checkout
+### Option D: Run the shell installer from a local checkout
 
 ```bash
 git clone <this repo>
@@ -113,7 +122,7 @@ host/install.sh
 You can delete that checkout afterwards if you want. The installed node keeps
 its own `proxnix-uninstall` command.
 
-### Option D: Deploy with Ansible over SSH
+### Option E: Deploy with Ansible over SSH
 
 Run this from your workstation or another Ansible control machine, not from the
 target node itself. The playbook copies the proxnix files from your local repo
@@ -168,10 +177,10 @@ proxnix-site/
 
 ## Step 3: Configure your workstation
 
-Install the workstation CLI first:
+Install the workstation CLI and TUI first:
 
 ```bash
-python3 -m pip install --user --upgrade proxnix-workstation
+pip install proxnix-workstation
 ```
 
 Or with the repo helper:
@@ -222,16 +231,21 @@ You do not need to publish the live site repo in the same run.
 - `sops`
 - `python3`
 
-### Optional workstation TUI
-
-If you want a terminal UI for the workstation workflows, run:
+`pip install proxnix-workstation` installs both the unified `proxnix` CLI and
+the terminal UI entrypoint:
 
 ```bash
-workstation/bin/proxnix-tui
+proxnix
+proxnix-tui
 ```
 
-It wraps the common `proxnix-publish` and `proxnix-secrets` flows using the
-same workstation config file and site repo.
+### ProxnixManager on macOS
+
+`ProxnixManager` is intended to ship from a Homebrew tap so the macOS app can
+be installed with a single `brew install` command. This repo includes the tap
+formula scaffold under `packaging/homebrew/`.
+
+See [ProxnixManager](../operations/proxnix-manager.md).
 
 If you prefer Nix-managed installs on `nixos` or `nix-darwin`, this repo now
 exports `./workstation#proxnix-workstation` and

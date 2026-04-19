@@ -1,0 +1,106 @@
+class ProxnixManager < Formula
+  include Language::Python::Virtualenv
+
+  desc "macOS app and workstation helpers for proxnix"
+  homepage "{{HOMEPAGE}}"
+  url "{{URL}}"
+  sha256 "{{SHA256}}"
+  license "MIT"
+
+  depends_on :macos
+  depends_on "python@3.12"
+  depends_on "sops"
+
+  def install
+    python = Formula["python@3.12"].opt_bin/"python3.12"
+    venv = virtualenv_create(libexec/"venv", python)
+    venv.pip_install_and_link buildpath/"workstation"
+
+    app_source = buildpath/"workstation/apps/ProxnixManager"
+    system "swift", "build", "-c", "release", "--package-path", app_source
+
+    executable = app_source/".build/release/ProxnixManager"
+    raise "missing ProxnixManager executable at #{executable}" unless executable.exist?
+
+    app_dir = prefix/"Proxnix Manager.app"
+    contents_dir = app_dir/"Contents"
+    macos_dir = contents_dir/"MacOS"
+    resources_dir = contents_dir/"Resources"
+    bundled_bin_dir = resources_dir/"bin"
+
+    macos_dir.mkpath
+    bundled_bin_dir.mkpath
+
+    executable.install macos_dir/"ProxnixManager"
+
+    (contents_dir/"Info.plist").write <<~PLIST
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+        <key>CFBundleDevelopmentRegion</key>
+        <string>en</string>
+        <key>CFBundleExecutable</key>
+        <string>ProxnixManager</string>
+        <key>CFBundleIdentifier</key>
+        <string>org.proxnix.workstation.manager</string>
+        <key>CFBundleInfoDictionaryVersion</key>
+        <string>6.0</string>
+        <key>CFBundleName</key>
+        <string>Proxnix Manager</string>
+        <key>CFBundlePackageType</key>
+        <string>APPL</string>
+        <key>CFBundleShortVersionString</key>
+        <string>{{VERSION}}</string>
+        <key>CFBundleVersion</key>
+        <string>{{VERSION}}</string>
+        <key>LSMinimumSystemVersion</key>
+        <string>13.0</string>
+        <key>NSHighResolutionCapable</key>
+        <true/>
+      </dict>
+      </plist>
+    PLIST
+
+    %w[
+      proxnix
+      proxnix-publish
+      proxnix-secrets
+      proxnix-doctor
+      proxnix-lxc-exercise
+      proxnix-tui
+    ].each do |command|
+      ln_s bin/command, bundled_bin_dir/command
+    end
+
+    (bin/"proxnix-manager").write <<~SH
+      #!/bin/bash
+      exec "#{app_dir}/Contents/MacOS/ProxnixManager" "$@"
+    SH
+    chmod 0755, bin/"proxnix-manager"
+  end
+
+  def caveats
+    <<~EOS
+      Installed commands:
+        proxnix
+        proxnix-publish
+        proxnix-secrets
+        proxnix-doctor
+        proxnix-lxc-exercise
+        proxnix-tui
+        proxnix-manager
+
+      ProxnixManager looks for bundled proxnix scripts first, then falls back to
+      Homebrew and system paths.
+
+      Runtime tools expected from the system:
+        ssh
+        rsync
+    EOS
+  end
+
+  test do
+    assert_match "usage:", shell_output("#{bin}/proxnix --help 2>&1").downcase
+  end
+end

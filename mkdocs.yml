@@ -21,6 +21,7 @@ nav:
   - Operations:
       - Day 2 Operations: operations/day-2.md
       - Host Packages: operations/host-packages.md
+      - ProxnixManager: operations/proxnix-manager.md
       - Releases: operations/releases.md
       - Workstation Packages: operations/workstation-packages.md
       - Troubleshooting: operations/troubleshooting.md
