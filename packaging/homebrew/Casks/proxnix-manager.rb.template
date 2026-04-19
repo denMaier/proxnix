@@ -1,0 +1,26 @@
+cask "proxnix-manager" do
+  arch arm: "arm64", intel: "x86_64"
+
+  version "{{VERSION}}"
+  sha256 arm:   "{{SHA256_ARM64}}",
+         intel: "{{SHA256_X86_64}}"
+
+  url "{{DOWNLOAD_BASE}}/proxnix-manager-#{version}-macos-#{arch}.dmg"
+  name "Proxnix Manager"
+  desc "macOS GUI for proxnix"
+  homepage "{{HOMEPAGE}}"
+
+  depends_on formula: "python@3.12"
+  depends_on formula: "sops"
+  depends_on macos: ">= :ventura"
+
+  app "Proxnix Manager.app"
+
+  caveats do
+    <<~EOS
+      ProxnixManager expects these system tools to be available:
+        ssh
+        rsync
+    EOS
+  end
+end

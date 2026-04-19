@@ -242,8 +242,8 @@ proxnix-tui
 ### ProxnixManager on macOS
 
 `ProxnixManager` is intended to ship from a Homebrew tap so the macOS app can
-be installed with a single `brew install` command. This repo includes the tap
-formula scaffold under `packaging/homebrew/`.
+be installed with a single `brew install --cask` command. This repo includes
+the tap cask scaffold under `packaging/homebrew/`.
 
 See [ProxnixManager](../operations/proxnix-manager.md).
 

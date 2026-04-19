@@ -86,7 +86,7 @@ Module outputs:
 
 ## macOS app
 
-`ProxnixManager` is distributed separately through a Homebrew tap. See
+`ProxnixManager` is distributed separately through a Homebrew cask. See
 [ProxnixManager](proxnix-manager.md).
 
 ### NixOS example
