@@ -4,18 +4,18 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 
 ## Checklist
 
-- [ ] Install proxnix on every Proxmox node, either by running `./install.sh` locally on each node or by running `ansible-playbook -i inventory.proxmox.ini ansible/install.yml` once from your control machine
-- [ ] Create a separate workstation-owned site repo
+- [ ] Install proxnix on every Proxmox node, preferably from the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml` once from your control machine
+- [ ] Create a separate workstation-owned site repo, or stop after workstation config if you only want a fresh host/bootstrap first
 - [ ] Configure your workstation for `proxnix-secrets` and `proxnix-publish`
-- [ ] Initialize the shared identity if you plan to use shared secrets
+- [ ] Initialize the host relay identity
 - [ ] Publish the site repo to every Proxmox node that should relay it
 
 ## What the node install does
 
 Every Proxmox node that may start proxnix-managed containers needs the same
-installed assets. You can put them there either by running `install.sh`
-directly on the node or by using `ansible/install.yml` from an Ansible control
-machine over SSH.
+installed assets. You can put them there from the `proxnix-host` Debian
+package, by running `host/install.sh` directly on the node, or by using
+`host/ansible/install.yml` from an Ansible control machine over SSH.
 
 It installs two kinds of assets:
 
@@ -46,44 +46,100 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 - `/var/lib/proxnix/site.nix`
 - `/var/lib/proxnix/containers/`
 - `/etc/proxnix/host_relay_identity`
-- `/var/lib/proxnix/private/shared_age_identity.sops.yaml`
-- `/var/lib/proxnix/private/shared/`
 - `/var/lib/proxnix/private/containers/`
 
 ## Step 1: Install on the Proxmox host
 
-Choose one of the supported installation paths.
+Choose one of the supported installation paths. After installation, the node no
+longer depends on the original proxnix repo checkout for normal use or
+uninstall.
 
-### Option A: Run the shell installer directly
+### Option A: Install the Debian package
+
+The preferred host install path is the published `proxnix-host` Debian package.
+
+Install the latest tagged release directly on the Proxmox node:
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
+```
+
+Install a specific version:
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
+```
+
+If you want to build the `.deb` locally from the repo root:
+
+```bash
+./host/packaging/package-deb.sh
+```
+
+Then install it on the Proxmox node:
+
+```bash
+apt install ./dist/proxnix-host_<version>_<arch>.deb
+```
+
+Remove it later with:
+
+```bash
+apt remove proxnix-host
+```
+
+See [Host Packages](../operations/host-packages.md).
+
+### Option B: Run the remote bootstrapper
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)"
+```
+
+Use `--dry-run` to preview what would be installed without writing anything:
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)" -- --dry-run
+```
+
+### Option C: Run the shell installer from a local checkout
 
 ```bash
 git clone <this repo>
 cd proxnix
-./install.sh
+host/install.sh
 ```
 
-Use `--dry-run` to preview what would be installed without writing anything.
+You can delete that checkout afterwards if you want. The installed node keeps
+its own `proxnix-uninstall` command.
 
-### Option B: Deploy with Ansible over SSH
+### Option D: Deploy with Ansible over SSH
 
 Run this from your workstation or another Ansible control machine, not from the
 target node itself. The playbook copies the proxnix files from your local repo
 checkout to each remote Proxmox host over SSH.
 
 ```bash
-ansible-playbook -i inventory.proxmox.ini ansible/install.yml
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
 ```
 
-The example inventory in `inventory.proxmox.ini` already sets
-`ansible_connection=ssh` and `ansible_user=root`. Make sure your control
-machine has SSH access to the listed hosts.
+The example inventory in `host/inventory.proxmox.ini` already sets
+`ansible_connection=ssh` and `ansible_user=root`. `proxmox_cluster` is defined
+as a child group of `proxmox`, so either target works without inventory
+warnings. Make sure your control machine has SSH access to the listed hosts.
 
 By default the playbook targets the `proxmox` inventory group. Override that
 group when needed:
 
 ```bash
-ansible-playbook -i inventory.proxmox.ini ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
+
+If you want one playbook for host install plus workstation config, use one of
+the AI-oriented wrappers instead:
+
+- `host/ansible/ai-agent-bootstrap.yml` for install + host verification + workstation config, without publishing a live site repo
+- `host/ansible/ai-agent-deploy.yml` for the full publish flow
 
 ## Step 2: Create the workstation site repo
 
@@ -94,13 +150,14 @@ proxnix-site/
 ├── site.nix
 ├── containers/
 │   └── <vmid>/
-│       ├── dropins/
-│       └── quadlets/
+│       └── dropins/
 └── private/
     ├── host_relay_identity.sops.yaml
-    ├── shared_age_identity.sops.yaml
     ├── shared/
     │   └── secrets.sops.yaml
+    ├── groups/
+    │   └── <group>/
+    │       └── secrets.sops.yaml
     └── containers/
         └── <vmid>/
             ├── age_identity.sops.yaml
@@ -110,6 +167,26 @@ proxnix-site/
 `site.nix`, `containers/`, encrypted secret stores, and encrypted private identities all live here and can be Git-tracked independently of the install repo.
 
 ## Step 3: Configure your workstation
+
+Install the workstation CLI first:
+
+```bash
+python3 -m pip install --user --upgrade proxnix-workstation
+```
+
+Or with the repo helper:
+
+```bash
+./ci/install-workstation.sh
+```
+
+If you want to keep the tooling repo-local instead of changing the global
+Python environment, install it into `workstation/.venv` and use the wrappers
+under `workstation/bin/`:
+
+```bash
+./ci/bootstrap-workstation-venv.sh
+```
 
 Create `~/.config/proxnix/config`:
 
@@ -134,13 +211,32 @@ EOF
 | `PROXNIX_REMOTE_PRIV_DIR` | Relay cache private dir on the Proxmox host | `/var/lib/proxnix/private` |
 | `PROXNIX_REMOTE_HOST_RELAY_IDENTITY` | Host path for the plaintext host relay key | `/etc/proxnix/host_relay_identity` |
 
+If you only want a fresh host/bootstrap first, you can stop after rendering
+this config and verifying `proxnix-doctor --host-only` on the target nodes.
+You do not need to publish the live site repo in the same run.
+
 ### Required workstation tools
 
 - `ssh`
-- `ssh-keygen`
 - `rsync`
 - `sops`
 - `python3`
+
+### Optional workstation TUI
+
+If you want a terminal UI for the workstation workflows, run:
+
+```bash
+workstation/bin/proxnix-tui
+```
+
+It wraps the common `proxnix-publish` and `proxnix-secrets` flows using the
+same workstation config file and site repo.
+
+If you prefer Nix-managed installs on `nixos` or `nix-darwin`, this repo now
+exports `./workstation#proxnix-workstation` and
+`./workstation#proxnix-workstation-cli` via `workstation/flake.nix`. See
+[Workstation Packages](../operations/workstation-packages.md).
 
 ### Required Proxmox host runtime tool
 
@@ -152,12 +248,6 @@ Initialize the shared host relay identity once for the site:
 
 ```bash
 proxnix-secrets init-host-relay
-```
-
-Initialize the shared guest identity if you plan to use shared secrets:
-
-```bash
-proxnix-secrets init-shared
 ```
 
 Initialize a per-container identity explicitly when you want one before writing secrets:
@@ -193,25 +283,33 @@ This pushes:
 
 - `site.nix`
 - `containers/<vmid>/...`
-- encrypted secret stores
+- per-container compiled secret stores
 - the shared plaintext host relay key under `/etc/proxnix/host_relay_identity`
-- guest identities re-encrypted at rest for both the host relay key and the master recovery key under `/var/lib/proxnix/private/...`
+- container identities re-encrypted at rest for both the host relay key and the master recovery key under `/var/lib/proxnix/private/...`
 
 That means each Proxmox host persistently stores only one plaintext relay key. Guest identities remain encrypted at rest on the host and are decrypted only transiently during the pre-start staging flow. In practice the Proxmox host is still the trust boundary for secret relay.
 
 ## Upgrading proxnix files
 
 If the install repo changes `base.nix`, `common.nix`, `security-policy.nix`, or `configuration.nix`,
-reinstall proxnix on each node:
+reinstall proxnix on each node.
+
+If you are using the Debian package path, install the updated package:
 
 ```bash
-./install.sh
+apt install ./dist/proxnix-host_<version>_<arch>.deb
+```
+
+If you are still using the shell installer path:
+
+```bash
+host/install.sh
 ```
 
 Or redeploy them remotely from your Ansible control machine:
 
 ```bash
-ansible-playbook -i inventory.proxmox.ini ansible/install.yml
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
 ```
 
 After upgrading, restart managed containers so they pick up the new hook/runtime code.
@@ -221,10 +319,18 @@ After upgrading, restart managed containers so they pick up the new hook/runtime
 To remove proxnix from a node but keep the published relay cache:
 
 ```bash
-./uninstall.sh
+apt remove proxnix-host
 ```
 
-This removes only the installed hooks, helpers, and timers. It intentionally leaves `/var/lib/proxnix` and `/etc/proxnix` alone.
+If that node was installed with the shell installer rather than the package,
+use:
+
+```bash
+proxnix-uninstall
+```
+
+Both paths remove only the installed hooks, helpers, and timers. They
+intentionally leave `/var/lib/proxnix` and `/etc/proxnix` alone.
 
 ## What you should have when done
 
@@ -249,8 +355,6 @@ On each Proxmox node:
 ├── site.nix
 ├── containers/
 └── private/
-    ├── shared_age_identity.sops.yaml
-    ├── shared/
     └── containers/
 
 /etc/proxnix/

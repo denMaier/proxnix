@@ -1,0 +1,50 @@
+name: workstation-packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on:
+      - self-hosted
+      - linux
+      - proxnix-linux
+    steps:
+      - name: Check out source
+        uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Resolve package version
+        run: |
+          echo "PACKAGE_VERSION=$(./ci/package-version.sh)" >> "$GITHUB_ENV"
+
+      - name: Install Python build tooling
+        run: |
+          python3 -m pip install --user --upgrade build twine
+
+      - name: Validate tagged release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PACKAGE_PROJECT_VERSION="$(./ci/workstation-version.sh)"
+          if [ "$PACKAGE_PROJECT_VERSION" != "${PACKAGE_VERSION#v}" ]; then
+            echo "workstation package version ${PACKAGE_PROJECT_VERSION} does not match tag ${PACKAGE_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Build workstation Python package
+        run: |
+          rm -rf dist
+          python3 -m build --outdir dist workstation
+          shasum -a 256 dist/proxnix_workstation-* > dist/SHA256SUMS-workstation-python.txt
+
+      - name: Publish workstation package to PyPI
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: python3 -m twine upload --non-interactive dist/proxnix_workstation-*

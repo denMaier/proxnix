@@ -6,22 +6,87 @@ This page maps every important proxnix path by role.
 
 | File | Purpose |
 |------|---------|
-| `install.sh` | Installs local hooks, helpers, and node-local proxnix files |
-| `ansible/install.yml` | Idempotent Ansible playbook that mirrors `install.sh` on one or more Proxmox nodes |
-| `uninstall.sh` | Removes the local installation from a node |
-| `pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
-| `proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
-| `proxnix-doctor` | Host-side health check tool |
-| `proxnix-secrets` | Workstation-side secret and identity management tool |
-| `proxnix-publish` | Workstation-side publisher for relay caches |
-| `proxnix-workstation-common.sh` | Shared workstation helper library |
-| `proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
-| `remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `install.sh` |
-| `base.nix` | Shared guest baseline: LXC tweaks, age setup, Podman, login summary |
-| `common.nix` | Shared operator baseline module: proxnix options, admin defaults, secrets helpers |
-| `security-policy.nix` | Shared host-enforced security policy that is not meant to be relaxed from the guest |
-| `configuration.nix` | Managed NixOS entrypoint imported inside the guest |
+| `host/install.sh` | Installs local hooks, helpers, and node-local proxnix files |
+| `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-uninstall` |
+| `host/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
+| `host/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
+| `host/remote/codeberg-install.sh` | Curl-friendly wrapper that downloads the repo archive and runs `host/install.sh` |
+| `host/remote/install-host-package.sh` | Curl-friendly installer for the published `proxnix-host` Debian package |
+| `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
+| `VERSION` | Canonical project release version used for tags and packaging checks |
+| `ci/project-version.sh` | Prints the canonical version from `VERSION` |
+| `ci/release-lib.sh` | Shared shell helpers for tag validation and release tagging |
+| `ci/bump-version.sh` | Bumps `major`, `minor`, or `patch` in `VERSION` and `workstation/pyproject.toml` |
+| `ci/set-version.sh` | Updates `VERSION` and `workstation/pyproject.toml` together |
+| `ci/release.sh` | One-command version bump, release commit, annotated tag, and push |
+| `ci/release-tag.sh` | One-command annotated release tag creator and optional pusher |
+| `ci/install-git-hooks.sh` | Installs the repo-managed git hooks via `core.hooksPath` |
+| `ci/install-workstation.sh` | Installs or upgrades the workstation Python package with pip |
+| `ci/workstation-version.sh` | Prints the workstation package version from `workstation/pyproject.toml` |
+| `host/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
+| `host/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
+| `host/proxnix-doctor` | Host-side health check tool |
+| `host/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
+| `host/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
+| `host/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
+| `host/security-policy.nix` | Shared host-enforced security policy that is not meant to be relaxed from the guest |
+| `host/configuration.nix` | Managed NixOS entrypoint imported inside the guest |
+| `host/system/` | Extra host-side systemd units, mounts, timers, and udev rules |
+| `workstation/bin/proxnix` | Repo-local wrapper for the unified workstation CLI |
+| `workstation/bin/proxnix-secrets` | Repo-local wrapper for the workstation secret and identity tool |
+| `workstation/bin/proxnix-publish` | Repo-local wrapper for relay-cache publishing |
+| `workstation/bin/proxnix-doctor` | Repo-local wrapper for site lint and drift checking |
+| `workstation/bin/proxnix-lxc-exercise` | Repo-local wrapper for the automated LXC exercise lab |
+| `workstation/bin/proxnix-tui` | Repo-local wrapper for the terminal UI |
+| `workstation/legacy/proxnix-workstation-common.sh` | Retained shell-era helper library for compatibility |
+| `workstation/flake.nix` | Nix package and module exports for workstation tooling |
+| `workstation/nix/` | Workstation package definitions and shared NixOS/nix-darwin module |
+| `workstation/packaging/` | Workstation packaging scripts used by CI and release builds |
+| `workstation/src/` | Publishable Python package source |
+| `workstation/apps/ProxnixManager/` | SwiftUI macOS app |
+| `.forgejo/workflows/host-packages.yml` | Self-hosted Forgejo Actions workflow for host Debian package builds |
+| `.forgejo/workflows/workstation-packages.yml` | Self-hosted Forgejo Actions workflow for workstation Python package builds and PyPI publishing |
+| `.githooks/` | Repo-managed git hooks, currently release-tag validation on push |
+| `docs/ai/` | AI-agent-focused reference notes and evaluations |
 | `docs/` | Human-facing documentation site |
+
+Current top-level layout:
+
+```text
+.
+├── host/
+│   ├── install.sh
+│   ├── uninstall.sh
+│   ├── ansible/install.yml
+│   ├── inventory.proxmox.ini
+│   ├── packaging/
+│   ├── remote/codeberg-install.sh
+│   ├── lxc/
+│   ├── system/
+│   ├── systemd/
+│   ├── pve-conf-to-nix.py
+│   ├── proxnix-create-lxc
+│   ├── proxnix-doctor
+│   ├── proxnix-secrets-guest
+│   ├── base.nix
+│   ├── common.nix
+│   ├── security-policy.nix
+│   └── configuration.nix
+├── workstation/
+│   ├── flake.nix
+│   ├── apps/ProxnixManager/
+│   ├── bin/
+│   ├── legacy/
+│   ├── nix/
+│   ├── packaging/
+│   └── src/
+├── ci/
+├── .githooks/
+├── docs/ai/
+├── containers/
+├── docs/
+└── mkdocs.yml
+```
 
 ## Node-local host paths
 
@@ -37,24 +102,24 @@ These paths are the published host-side state on the Proxmox node. The workstati
 └── containers/
     ├── _template/                     shared managed Nix template snippets
     └── <vmid>/
-        ├── dropins/                   extra Nix, services, scripts, Quadlets
+        ├── dropins/                   extra Nix, services, and scripts
         ├── templates/                 `*.template` selectors for shared templates
-        └── quadlets/                  main Podman workload tree
 
 /var/lib/proxnix/private/
-├── shared_age_identity.sops.yaml      host-relay-encrypted shared guest identity
-├── shared/
-│   └── secrets.sops.yaml             shared encrypted secrets
 └── containers/
     └── <vmid>/
-        ├── age_identity.sops.yaml    host-relay-encrypted container guest identity
-        └── secrets.sops.yaml         per-container encrypted secrets
+        ├── age_identity.sops.yaml     host-relay-encrypted container guest identity
+        └── effective.sops.yaml        encrypted compiled container secret store
 
 /etc/proxnix/
 └── host_relay_identity                shared host relay private key
 ```
 
 ## Per-node runtime paths
+
+Package-installed nodes get the hook and helper paths below. The
+`install-manifest.txt`, `install-info.txt`, and `proxnix-uninstall` entries are
+specific to the shell-installer path.
 
 ```text
 /usr/share/lxc/config/
@@ -69,82 +134,85 @@ These paths are the published host-side state on the Proxmox node. The workstati
 /usr/local/lib/proxnix/
 ├── pve-conf-to-nix.py                 local runtime helper
 ├── nixos-proxnix-common.sh            shared hook helper
-└── proxnix-secrets-guest              helper injected into guests
+├── proxnix-secrets-guest              helper injected into guests
+├── install-manifest.txt               installed-file manifest
+└── install-info.txt                   local install metadata
 
 /usr/local/sbin/
 ├── proxnix-create-lxc                 CT creation helper
-└── proxnix-doctor                     health check tool
+├── proxnix-doctor                     health check tool
+└── proxnix-uninstall                  local uninstall helper
 ```
 
 ## Stage directory on the host (tmpfs)
 
-Created by the pre-start hook. The mount hook bind-mounts paths from here into
-the guest and the post-stop hook removes the tree after the container stops:
+Created by the pre-start hook. The mount hook binds the managed config/runtime
+markers from here, copies guest-visible files into place, copies secret files
+into the guest as root-owned regular files, and the post-stop hook removes the
+tree after the container stops:
 
 ```text
 /run/proxnix/<vmid>/
-├── rendered/
-│   ├── configuration.nix
-│   └── managed/
-│       ├── base.nix
-│       ├── common.nix
-│       ├── security-policy.nix
-│       ├── site.nix
-│       ├── proxmox.nix
-│       ├── _template/                 selected shared templates only
-│       └── dropins/
-├── runtime/
-│   ├── systemd/                       *.service files
-│   └── bin/                           *.sh, *.py scripts
-├── quadlet/                           Quadlet units and app config
-├── secrets/
-│   ├── shared.sops.yaml
-│   ├── container.sops.yaml
-│   ├── identity
-│   └── shared_identity
-└── meta/
-    ├── current-config-hash
-    └── vmid
+├── bind/
+│   ├── config/
+│   │   ├── configuration.nix
+│   │   └── managed/
+│   │       ├── base.nix
+│   │       ├── common.nix
+│   │       ├── security-policy.nix
+│   │       ├── site.nix
+│   │       ├── proxmox.nix
+│   │       ├── _template/             selected shared templates only
+│   │       └── dropins/
+│   ├── runtime/
+│   │   ├── current-config-hash
+│   │   └── vmid
+│   └── secrets/
+│       ├── effective.sops.yaml
+│       └── identity
+└── copy/
+    ├── runtime/
+    │   ├── proxnix-apply-config-runner
+    │   └── bin/
+    └── etc/
+        ├── nixos/configuration.nix
+        └── systemd/system.attached/proxnix-apply-config.service
 ```
 
 ## Managed paths inside the guest
 
 ```text
 /etc/nixos/
-├── configuration.nix                  NixOS entrypoint (read-only)
-├── managed/                           host-managed modules (read-only bind mount)
-│   ├── base.nix
-│   ├── common.nix
-│   ├── security-policy.nix
-│   ├── site.nix
-│   ├── proxmox.nix
-│   ├── _template/                     selected shared Nix templates (read-only)
-│   └── dropins/
+├── configuration.nix                  copied host-managed entrypoint
 └── local.nix                          guest-only escape hatch (unmanaged)
 
-/etc/proxnix/
-├── vmid
-├── current-config-hash
-├── applied-config-hash
-├── proxnix-apply-config-runner
-├── secrets/
-│   ├── shared.sops.yaml
-│   └── container.sops.yaml
-└── quadlets/                          read-only bind-backed app config mirror
-
-/etc/proxnix/secrets/
-├── identity                           host-staged container SSH private key used as an age identity
-└── shared_identity                    shared SSH private key used as an age identity
+/var/lib/proxnix/
+├── config/
+│   └── managed/                       host-managed modules (read-only bind mount)
+│       ├── base.nix
+│       ├── common.nix
+│       ├── security-policy.nix
+│       ├── site.nix
+│       ├── proxmox.nix
+│       ├── _template/                 selected shared Nix templates (read-only)
+│       └── dropins/
+├── runtime/
+│   ├── vmid
+│   ├── current-config-hash
+│   ├── applied-config-hash
+│   ├── proxnix-apply-config-runner
+│   ├── bin/
+│   │   ├── proxnix-secrets
+│   │   └── <user-defined scripts>
+│   └── manifests/
+└── secrets/
+    ├── effective.sops.yaml            encrypted compiled container secret store
+    └── identity                       container SSH private key
 
 /etc/systemd/system.attached/
 ├── proxnix-apply-config.service
 └── <user-defined>.service
 
-/usr/local/bin/
-├── proxnix-secrets                    guest secret reader
-└── <user-defined scripts>
-
-/etc/containers/systemd/               Quadlet unit files
 /etc/secrets/.ids/                     Podman secret ID→name mappings
 /var/lib/containers/storage/secrets/
 └── secrets.json                       Podman secret registry
@@ -162,9 +230,11 @@ the guest and the post-stop hook removes the tree after the container stops:
 <proxnix-site>/
 ├── site.nix
 ├── containers/
+│   └── <vmid>/
+│       └── secret-groups.list
 └── private/
     ├── host_relay_identity.sops.yaml
-    ├── shared_age_identity.sops.yaml
     ├── shared/
+    ├── groups/
     └── containers/
 ```

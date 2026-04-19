@@ -1,0 +1,408 @@
+#!/bin/bash
+# proxnix-doctor — Best-effort health checks for proxnix-managed NixOS LXCs.
+#
+# Run on a Proxmox host as root.
+#
+# Usage:
+#   proxnix-doctor <vmid> [<vmid> ...]
+#   proxnix-doctor --all
+#   proxnix-doctor --host-only
+#
+# Exit codes:
+#   0  all checks passed
+#   1  warnings found, no hard failures
+#   2  one or more hard failures
+
+set -euo pipefail
+
+NIXLXC_DIR="/var/lib/proxnix"
+NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_HOST_STATE_DIR="/etc/proxnix"
+LXC_CONFIG_DIR="/usr/share/lxc/config"
+LXC_HOOKS_DIR="/usr/share/lxc/hooks"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SBIN_DIR="/usr/local/sbin"
+NIXOS_CURRENT_SYSTEM_BIN="/run/current-system/sw/bin"
+SELF_NAME="${0##*/}"
+
+pick_bin() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ID_BIN=""
+PVEVERSION_BIN=""
+PCT_BIN=""
+SED_BIN=""
+HEAD_BIN=""
+TR_BIN=""
+GREP_BIN=""
+FIND_BIN=""
+BASENAME_BIN=""
+SORT_BIN=""
+AWK_BIN=""
+SOPS_BIN=""
+
+init_bins() {
+  ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
+  PVEVERSION_BIN="$(pick_bin /usr/sbin/pveversion /usr/bin/pveversion)" || die "pveversion not found — is this a Proxmox host?"
+  PCT_BIN="$(pick_bin /usr/sbin/pct /usr/bin/pct)" || die "pct not found — is this a Proxmox host?"
+  SED_BIN="$(pick_bin /usr/bin/sed /bin/sed)" || die "sed not found"
+  HEAD_BIN="$(pick_bin /usr/bin/head /bin/head)" || die "head not found"
+  TR_BIN="$(pick_bin /usr/bin/tr /bin/tr)" || die "tr not found"
+  GREP_BIN="$(pick_bin /usr/bin/grep /bin/grep)" || die "grep not found"
+  FIND_BIN="$(pick_bin /usr/bin/find /bin/find)" || die "find not found"
+  BASENAME_BIN="$(pick_bin /usr/bin/basename /bin/basename)" || die "basename not found"
+  SORT_BIN="$(pick_bin /usr/bin/sort /bin/sort)" || die "sort not found"
+  AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
+  SOPS_BIN="$(command -v sops 2>/dev/null || true)"
+}
+
+warns=0
+fails=0
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+usage() {
+  printf '%s\n' \
+    "Usage:" \
+    "  ${SELF_NAME} <vmid> [<vmid> ...]" \
+    "  ${SELF_NAME} --all" \
+    "  ${SELF_NAME} --host-only" >&2
+  exit 2
+}
+
+heading() { printf '\n[%s]\n' "$1"; }
+ok()      { printf '  OK    %s\n' "$1"; }
+info()    { printf '  INFO  %s\n' "$1"; }
+warn()    { printf '  WARN  %s\n' "$1"; warns=$((warns + 1)); }
+fail()    { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+
+guest_cat() {
+  local vmid="$1" path="$2"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/cat" "$path"
+}
+
+guest_test() {
+  local vmid="$1" flag="$2" path="$3"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/test" "$flag" "$path"
+}
+
+guest_is_symlink() {
+  local vmid="$1" path="$2"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/test" -L "$path"
+}
+
+guest_stat() {
+  local vmid="$1" format="$2" path="$3"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/stat" -c "$format" "$path"
+}
+
+conf_value() {
+  local conf="$1" key="$2"
+  "$SED_BIN" -n "s/^${key}: //p" "$conf" | "$HEAD_BIN" -n1
+}
+
+has_nix_dropins() {
+  local dropin_dir="$1"
+  [[ -d "$dropin_dir" ]] || return 1
+
+  "$FIND_BIN" "$dropin_dir" -maxdepth 1 \
+    \( -type f -name '*.nix' -o -type d \) \
+    | "$GREP_BIN" -q .
+}
+
+workload_mode() {
+  local dropin_dir="$1"
+  if has_nix_dropins "$dropin_dir"; then
+    printf 'nix-dropins'
+  else
+    printf 'baseline'
+  fi
+}
+
+check_guest_secret_file_permissions() {
+  local vmid="$1" path="$2" label="$3" stat_out
+  if ! stat_out="$(guest_stat "$vmid" '%u:%g %a %F' "$path" 2>/dev/null)"; then
+    warn "${label} present but could not stat ${path}"
+    return
+  fi
+  if [[ "$stat_out" == "0:0 600 regular file" ]]; then
+    ok "${label} is a root-owned 0600 regular file"
+  else
+    fail "${label} has insecure metadata at ${path}: ${stat_out} (expected: 0:0 600 regular file)"
+  fi
+}
+
+check_host_files() {
+  heading "host"
+  [[ "$("$ID_BIN" -u)" -eq 0 ]] || die "must run as root on the Proxmox host"
+  [[ -x "$PVEVERSION_BIN" ]] || die "pveversion not found — is this a Proxmox host?"
+
+  for path in \
+    "$LXC_CONFIG_DIR/nixos.common.conf" \
+      "$LXC_CONFIG_DIR/nixos.userns.conf" \
+      "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
+      "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
+      "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" \
+      "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
+      "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
+      "$PROXNIX_SBIN_DIR/proxnix-doctor" \
+      "$NIXLXC_DIR/base.nix" \
+      "$NIXLXC_DIR/common.nix" \
+      "$NIXLXC_DIR/security-policy.nix" \
+    "$NIXLXC_DIR/configuration.nix" \
+    "$NIXLXC_PRIV_DIR" \
+    "$PROXNIX_HOST_STATE_DIR" \
+    "$PROXNIX_HOST_STATE_DIR/host_relay_identity"
+  do
+    if [[ -e "$path" ]]; then
+      ok "$path present"
+    else
+      fail "$path missing"
+    fi
+  done
+
+  if [[ -n "$SOPS_BIN" && -x "$SOPS_BIN" ]]; then
+    ok "sops present: $SOPS_BIN"
+  else
+    fail "sops not found on host; pre-start cannot decrypt relay-encrypted guest identities"
+  fi
+}
+
+check_container() {
+  local vmid="$1"
+  local conf="/etc/pve/lxc/${vmid}.conf"
+  local cdir="${NIXLXC_DIR}/containers/${vmid}"
+  local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
+  local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
+  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.yaml"
+  local user_yaml="${cdir}/user.yaml"
+  local proxmox_yaml="${cdir}/proxmox.yaml"
+  local dropin_dir="${cdir}/dropins"
+  local mode state ostype ssh_keys
+
+  heading "ct ${vmid}"
+
+  if [[ ! -f "$conf" ]]; then
+    fail "PVE config missing: $conf"
+    return
+  fi
+  ok "PVE config present: $conf"
+
+  ostype="$(conf_value "$conf" ostype)"
+  if [[ "$ostype" == "nixos" ]]; then
+    ok "ostype=nixos"
+  else
+    fail "ostype is '${ostype:-unset}' — proxnix auto-hooking expects nixos"
+  fi
+
+  if [[ -f "$user_yaml" ]]; then
+    fail "legacy YAML config present: ${user_yaml}; move native config into dropins/*.nix"
+  fi
+  if [[ -f "$proxmox_yaml" ]]; then
+    fail "legacy YAML config present: ${proxmox_yaml}; move overrides into dropins/*.nix or the Proxmox CT config"
+  fi
+  mode="$(workload_mode "$dropin_dir")"
+
+  ssh_keys="$(conf_value "$conf" ssh-public-keys)"
+  if [[ -n "$ssh_keys" ]]; then
+    ok "ssh-public-keys set in PVE config"
+  else
+    warn "no ssh-public-keys in PVE config; add keys there or in a Nix drop-in"
+  fi
+
+  if [[ -d "$cdir" ]]; then
+    ok "container config dir present: $cdir"
+  else
+    info "no ${cdir}; proxnix will still seed baseline config, but there is no per-container override tree"
+  fi
+
+  if [[ -d "$priv_cdir" ]]; then
+    ok "private container dir present: $priv_cdir"
+  else
+    info "no ${priv_cdir}; no host-side encrypted secrets stored yet"
+  fi
+
+  case "$mode" in
+    nix-dropins) info "workload mode: nix drop-ins" ;;
+    *) info "workload mode: baseline only" ;;
+  esac
+
+  if [[ ! -x "$PCT_BIN" ]]; then
+    fail "pct not found"
+    return
+  fi
+
+  state="$("$PCT_BIN" status "$vmid" 2>/dev/null | "$AWK_BIN" '{print $2}')"
+  if [[ -z "$state" ]]; then
+    fail "could not determine container state with pct status"
+    return
+  fi
+  info "state: $state"
+
+  if [[ "$state" != "running" ]]; then
+    info "container not running; skipping in-guest checks"
+    return
+  fi
+
+  for guest_file in \
+    /etc/nixos/configuration.nix \
+    /var/lib/proxnix/config/managed/base.nix \
+    /var/lib/proxnix/config/managed/common.nix \
+    /var/lib/proxnix/config/managed/security-policy.nix \
+    /var/lib/proxnix/config/managed/proxmox.nix \
+    /var/lib/proxnix/runtime/vmid \
+    /var/lib/proxnix/runtime/current-config-hash \
+    /var/lib/proxnix/runtime/proxnix-apply-config-runner \
+    /var/lib/proxnix/runtime/bin/proxnix-secrets
+  do
+    if guest_test "$vmid" -f "$guest_file" >/dev/null 2>&1; then
+      ok "guest file present: $guest_file"
+    else
+      fail "guest file missing: $guest_file"
+    fi
+  done
+
+  if guest_test "$vmid" -L /etc/nixos/configuration.nix >/dev/null 2>&1; then
+    fail "/etc/nixos/configuration.nix is a symlink; expected a copied regular file"
+  else
+    ok "/etc/nixos/configuration.nix is materialized as a regular file"
+  fi
+
+  local guest_vmid
+  guest_vmid="$(guest_cat "$vmid" /var/lib/proxnix/runtime/vmid 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
+  if [[ "$guest_vmid" == "$vmid" ]]; then
+    ok "/var/lib/proxnix/runtime/vmid matches VMID"
+  else
+    fail "/var/lib/proxnix/runtime/vmid is '${guest_vmid:-unset}', expected '${vmid}'"
+  fi
+
+  if guest_test "$vmid" -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
+    ok "materialized proxnix-apply-config service present"
+  else
+    warn "materialized proxnix-apply-config service missing"
+  fi
+
+  if guest_test "$vmid" -L /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
+    fail "/etc/systemd/system.attached/proxnix-apply-config.service is a symlink; expected a copied regular file"
+  else
+    ok "materialized proxnix-apply-config service is a regular file"
+  fi
+
+  if guest_test "$vmid" -L /etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
+    ok "proxnix-apply-config.service enabled"
+  else
+    warn "proxnix-apply-config.service not enabled"
+  fi
+
+  local current_hash applied_hash
+  current_hash="$(guest_cat "$vmid" /var/lib/proxnix/runtime/current-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
+  applied_hash="$(guest_cat "$vmid" /var/lib/proxnix/runtime/applied-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
+  if [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
+    ok "applied managed config hash matches current hash"
+  else
+    warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"
+  fi
+
+  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
+    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.sops.yaml"
+  fi
+
+  if [[ -f "${shared_store}" && ! -f "${shared_identity}" ]]; then
+    fail "shared secret store exists but host-relay-encrypted shared identity is missing: ${shared_identity}"
+  fi
+
+  if [[ -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
+    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.sops.yaml"
+    if guest_test "$vmid" -f /var/lib/proxnix/secrets/identity >/dev/null 2>&1; then
+      ok "guest container age identity present"
+      if guest_is_symlink "$vmid" /var/lib/proxnix/secrets/identity >/dev/null 2>&1; then
+        fail "guest container age identity is a symlink; expected a copied regular file"
+      else
+        check_guest_secret_file_permissions "$vmid" /var/lib/proxnix/secrets/identity "guest container age identity"
+      fi
+    else
+      warn "host relay has an encrypted container identity but the guest is missing it; restart the container"
+    fi
+  else
+    info "no host relay encrypted container identity configured"
+  fi
+
+  if guest_test "$vmid" -f /var/lib/proxnix/secrets/effective.sops.yaml >/dev/null 2>&1; then
+    ok "guest compiled secret store present"
+    if guest_is_symlink "$vmid" /var/lib/proxnix/secrets/effective.sops.yaml >/dev/null 2>&1; then
+      fail "guest compiled secret store is a symlink; expected a copied regular file"
+    else
+      check_guest_secret_file_permissions "$vmid" /var/lib/proxnix/secrets/effective.sops.yaml "guest compiled secret store"
+    fi
+  elif [[ -f "${priv_cdir}/effective.sops.yaml" ]]; then
+    warn "host compiled secret store exists but the guest is missing it; restart the container"
+  fi
+
+  if [[ -f "${shared_identity}" ]]; then
+    ok "host relay encrypted shared identity present: ${shared_identity}"
+    if guest_test "$vmid" -f /var/lib/proxnix/secrets/shared_identity >/dev/null 2>&1; then
+      ok "guest shared age identity present"
+    else
+      warn "host relay has an encrypted shared identity but the guest is missing it; restart the container"
+    fi
+  else
+    info "no host relay encrypted shared identity configured"
+  fi
+}
+
+main() {
+  local targets=()
+  local host_only=0
+
+  if [[ $# -eq 0 ]]; then
+    usage
+  fi
+
+  if [[ "${1:-}" == "--host-only" ]]; then
+    host_only=1
+  elif [[ "${1:-}" == "--all" ]]; then
+    init_bins
+    mapfile -t targets < <("$FIND_BIN" /etc/pve/lxc -maxdepth 1 -name '*.conf' -type f -exec "$BASENAME_BIN" {} .conf \; | "$SORT_BIN" -n)
+    [[ ${#targets[@]} -gt 0 ]] || die "no LXC configs found under /etc/pve/lxc"
+  else
+    targets=("$@")
+  fi
+
+  [[ -n "$ID_BIN" ]] || init_bins
+  check_host_files
+  if (( host_only == 1 )); then
+    printf '\nSummary: %d fail(s), %d warning(s)\n' "$fails" "$warns"
+    if (( fails > 0 )); then
+      exit 2
+    fi
+    if (( warns > 0 )); then
+      exit 1
+    fi
+    exit 0
+  fi
+
+  for vmid in "${targets[@]}"; do
+    check_container "$vmid"
+  done
+
+  printf '\nSummary: %d fail(s), %d warning(s)\n' "$fails" "$warns"
+  if (( fails > 0 )); then
+    exit 2
+  fi
+  if (( warns > 0 )); then
+    exit 1
+  fi
+}
+
+main "$@"

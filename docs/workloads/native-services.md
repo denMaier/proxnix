@@ -2,17 +2,37 @@
 
 Use native services when the application maps well to an existing NixOS module.
 
+The authoritative source lives in your workstation-owned site repo under
+`containers/<vmid>/dropins/*.nix`. `proxnix-publish` syncs those files to the
+node-local relay cache, and the guest imports them from
+`/var/lib/proxnix/config/managed/dropins/` during activation.
+
 ## Quick example
 
 ```nix
-{ lib, ... }: {
-  services.jellyfin.enable = true;
-  users.users.jellyfin.extraGroups = [ "render" "video" ];
-  systemd.services.jellyfin.serviceConfig.PrivateDevices = lib.mkForce false;
+{ ... }: {
+  services.nginx = {
+    enable = true;
+    virtualHosts."proxnix-native" = {
+      default = true;
+      listen = [{ addr = "0.0.0.0"; port = 8080; }];
+      root = "/var/lib/nginx-demo/www";
+      locations."/".tryFiles = "$uri $uri/ /index.html";
+    };
+  };
+
+  networking.firewall.allowedTCPPorts = [ 8080 ];
 }
 ```
 
-Put that in `containers/<vmid>/dropins/jellyfin.nix`, restart the container, and Jellyfin is running.
+Put that in your site repo at `containers/<vmid>/dropins/nginx.nix`, then:
+
+```bash
+proxnix-publish --vmid <vmid>
+pct restart <vmid>
+```
+
+After the restart and guest rebuild, nginx is serving on guest port `8080`.
 
 ## Main input file
 
@@ -22,7 +42,7 @@ Minimal shape:
 
 ```nix
 { ... }: {
-  services.jellyfin.enable = true;
+  services.nginx.enable = true;
 }
 ```
 
@@ -32,63 +52,97 @@ Minimal shape:
 
 ```nix
 { ... }: {
-  services.immich = {
+  services.nginx = {
     enable = true;
-    openFirewall = true;
-    port = 2283;
+    virtualHosts."proxnix-native" = {
+      default = true;
+      listen = [{ addr = "0.0.0.0"; port = 8080; }];
+      root = "/var/lib/nginx-demo/www";
+      locations."/".tryFiles = "$uri $uri/ /index.html";
+    };
   };
+
+  networking.firewall.allowedTCPPorts = [ 8080 ];
 }
 ```
 
-### Hardware acceleration
-
-```nix
-{ lib, ... }: {
-  services.jellyfin.enable = true;
-  users.users.jellyfin.extraGroups = [ "render" "video" ];
-  systemd.services.jellyfin.serviceConfig.PrivateDevices = lib.mkForce false;
-}
-```
-
-Use that pattern for media services or anything that needs GPU or render node access.
-
-### Unstable package selection
+### Static content from the Nix store
 
 ```nix
 { pkgs, ... }: {
-  services.immich = {
+  services.nginx = {
     enable = true;
-    package = pkgs.unstable.immich;
+    virtualHosts."proxnix-native" = {
+      default = true;
+      listen = [{ addr = "0.0.0.0"; port = 8080; }];
+      root = pkgs.writeTextDir "index.html" ''
+        proxnix nginx native ok
+      '';
+      locations."/".tryFiles = "$uri $uri/ /index.html";
+    };
   };
+
+  networking.firewall.allowedTCPPorts = [ 8080 ];
 }
 ```
 
 ### Secrets
 
-Declare proxnix secrets that should be extracted into `/run/...` before the service starts.
+Declare proxnix secrets through the unified `proxnix.secrets` API.
 
 Example:
 
 ```nix
-{ ... }: {
-  proxnix.secrets.files.db-password = {
-    unit = "proxnix-immich-secrets";
-    path = "/run/immich-secrets/db_password";
+{ pkgs, ... }: {
+  proxnix.secrets.templates.nginx-index = {
+    source = pkgs.writeText "nginx-index.html" ''
+      <!doctype html>
+      <html>
+        <body>
+          <h1>__NGINX_INDEX_MESSAGE__</h1>
+        </body>
+      </html>
+    '';
+    destination = "/var/lib/nginx-demo/www/index.html";
     owner = "root";
-    group = "immich";
-    mode = "0640";
-    before = [ "immich.service" ];
-    wantedBy = [ "immich.service" ];
+    group = "root";
+    mode = "0644";
+    restartUnits = [ "nginx.service" ];
+    substitutions = {
+      "__NGINX_INDEX_MESSAGE__" = {
+        secret = "nginx_index_message";
+      };
+    };
   };
 
-  services.immich.database.passwordFile = "/run/immich-secrets/db_password";
+  services.nginx = {
+    enable = true;
+    virtualHosts."proxnix-native" = {
+      default = true;
+      listen = [{ addr = "0.0.0.0"; port = 8080; }];
+      root = "/var/lib/nginx-demo/www";
+      locations."/".tryFiles = "$uri $uri/ /index.html";
+    };
+  };
+
+  networking.firewall.allowedTCPPorts = [ 8080 ];
+
+  systemd.tmpfiles.rules = [
+    "d /var/lib/nginx-demo/www 0755 root root -"
+  ];
 }
 ```
+
+Use `proxnix.secrets.templates` when nginx should serve rendered content from a
+secret-backed template. Use `lifecycle = "activation"` for files that should
+survive service and container restarts. Use `lifecycle = "service"` with a
+`/run/...` path and a single owning `service` when the secret should only exist
+while that service is running.
 
 **Important:** You must also create the secret on the host:
 
 ```bash
-proxnix-secrets set <vmid> db_password
+proxnix-secrets set <vmid> nginx_index_message
 ```
 
 ## When to use `dropins/*.nix`
@@ -99,15 +153,24 @@ Use a Nix drop-in when:
 - you need firewall rules, users, tmpfiles, or custom units
 - you want to seed configuration files or wire secret paths into unrelated options
 
+## Workflow
+
+1. Add or edit `containers/<vmid>/dropins/<name>.nix` in your site repo.
+2. Run `proxnix-publish --vmid <vmid>` from the workstation.
+3. If you changed only config and did not touch secrets or identities, you can
+   narrow that to `proxnix-publish --config-only --vmid <vmid>`.
+4. Restart the container with `pct restart <vmid>`.
+5. Verify inside the guest with `systemctl status <unit>` or from the host with
+   `proxnix-doctor <vmid>`.
+
 ## Example pattern
 
-The repository's AdGuard Home example shows a good native-service pattern:
+The repository's `containers/nginx-native/` template shows a good native-service pattern:
 
-- enable the NixOS module
-- keep mutable runtime config outside the immutable managed tree
-- seed that runtime config from a proxnix secret on first start
-
-See `containers/adguard/` for a concrete example.
+- enable a standard NixOS module
+- serve a predictable static site from a managed guest path
+- render the served content with `proxnix.secrets.templates`
+- restart nginx automatically when the activation-time template changes
 
 ## What not to do
 

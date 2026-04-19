@@ -2,9 +2,11 @@
 
 ## Host commands
 
-### `./install.sh`
+### `host/install.sh`
 
 Install proxnix onto the current Proxmox node.
+After it finishes, the repo checkout is no longer required on that node for
+normal use or uninstall.
 
 Useful flags:
 
@@ -13,29 +15,172 @@ Useful flags:
 | `--dry-run` | Preview what would be installed without writing anything |
 | `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
 
-### `ansible/install.yml`
+### `host/ansible/install.yml`
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
 It copies files from this repo on the Ansible controller to the remote hosts in
 your inventory; it is not meant to run against `localhost`.
 
 ```bash
-ansible-playbook -i inventory.proxmox.ini ansible/install.yml
-ansible-playbook -i inventory.proxmox.ini ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
 
-### `remote/codeberg-install.sh`
+### `host/ansible/ai-agent-bootstrap.yml`
+
+Install proxnix onto one or more Proxmox nodes, verify `proxnix-doctor --host-only`,
+render a workstation config, and optionally run the disposable exercise harness,
+without publishing a live site repo.
+
+```bash
+cp host/ansible/ai-agent-bootstrap.vars.example.yml host/ansible/ai-agent-bootstrap.vars.yml
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/ai-agent-bootstrap.yml -e @host/ansible/ai-agent-bootstrap.vars.yml
+```
+
+### `host/ansible/ai-agent-deploy.yml`
+
+End-to-end agent playbook for install + workstation config + site validation +
+publish + optional exercise.
+
+```bash
+cp host/ansible/ai-agent-deploy.vars.example.yml host/ansible/ai-agent-deploy.vars.yml
+ansible-playbook -i host/inventory.proxmox.ini host/ansible/ai-agent-deploy.yml -e @host/ansible/ai-agent-deploy.vars.yml
+```
+
+### `host/remote/codeberg-install.sh`
 
 Curl-friendly wrapper for `install.sh`.
 
 ```bash
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)"
-bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/remote/codeberg-install.sh)" -- --dry-run
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)"
+bash -c "$(curl -fsSL https://codeberg.org/<owner>/<repo>/raw/branch/main/host/remote/codeberg-install.sh)" -- --dry-run
 ```
 
-### `./uninstall.sh`
+### `host/remote/install-host-package.sh`
 
-Remove proxnix's installed assets from the current Proxmox node. Leaves `/var/lib/proxnix` intact.
+Download and install the published `proxnix-host` Debian package:
+
+```bash
+bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)"
+bash -c "$(curl -fsSL https://codeberg.org/maieretal/proxnix/raw/branch/main/host/remote/install-host-package.sh)" -- --version 0.1.0
+```
+
+### `host/packaging/package-deb.sh`
+
+Build the Debian host package:
+
+```bash
+./host/packaging/package-deb.sh
+```
+
+Artifact output:
+
+```text
+dist/proxnix-host_<version>_<arch>.deb
+```
+
+Install the resulting package on a Proxmox node with:
+
+```bash
+apt install ./dist/proxnix-host_<version>_<arch>.deb
+```
+
+### `ci/install-git-hooks.sh`
+
+Install the repo-managed git hooks:
+
+```bash
+./ci/install-git-hooks.sh
+```
+
+This configures:
+
+```text
+core.hooksPath = .githooks
+```
+
+### `ci/install-workstation.sh`
+
+Install or upgrade the workstation Python package:
+
+```bash
+./ci/install-workstation.sh
+./ci/install-workstation.sh --version 1.2.3
+```
+
+### `ci/bootstrap-workstation-venv.sh`
+
+Create or reuse `workstation/.venv`, install `ansible`, and install the current
+repo version of `proxnix-workstation` into that repo-local virtualenv.
+
+```bash
+./ci/bootstrap-workstation-venv.sh
+```
+
+### `ci/release.sh`
+
+One-command release flow:
+
+```bash
+./ci/release.sh patch
+./ci/release.sh minor
+./ci/release.sh major --no-push
+./ci/release.sh --version 1.2.3-rc1
+```
+
+This reads the current version from `VERSION`, bumps one numeric component when
+asked, updates `workstation/pyproject.toml`, creates a release commit, creates
+an annotated `v*` tag, and pushes by default.
+
+### `ci/bump-version.sh`
+
+Update the version files without committing or tagging:
+
+```bash
+./ci/bump-version.sh patch
+./ci/bump-version.sh minor
+./ci/bump-version.sh major
+```
+
+### `ci/set-version.sh`
+
+Update the canonical project version files without tagging:
+
+```bash
+./ci/set-version.sh 1.2.3
+```
+
+### `ci/release-tag.sh`
+
+Create an annotated release tag and optionally push it:
+
+```bash
+./ci/release-tag.sh 1.2.3
+./ci/release-tag.sh 1.2.3 --push
+./ci/release-tag.sh 1.2.3-rc1 --push
+```
+
+This expects the tag version to match both `VERSION` and
+`workstation/pyproject.toml`.
+
+### `proxnix-uninstall`
+
+Remove proxnix's installed assets from the current Proxmox node. Leaves
+`/var/lib/proxnix` intact.
+
+This command is installed onto the host by `host/install.sh` and
+`host/ansible/install.yml`, so you do not need to keep the original repo
+checkout around just to uninstall proxnix.
+
+If the node was installed from the Debian package instead, remove it with:
+
+```bash
+apt remove proxnix-host
+```
+
+### `host/uninstall.sh`
+
+Repo-local source for the same uninstall logic shipped as `proxnix-uninstall`.
 
 ### `proxnix-doctor <vmid>`
 
@@ -78,13 +223,63 @@ This helper:
 - auto-detects the newest local NixOS template when `--template` is omitted
 - auto-detects a rootdir-capable storage when `--storage` is omitted
 - creates the CT with `ostype=nixos`
-- always enables `features: nesting=1`
+- always sets Proxmox CT features `nesting=1,keyctl=1` for NixOS guests
 - starts the CT by default after creating it
-- optionally creates `/var/lib/proxnix/containers/<vmid>/{quadlets,dropins}`
+- optionally creates `/var/lib/proxnix/containers/<vmid>/dropins`
+- supports `--cleanup-existing` for safe reruns when that VMID already belongs
+  to a container whose hostname already matches `--hostname`
 - never attempts to install proxnix itself
 - does not generate secret identities on the host
 
 ## Workstation commands
+
+### `proxnix`
+
+Unified workstation entrypoint for the workstation-authoritative proxnix flows.
+
+```bash
+proxnix config show
+proxnix secrets ls 120
+proxnix publish --vmid 120
+proxnix doctor --site-only
+proxnix tui
+proxnix exercise lxc --host root@node1 --base-vmid 940
+```
+
+Preferred verb layout:
+
+- `proxnix config ...`
+- `proxnix secrets ...`
+- `proxnix publish ...`
+- `proxnix doctor ...`
+- `proxnix tui`
+- `proxnix exercise lxc ...`
+
+The legacy split commands such as `proxnix-secrets`, `proxnix-publish`,
+`proxnix-doctor`, `proxnix-tui`, and `proxnix-lxc-exercise` remain available as
+compatibility aliases.
+
+### `workstation/bin/proxnix-tui`
+
+Terminal UI for the workstation-side proxnix workflows.
+
+It reads the same `~/.config/proxnix/config` file as `proxnix-publish` and
+`proxnix-secrets`, scans the configured site repo for containers, and wraps the
+common publish and secret-management actions in a curses interface.
+
+```bash
+workstation/bin/proxnix-tui
+proxnix-tui
+```
+
+The packaged and Nix-installed variants place `proxnix-tui` on `PATH`.
+
+Current coverage includes:
+
+- publish all or one VMID with `--dry-run`, `--config-only`, and `--report-changes`
+- list, get, set, remove, rotate, and initialize proxnix secrets
+- per-container actions such as publish, config-only publish, and identity init
+- captured command output for reviewing script results inside the TUI
 
 ### `proxnix-secrets`
 
@@ -98,13 +293,13 @@ This is the workstation-authoritative helper for the external proxnix site repo.
 proxnix-secrets ls
 proxnix-secrets ls <vmid>
 proxnix-secrets ls-shared
+proxnix-secrets ls-group <group>
 ```
 
 ### Reading
 
 ```bash
 proxnix-secrets get <vmid> <name>
-proxnix-secrets get-shared <name>
 ```
 
 ### Writing
@@ -112,6 +307,7 @@ proxnix-secrets get-shared <name>
 ```bash
 proxnix-secrets set <vmid> <name>
 proxnix-secrets set-shared <name>
+proxnix-secrets set-group <group> <name>
 ```
 
 Both commands prompt interactively for the secret value. You can also pipe a value:
@@ -125,6 +321,7 @@ printf %s "myvalue" | proxnix-secrets set 120 db_password
 ```bash
 proxnix-secrets rm <vmid> <name>
 proxnix-secrets rm-shared <name>
+proxnix-secrets rm-group <group> <name>
 ```
 
 ### Rotating recipients
@@ -132,17 +329,19 @@ proxnix-secrets rm-shared <name>
 ```bash
 proxnix-secrets rotate <vmid>
 proxnix-secrets rotate-shared
+proxnix-secrets rotate-group <group>
 ```
 
 ### Identity initialization
 
 ```bash
 proxnix-secrets init-host-relay
-proxnix-secrets init-shared
 proxnix-secrets init-container 120
 ```
 
-`set` and `set-shared` create guest identities automatically when needed. `init-host-relay` is the one shared relay key that Proxmox hosts use to decrypt guest identities during staging.
+`set` creates guest identities automatically when needed. `init-host-relay` is
+the one shared relay key that Proxmox hosts use to decrypt guest identities
+during staging.
 
 ### `proxnix-publish`
 
@@ -157,7 +356,11 @@ proxnix-publish --vmid 100
 proxnix-publish --config-only --vmid 100
 ```
 
-It pushes config and encrypted secret stores into `/var/lib/proxnix`, stores the shared plaintext host relay key at `/etc/proxnix/host_relay_identity`, and stores guest identities re-encrypted to both the host relay key and the master recovery key under `/var/lib/proxnix/private/` on the target hosts.
+It pushes config and per-container runtime secret stores into
+`/var/lib/proxnix/private/containers/<vmid>/`, stores the shared plaintext
+host relay key at `/etc/proxnix/host_relay_identity`, and stores container
+identities re-encrypted to both the host relay key and the master recovery key
+under `/var/lib/proxnix/private/containers/<vmid>/`.
 
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 
@@ -167,6 +370,72 @@ Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the 
 
 `--container-config <vmid>` remains as a compatibility alias for `--config-only --vmid <vmid>`.
 
+### `workstation/bin/proxnix-doctor`
+
+Lint the workstation-owned site repo and optionally compare the expected relay
+cache against one or more Proxmox hosts over SSH.
+
+```bash
+workstation/bin/proxnix-doctor
+workstation/bin/proxnix-doctor --site-only
+workstation/bin/proxnix-doctor --vmid 120
+workstation/bin/proxnix-doctor root@node1
+workstation/bin/proxnix-doctor --config-only root@node1
+```
+
+It checks:
+
+- local config and workstation prerequisites
+- secret store payloads decrypt and contain only flat string keys
+- encrypted identity stores decrypt and yield SSH public keys
+- `secret-groups.list` syntax and referenced group-store presence
+- compiled publish tree generation for config and secret payloads
+- remote relay-cache drift over SSH using the same publish scope as `proxnix-publish`
+
+Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| 0 | All checks passed |
+| 1 | Warnings found, no hard failures |
+| 2 | One or more hard failures |
+
+### `workstation/bin/proxnix-lxc-exercise`
+
+Create and validate a dedicated proxnix exercise lab on one Proxmox host.
+
+```bash
+workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940
+workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --template local:vztmpl/nixos.tar.xz --storage local-lvm
+workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940 --cleanup-existing
+workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --cleanup-existing --ip 192.168.178.240/24 --gw 192.168.178.1 --nameserver 192.168.178.100
+```
+
+It:
+
+- generates an isolated workstation-side site repo under `.codex-staging/lxc-exercise/`
+- seeds synthetic shared, grouped, and container-local secrets through the normal SOPS flow
+- publishes that site through the normal relay-cache path
+- creates one proxnix-managed NixOS LXC with a combined exercise workload
+- waits for the first boot apply to finish
+- runs host, workstation, and in-guest assertions
+- writes Markdown and JSON reports plus raw command logs
+
+The guest also publishes its own status document at `http://<guest-ip>:18080/status.json`.
+When debugging exercise behavior, treat that guest-published status page and the
+captured `reports/latest/artifacts/` logs as the primary truth.
+
+If an earlier exercise run left those VMIDs behind, rerun with
+`--cleanup-existing`. The harness only destroys pre-existing containers when the
+current VMIDs already match its expected `proxnix-exercise-*` hostnames; any
+other hostname still hard-fails.
+
+The latest report lands under:
+
+```text
+.codex-staging/lxc-exercise/reports/latest/
+```
+
 ## Guest commands
 
 ### `proxnix-help`
@@ -175,15 +444,11 @@ Print a short live summary inside the guest, including VMID, IP, memory, disk, c
 
 ### `proxnix-secrets ls`
 
-List visible secret names and whether they come from the shared or container store.
+List visible secret names inside the guest.
 
 ### `proxnix-secrets get <name>`
 
-Read a decrypted secret value from the guest. Checks the container store first, then the shared store.
-
-### `proxnix-secrets get-shared <name>`
-
-Read a secret only from the shared store.
+Read a decrypted secret value from the guest.
 
 ### Useful Podman commands
 

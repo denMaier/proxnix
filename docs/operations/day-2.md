@@ -21,7 +21,6 @@ For host-managed config outside the Proxmox CT definition, update `dropins/*.nix
 Edit one of these on the host:
 
 - `dropins/*.nix`
-- `dropins/*.service`
 - `dropins/*.{sh,py}`
 
 Then restart the container so proxnix re-stages and syncs the managed tree:
@@ -36,16 +35,16 @@ Watch the rebuild:
 pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b -f
 ```
 
-## Change Quadlet workloads
+## Change container workloads
 
-Edit files under:
+Edit guest Nix workload files under:
 
-- `quadlets/`
-- Quadlet-related files under `dropins/`
+- `dropins/*.nix`
+- optional supporting `dropins/*.{sh,py}`
 
 Then restart the container.
 
-Inside the guest, useful commands include:
+Inside the guest, useful commands may include:
 
 ```bash
 podman ps -a
@@ -115,7 +114,6 @@ proxnix-secrets rotate <vmid>        # re-encrypt to configured recipients
 
 # Shared secrets
 proxnix-secrets ls-shared
-proxnix-secrets get-shared <name>
 proxnix-secrets set-shared <name>
 proxnix-secrets rm-shared <name>
 proxnix-secrets rotate-shared
@@ -132,10 +130,14 @@ pct restart <vmid>
 
 Typical sequence:
 
-1. Update the repo on the node where you manage proxnix
-2. Run `./install.sh` on every node that should host proxnix-managed containers
-3. Treat `./install.sh --force-shared` as deprecated; it is accepted but ignored
+1. Build or fetch the latest `proxnix-host` package
+2. Install it on every node that should host proxnix-managed containers
+3. If you are still on the shell-installer path, run `host/install.sh` instead
 4. Restart managed containers as needed
+
+Once a node is installed, it does not need to retain that repo checkout for
+normal operations. Package-installed nodes use `apt remove proxnix-host`; nodes
+installed with the shell installer use `proxnix-uninstall`.
 
 ## Updating the admin password
 
@@ -147,7 +149,7 @@ proxnix-secrets set-shared common_admin_password_hash
 # Paste the new hash when prompted
 ```
 
-Then restart each container. The `proxnix-common-admin-password` service will apply the new hash on boot.
+Then restart each container so the updated secret is staged on next boot.
 
 ## Stage directory cleanup
 

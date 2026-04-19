@@ -25,7 +25,7 @@ Use a NixOS Proxmox LXC template from Hydra and create the container in the Prox
 
 - **RAM:** Set at least **2 GB**. Nix evaluation during bootstrap needs this much memory. You can lower it after the first successful rebuild.
 - **Disk:** 8 GB minimum for a basic NixOS system; more for workloads
-- **Features:** `proxnix-create-lxc` always enables `nesting=1` for NixOS CTs
+- **Features:** for NixOS CTs created through proxnix, `nesting=1,keyctl=1` should be enabled
 
 After creation, confirm that Proxmox recognized it as NixOS:
 
@@ -55,34 +55,79 @@ For VMID `100`:
 
 ```bash
 VMID=100
-mkdir -p ~/src/proxnix-site/containers/$VMID/quadlets
+mkdir -p ~/src/proxnix-site/containers/$VMID/dropins
 ```
 
 ### Optional files
 
 | File | Purpose | When to use |
 |------|---------|-------------|
-| `dropins/*.nix` | Native NixOS service definitions, extra config modules, and the default place for Nix-authored Quadlets | When running services like Jellyfin, Immich, or any other host-managed Nix config |
-| `dropins/*.service` | Attached systemd units | When you need custom services |
-| `dropins/*.sh`, `*.py` | Scripts installed to `/usr/local/bin/` | For helper scripts |
-| `quadlets/` | Raw Podman Quadlet workload files | For direct Quadlet authoring or compatibility with existing raw Quadlet trees |
+| `dropins/*.nix` | Native NixOS service definitions, extra config modules, and the default place for Nix-authored container workloads | When running services like native nginx or guest-side Podman nginx |
+| `dropins/*.sh`, `*.py` | Scripts copied to `/var/lib/proxnix/runtime/bin/` and exposed on `PATH` | For helper scripts |
 
-Example setup for a container with native services:
+Example setup for a container with a native nginx service and a secret-rendered
+page:
 
 ```bash
 VMID=100
-mkdir -p ~/src/proxnix-site/containers/$VMID/{quadlets,dropins}
+mkdir -p ~/src/proxnix-site/containers/$VMID/dropins
 
-cat > ~/src/proxnix-site/containers/$VMID/dropins/jellyfin.nix << 'EOF'
-{ ... }: {
-  services.jellyfin.enable = true;
-  users.users.jellyfin.extraGroups = [ "render" "video" ];
-  systemd.services.jellyfin.serviceConfig.PrivateDevices = false;
+cat > ~/src/proxnix-site/containers/$VMID/dropins/nginx.nix << 'EOF'
+{ pkgs, ... }:
+
+{
+  services.nginx = {
+    enable = true;
+    virtualHosts."proxnix-native" = {
+      default = true;
+      listen = [{ addr = "0.0.0.0"; port = 8080; }];
+      root = "/var/lib/nginx-demo/www";
+      locations."/".tryFiles = "$uri $uri/ /index.html";
+    };
+  };
+
+  proxnix.secrets.templates.nginx-index = {
+    source = pkgs.writeText "nginx-index.html" ''
+      <!doctype html>
+      <html>
+        <body>
+          <h1>__NGINX_INDEX_MESSAGE__</h1>
+        </body>
+      </html>
+    '';
+    destination = "/var/lib/nginx-demo/www/index.html";
+    owner = "root";
+    group = "root";
+    mode = "0644";
+    restartUnits = [ "nginx.service" ];
+    substitutions = {
+      "__NGINX_INDEX_MESSAGE__" = {
+        secret = "nginx_index_message";
+      };
+    };
+  };
+
+  systemd.tmpfiles.rules = [
+    "d /var/lib/nginx-demo/www 0755 root root -"
+  ];
+
+  networking.firewall.allowedTCPPorts = [ 8080 ];
 }
 EOF
 ```
 
-Publish the new relay state before starting the container:
+Create the secret, then publish the new relay state before starting the
+container:
+
+```bash
+proxnix-secrets set "$VMID" nginx_index_message
+```
+
+NixOS enables the firewall by default, so opening `8080` explicitly is
+expected. If you want to disable the firewall across the whole published site,
+set `networking.firewall.enable = false;` in `site.nix`. If you want to
+disable it only for this one guest, set the same option in this container's
+`dropins/*.nix`.
 
 ```bash
 proxnix-publish
@@ -97,7 +142,7 @@ pct start 100
 At this point proxnix has already:
 
 1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/`
-2. Run the **mount hook** — bind-mounted `configuration.nix` and `managed/` into the guest's `/etc/nixos/`
+2. Run the **mount hook** — copied `/etc/nixos/configuration.nix`, bound the managed tree under `/var/lib/proxnix/config/managed/`, and copied root-only secret files into `/var/lib/proxnix/secrets/`
 3. Installed the `proxnix-apply-config` service inside the guest
 4. Generated the `proxnix-bootstrap.sh` script in `/root/` as a fallback recovery helper
 
@@ -141,7 +186,7 @@ pct enter 100
 When you log in after the first boot apply finishes, you'll see:
 
 - The proxnix MOTD with managed paths and useful commands
-- A login summary showing IP, memory, disk, and Podman status
+- A login summary showing IP, memory, disk, and basic runtime status
 
 ## 5. Add the first secret (optional)
 
@@ -192,9 +237,10 @@ Expected output for a healthy container:
   OK    container config dir present: /var/lib/proxnix/containers/100
   OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
   OK    guest container age identity present
+  OK    guest container age identity is a root-owned 0600 regular file
   ...
   OK    guest file present: /etc/nixos/configuration.nix
-  OK    guest file present: /etc/nixos/managed/base.nix
+  OK    guest file present: /var/lib/proxnix/config/managed/base.nix
   ...
   OK    applied managed config hash matches current hash
 
@@ -206,4 +252,5 @@ Summary: 0 fail(s), 0 warning(s)
 - Add more services: see [native services](../workloads/native-services.md) or [Quadlet workloads](../workloads/quadlet-workloads.md)
 - Learn about the configuration model: see [configuration model](../concepts/configuration-model.md)
 - Set up more secrets: see [secrets](../concepts/secrets.md)
+- Validate a full disposable end-to-end workflow: see [LXC exercise lab](../operations/lxc-exercise-lab.md)
 - Understand day-to-day operations: see [day-2 operations](../operations/day-2.md)

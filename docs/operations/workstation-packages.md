@@ -1,0 +1,127 @@
+# Workstation Packages
+
+The workstation tools can now be built and published from a self-hosted Linux
+Forgejo Actions runner. The workflow lives at
+`.forgejo/workflows/workstation-packages.yml`.
+
+For the tag-driven release flow, see [Releases](releases.md).
+
+## What the workflow builds
+
+- Python source distribution
+- Python wheel
+
+Branch pushes to `main`, matching `v*` tags, and manual dispatches trigger the
+workflow. Pull requests build but do not publish. Tagged releases publish to
+PyPI.
+
+## Install
+
+Preferred install:
+
+```bash
+python3 -m pip install --user --upgrade proxnix-workstation
+```
+
+Repo helper:
+
+```bash
+./ci/install-workstation.sh
+```
+
+Runtime requirements still need to exist on the workstation:
+
+- `sops`
+- `ssh`
+- `rsync`
+
+## Self-hosted runner labels
+
+Register one Forgejo runner with these labels:
+
+- `self-hosted`, `linux`, `proxnix-linux`
+
+The runner can stay on your own machine. Codeberg’s self-hosted Actions model
+uses outbound runner connections, so it does not need inbound network access.
+
+## PyPI publishing
+
+Create a repository secret named `PYPI_TOKEN` containing a PyPI API token.
+
+Tagged releases publish `proxnix-workstation` to PyPI.
+
+The workflow validates that the pushed `v*` tag matches
+`workstation/pyproject.toml`:
+
+```text
+v1.2.3  <->  version = "1.2.3"
+```
+
+## Local build
+
+Build the package locally from `workstation/`:
+
+```bash
+uv build
+```
+
+Artifacts are written to:
+
+```text
+workstation/dist/
+```
+
+## NixOS and nix-darwin
+
+This repo now exports workstation packages and a shared module via
+`workstation/flake.nix`.
+
+Package outputs:
+
+- `./workstation#proxnix-workstation` for TUI + CLI
+- `./workstation#proxnix-workstation-cli` for CLI only
+
+Module outputs:
+
+- `inputs.proxnix.nixosModules.proxnix-workstation`
+- `inputs.proxnix.darwinModules.proxnix-workstation`
+
+### NixOS example
+
+```nix
+{
+  inputs.proxnix.url = "path:/path/to/proxnix/workstation";
+
+  outputs = { self, nixpkgs, proxnix, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        proxnix.nixosModules.proxnix-workstation
+        ({ ... }: {
+          proxnix.workstation.enable = true;
+        })
+      ];
+    };
+  };
+}
+```
+
+### nix-darwin example
+
+```nix
+{
+  inputs.proxnix.url = "path:/path/to/proxnix/workstation";
+
+  outputs = { self, nix-darwin, proxnix, ... }: {
+    darwinConfigurations.mac = nix-darwin.lib.darwinSystem {
+      system = "aarch64-darwin";
+      modules = [
+        proxnix.darwinModules.proxnix-workstation
+        ({ ... }: {
+          proxnix.workstation.enable = true;
+        })
+      ];
+    };
+  };
+}
+```

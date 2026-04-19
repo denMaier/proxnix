@@ -10,7 +10,7 @@ That gives proxnix these properties:
 
 - the host remains the control plane
 - the guest remains a normal NixOS system
-- container startup can stage config, secrets, systemd units, and Quadlets in one place
+- container startup can stage config, secrets, systemd units, and helper scripts in one place
 - repeated starts are cheap because the guest compares hashes before rebuilding
 
 ## Lifecycle
@@ -23,7 +23,7 @@ That gives proxnix these properties:
   │  1. pre-start hook (host)                    │
   │     Read PVE conf + Nix drop-ins             │
   │     Run pve-conf-to-nix.py                   │
-  │     Stage secrets, Quadlets, scripts          │
+  │     Stage secrets, scripts                     │
   │     Compute config hash                       │
   │     Output: /run/proxnix/<vmid>/              │
   └──────────────────────┬──────────────────────┘
@@ -31,10 +31,9 @@ That gives proxnix these properties:
                          ▼
   ┌─────────────────────────────────────────────┐
   │  2. mount hook (host, writes to guest rootfs)│
-  │     Bind mounted /etc/nixos/configuration.nix │
-  │     Bind mounted /etc/nixos/managed/          │
-  │     Bind mounted secrets under /etc/proxnix/  │
-  │     Bind mounted Quadlets → /etc/containers/systemd/ │
+  │     Copy /etc/nixos/configuration.nix         │
+  │     Bind /var/lib/proxnix/config/managed/     │
+  │     Copy root-only secrets into /var/lib/proxnix/secrets/ │
   │     Install proxnix-apply-config service      │
   │     Reconcile Podman secrets.json             │
   └──────────────────────┬──────────────────────┘
@@ -72,39 +71,39 @@ Important stage subtrees:
 
 | Path | Contents |
 |------|----------|
-| `rendered/configuration.nix` | NixOS entrypoint |
-| `rendered/managed/{base,common,security-policy,proxmox}.nix` | Core managed modules |
-| `rendered/managed/_template/` | Selected shared Nix templates from `containers/_template/` |
-| `rendered/managed/dropins/` | Extra Nix modules from host `dropins/`, including Nix-authored Quadlet definitions |
-| `runtime/systemd/` | Attached systemd units from host `dropins/*.service` |
-| `runtime/bin/` | Scripts from host `dropins/*.{sh,py}` |
-| `quadlet/` | Quadlet unit files and app config |
-| `secrets/` | Encrypted SOPS YAML stores |
-| `secrets/{identity,shared_identity}` | Decrypted guest age identities (if configured) |
-| `meta/` | Config hash, VMID, bootstrap marker |
+| `bind/config/{configuration.nix,managed/...}` | Desired NixOS config tree hashed by the host |
+| `bind/runtime/{current-config-hash,vmid}` | Immutable desired-state markers |
+| `bind/secrets/` | Compiled encrypted per-container runtime store plus staged identity |
+| `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
+| `copy/runtime/proxnix-apply-config-runner` | Generated guest runner |
+| `copy/etc/nixos/configuration.nix` | Copied guest entrypoint |
+| `copy/etc/systemd/system.attached/proxnix-apply-config.service` | Generated guest unit |
 
 The pre-start hook copies the node-local managed Nix files, runs
-`pve-conf-to-nix.py`, pulls in host-side drop-ins, stages encrypted secret
-stores plus any selected shared templates, and computes a hash of the rendered
-managed tree.
+`pve-conf-to-nix.py`, pulls in host-side drop-ins, stages the compiled
+per-container runtime store plus the container identity, and computes a hash of
+the rendered managed tree.
 
 ### 3. Mount hook syncs the stage into the guest rootfs
 
 The mount hook is the only proxnix hook that writes into the guest filesystem.
-For host-rendered config trees and secret files, it now prefers read-only bind
-mounts over copying.
+`/etc/nixos/configuration.nix`, guest runtime helpers, and guest-attached
+systemd units are copied into place. The managed Nix tree under
+`/var/lib/proxnix/config/managed/` plus immutable runtime markers under
+`/var/lib/proxnix/runtime/` are wired in from the stage read-only. Secret files
+are copied into the guest as root-owned regular files.
 
-It exposes the staged assets by binding individual files or subtrees into places such as:
+It exposes the staged assets into places such as:
 
 | Stage source | Guest destination |
 |-------------|-------------------|
-| `rendered/configuration.nix` | `/etc/nixos/configuration.nix` |
-| `rendered/managed/` | `/etc/nixos/managed/` |
-| `runtime/systemd/*.service` | `/etc/systemd/system.attached/` |
-| `runtime/bin/*.{sh,py}` | `/usr/local/bin/` |
-| `quadlet/*.container` etc. | `/etc/containers/systemd/` |
-| `quadlet/` top-level entries | `/etc/proxnix/quadlets/` |
-| `secrets/*` | `/etc/proxnix/secrets/` |
+| `copy/etc/nixos/configuration.nix` | `/etc/nixos/configuration.nix` |
+| `bind/config/managed/` | `/var/lib/proxnix/config/managed/` |
+| `bind/runtime/current-config-hash` | `/var/lib/proxnix/runtime/current-config-hash` |
+| `bind/runtime/vmid` | `/var/lib/proxnix/runtime/vmid` |
+| `copy/runtime/bin/*` | `/var/lib/proxnix/runtime/bin/` |
+| `copy/etc/systemd/system.attached/proxnix-apply-config.service` | `/etc/systemd/system.attached/` |
+| `bind/secrets/*` | `/var/lib/proxnix/secrets/` |
 
 It also installs a generated `proxnix-apply-config` service and runner inside the guest.
 
@@ -112,8 +111,8 @@ It also installs a generated `proxnix-apply-config` service and runner inside th
 
 Inside the guest, proxnix stores two hashes:
 
-- current desired hash: `/etc/proxnix/current-config-hash`
-- last applied hash: `/etc/proxnix/applied-config-hash`
+- current desired hash: `/var/lib/proxnix/runtime/current-config-hash`
+- last applied hash: `/var/lib/proxnix/runtime/applied-config-hash`
 
 At boot, the generated runner compares them.
 
@@ -123,7 +122,9 @@ At boot, the generated runner compares them.
 
 ## Persistent state and experimentation
 
-While `/etc/nixos/configuration.nix` and `/etc/nixos/managed/` are read-only and overwritten on restart, proxnix **does not touch other parts of the guest rootfs**.
+While `/etc/nixos/configuration.nix` and `/var/lib/proxnix/config/managed/`
+are host-managed and refreshed on restart, proxnix **does not touch other
+parts of the guest rootfs**.
 
 - **`/var/lib/`**: Databases and application data stay persistent.
 - **`/etc/nixos/local.nix`**: This is your sandbox. You can add config here and run `nixos-rebuild switch` inside the guest to test it.
@@ -133,12 +134,12 @@ While `/etc/nixos/configuration.nix` and `/etc/nixos/managed/` are read-only and
 
 The guest entrypoint is intentionally small. It imports:
 
-- `base.nix` — install-layer guest baseline: LXC adjustments, age setup, Podman config, login summary
+- `base.nix` — install-layer guest baseline: LXC adjustments, age setup, login summary
 - `common.nix` — proxnix option module for the shared operator baseline
 - `security-policy.nix` — host-enforced security posture that guest-local overrides should not relax
 - optional `site.nix` — site-wide overrides, typically managed from a separate repo
 - `proxmox.nix` — generated from PVE conf (hostname, DNS, SSH keys)
-- every managed drop-in `*.nix`
+- every top-level managed drop-in `*.nix`
 - optional `/etc/nixos/local.nix`
 
 That last file is the escape hatch for guest-only experimentation. proxnix does not manage it.
@@ -166,15 +167,9 @@ For additive package changes, prefer `proxnix.common.extraPackages` from `site.n
 
 ## Podman enablement rule
 
-proxnix keeps Podman off by default in the shared base config.
-
-- if raw top-level Quadlet unit files are staged, the pre-start hook writes a
-  small Nix drop-in that enables Podman
-- if a Nix-authored Quadlet module enables Podman itself, that is enough on its
-  own
-
-That keeps service-only containers lighter while letting either raw or
-Nix-managed Quadlet workloads activate Podman explicitly.
+proxnix does not manage Podman enablement. If a guest uses Podman, that comes
+from guest Nix config, typically through a shared import in `site.nix` and a
+per-container `dropins/*.nix` activation module.
 
 ## Attached systemd units and scripts
 
@@ -183,8 +178,8 @@ Host-side `dropins/` files are routed by extension:
 | Extension | Destination |
 |-----------|-------------|
 | `*.nix` | Guest managed Nix imports |
-| `*.service` | `/etc/systemd/system.attached/` |
-| `*.sh`, `*.py` | `/usr/local/bin/` |
-| `*.container`, `*.volume`, `*.network`, `*.pod`, `*.image`, `*.build` | `/etc/containers/systemd/` |
+| `*.service` | Rejected; move service definitions into `dropins/*.nix` so they stay guest Nix-managed |
+| `*.sh`, `*.py` | `/var/lib/proxnix/runtime/bin/` on `PATH` |
+| `*.container`, `*.volume`, `*.network`, `*.pod`, `*.image`, `*.build` | Rejected; raw host-side Quadlet staging is no longer supported |
 
 This lets you augment a container without editing the shared baseline.

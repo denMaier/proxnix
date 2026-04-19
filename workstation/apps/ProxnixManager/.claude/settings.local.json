@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift build:*)",
+      "Bash(ls -la /Users/denis/Projects/proxnix/workstation/proxnix-* /Users/denis/Projects/proxnix/proxnix-*)",
+      "Bash(python3 -m py_compile workstation/proxnix-tui)",
+      "Bash(git:*)",
+      "Bash(ls -la /Users/denis/Projects/proxnix/workstation/ProxnixManager/*.md)",
+      "Bash(ls -la /Users/denis/Projects/proxnix/workstation/ProxnixManager/RUN*)",
+      "Bash(ls -la /Users/denis/Projects/proxnix/workstation/*.md)"
+    ]
+  }
+}

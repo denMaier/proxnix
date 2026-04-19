@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ensure_mode() {
+  local path="$1" mode="$2"
+  install -d -m "$mode" "$path"
+  chmod "$mode" "$path"
+}
+
+if ! command -v pveversion >/dev/null 2>&1; then
+  echo "proxnix-host: pveversion not found; this package must be installed on a Proxmox host" >&2
+  exit 1
+fi
+
+if ! command -v sops >/dev/null 2>&1; then
+  echo "proxnix-host: sops not found; install sops on the Proxmox host first" >&2
+  exit 1
+fi
+
+ensure_mode /var/lib/proxnix 0755
+ensure_mode /var/lib/proxnix/containers 0755
+ensure_mode /var/lib/proxnix/private 0700
+ensure_mode /var/lib/proxnix/private/shared 0700
+ensure_mode /var/lib/proxnix/private/containers 0700
+ensure_mode /etc/proxnix 0700
+
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+  systemctl daemon-reload || true
+  systemctl enable --now proxnix-gc.timer || true
+fi
+
+exit 0

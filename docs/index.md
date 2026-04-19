@@ -2,7 +2,7 @@
 
 proxnix manages NixOS LXC containers from the Proxmox host.
 
-Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, bind-mounts the managed pieces into the mounted root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
+Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, copies and binds the managed pieces into the guest root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
 
 ## Who this is for
 
@@ -10,8 +10,8 @@ proxnix is a good fit when you want:
 
 - Proxmox to stay authoritative for container networking and basic container lifecycle
 - NixOS to stay authoritative for the guest OS configuration
-- one host-side place for per-container config, secrets, and workload files
-- a clean split between native NixOS services and Podman Quadlet workloads
+- one host-side place for per-container config and secrets
+- a clean split between Proxmox-owned container metadata and guest-owned NixOS workloads
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Before using proxnix you should be comfortable with:
 - **Proxmox VE** — creating and managing LXC containers from the WebUI or CLI (`pct`)
 - **NixOS basics** — what `nixos-rebuild switch` does, how NixOS modules and options work
 - **SOPS and age** — the encryption tools proxnix uses for secrets ([age](https://github.com/FiloSottile/age), [SOPS](https://github.com/getsops/sops))
-- **Podman Quadlets** (if using container workloads) — systemd-native container definitions ([Quadlet docs](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html))
+- **Container module basics** (if using container workloads) — for example `quadlet-nix` or another guest-side Nix module layer
 
 You will need these tools installed on your **workstation** (the machine you manage secrets from):
 
@@ -34,8 +34,8 @@ You will need these tools installed on your **workstation** (the machine you man
 There are four main layers:
 
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
-2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/` and `quadlets/`
-3. **Rendered guest state**: generated Nix files, staged secrets, attached systemd units, helper scripts, and Quadlet files
+2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
+3. **Rendered guest state**: generated Nix files, staged secrets, attached systemd units, and helper scripts
 4. **Guest activation**: a guarded `nixos-rebuild switch` that runs only when the staged config hash changes
 
 ## The guest is not a black box
@@ -55,7 +55,7 @@ While the host is the *source of truth* for your declarative config, the guest i
 │       ▼                                                         │
 │  ┌─────────────────────┐    ┌──────────────────────────────┐    │
 │  │  pre-start hook      │───▶│  /run/proxnix/<vmid>/        │    │
-│  │  render desired state│    │  rendered/ secrets/ quadlet/ │    │
+│  │  render desired state│    │  rendered/ secrets/ runtime/ │    │
 │  └─────────────────────┘    └──────────┬───────────────────┘    │
 │                                         │                       │
 │                                         ▼                       │
@@ -89,7 +89,8 @@ While the host is the *source of truth* for your declarative config, the guest i
 
 Treat this repository as the **install repo**:
 
-- it owns `install.sh`, hooks, helpers, and the shared baseline Nix files
+- `host/` owns the Proxmox install/runtime layer: hooks, helpers, installers, and the shared baseline Nix files
+- `workstation/` owns the workstation-authoritative CLI, TUI, app, flake, and packaging files
 - it may ship example workloads and example config shapes
 - it does **not** need to own your live site data
 
@@ -108,20 +109,19 @@ Use native services when the application already has a good NixOS module.
 Typical inputs:
 
 - `dropins/*.nix`
-- optional secrets referenced from `/run/<service>-secrets/...`
+- optional secrets referenced from proxnix-managed paths
 
 See [native services](workloads/native-services.md).
 
-### Quadlet workloads
+### Container workloads
 
-Use Quadlets when the workload is container-first.
+Use container modules when the workload is container-first.
 
 Typical inputs:
 
-- `dropins/*.nix` for Nix-authored Quadlet definitions
-- `quadlets/*.container`, `*.pod`, `*.network`, `*.volume`
-- optional host-side config files stored beside them
-- secrets surfaced through the proxnix Podman shell driver
+- `site.nix` for shared imports such as `quadlet-nix`
+- `dropins/*.nix` for per-container activation
+- secrets surfaced through proxnix secret helpers or the Podman shell driver from guest config
 
 See [Quadlet workloads](workloads/quadlet-workloads.md).
 
@@ -130,7 +130,9 @@ See [Quadlet workloads](workloads/quadlet-workloads.md).
 Common tasks:
 
 - restart a CT after changing host-side proxnix files
-- run `proxnix-doctor` from the host
-- manage secrets with `proxnix-secrets`
+- run `proxnix doctor` from the workstation or `proxnix-doctor` from the host
+- manage workstation-side secrets with `proxnix secrets`
+- build or install the host `.deb` package when updating the Proxmox-side runtime
+- cut annotated `v*` release tags to publish host and workstation artifacts
 
-See [day-2 operations](operations/day-2.md) and [troubleshooting](operations/troubleshooting.md).
+See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).

@@ -1,0 +1,361 @@
+#!/bin/bash
+# LXC pre-start hook: render proxnix's desired guest state on the host.
+#
+# Registered automatically for every ostype=nixos container via
+# nixos.common.conf / nixos.userns.conf. Runs after lxc-pve-prestart-hook so
+# the PVE config is available, but before the rootfs mount is required.
+#
+# This hook does not touch the guest rootfs directly. It stages the desired
+# state under /run/proxnix/<vmid>/ for the matching mount hook to wire into the
+# guest rootfs, split by how the guest consumes it:
+#   bind/config/{configuration.nix,managed/...}
+#   bind/runtime/{current-config-hash,vmid}
+#   bind/secrets/{effective.sops.yaml,identity}   # copied into the guest at mount time
+#   copy/runtime/{proxnix-apply-config-runner,bin/*.{sh,py}}
+#   copy/etc/nixos/configuration.nix
+#   copy/etc/systemd/system.attached/proxnix-apply-config.service
+# Guest-writable runtime state such as applied-config-hash is intentionally not
+# staged here; it remains local to the guest rootfs under /var/lib/proxnix.
+#
+# Managed Nix files are hashed from the rendered tree only. The guest-side
+# proxnix-apply-config service compares that desired hash with the last applied
+# hash and runs nixos-rebuild switch only when they differ.
+
+set -uo pipefail
+umask 077  # staging starts private; config binds are relaxed later, secrets stay host-root only
+
+VMID="${LXC_NAME:-}"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_SECRETS_GUEST_BIN="${PROXNIX_LIB_DIR}/proxnix-secrets-guest"
+COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
+
+log() { echo "[proxnix-prestart][${VMID}] $*" >&2; }
+
+if [[ -z "$VMID" ]]; then
+    log "ERROR: LXC_NAME is not set."
+    exit 1
+fi
+
+if [[ ! -f "$COMMON_LIB" ]]; then
+    log "ERROR: ${COMMON_LIB} not found."
+    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$COMMON_LIB"
+
+PVE_CONF_TO_NIX="${PROXNIX_LIB_DIR}/pve-conf-to-nix.py"
+CONTAINER_TEMPLATE_DIR="${NIXLXC_DIR}/containers/_template"
+CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
+CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
+TEMPLATE_SELECTOR_DIR="${CONTAINER_DIR}/templates"
+DROPIN_DIR="${CONTAINER_DIR}/dropins"
+STAGE_DIR="$(proxnix_stage_dir "$VMID")"
+BIND_STAGE_DIR="${STAGE_DIR}/bind"
+BIND_CONFIG_DIR="${BIND_STAGE_DIR}/config"
+MANAGED_DIR="${BIND_CONFIG_DIR}/managed"
+MANAGED_DROPIN_DIR="${MANAGED_DIR}/dropins"
+MANAGED_TEMPLATE_DIR="${MANAGED_DIR}/_template"
+BIND_RUNTIME_DIR="${BIND_STAGE_DIR}/runtime"
+SECRETS_STAGE_DIR="${BIND_STAGE_DIR}/secrets"
+COPY_STAGE_DIR="${STAGE_DIR}/copy"
+COPY_RUNTIME_DIR="${COPY_STAGE_DIR}/runtime"
+COPY_RUNTIME_BIN_DIR="${COPY_RUNTIME_DIR}/bin"
+COPY_ETC_DIR="${COPY_STAGE_DIR}/etc"
+COPY_ETC_NIXOS_DIR="${COPY_ETC_DIR}/nixos"
+COPY_ETC_SYSTEMD_ATTACHED_DIR="${COPY_ETC_DIR}/systemd/system.attached"
+PVE_CONF="/etc/pve/lxc/${VMID}.conf"
+
+cleanup_stage() {
+    rm -rf "$STAGE_DIR"
+}
+
+trap 'status=$?; if [[ $status -ne 0 ]]; then cleanup_stage; fi; exit $status' EXIT
+
+if [[ ! -f "$PVE_CONF_TO_NIX" ]]; then
+    log "ERROR: ${PVE_CONF_TO_NIX} not found."
+    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    exit 1
+fi
+
+if ! command -v sops >/dev/null 2>&1; then
+    log "ERROR: sops not found on the Proxmox host."
+    log "Install sops on the host; proxnix now decrypts relay-encrypted guest identities during pre-start."
+    exit 1
+fi
+
+cleanup_stage
+mkdir -p \
+    "$MANAGED_DROPIN_DIR" \
+    "$BIND_RUNTIME_DIR" \
+    "$SECRETS_STAGE_DIR" \
+    "$COPY_RUNTIME_BIN_DIR" \
+    "$COPY_ETC_NIXOS_DIR" \
+    "$COPY_ETC_SYSTEMD_ATTACHED_DIR"
+
+for f in "${PROXNIX_SHARED_FILES[@]}"; do
+    src="${NIXLXC_DIR}/${f}"
+    if [[ ! -f "$src" ]]; then
+        log "ERROR: missing required shared file: ${src}"
+        log "Run host/install.sh on the Proxmox host to restore proxnix shared files."
+        exit 1
+    fi
+done
+
+if [[ ! -f "$PROXNIX_SECRETS_GUEST_BIN" ]]; then
+    log "ERROR: ${PROXNIX_SECRETS_GUEST_BIN} not found."
+    log "Run host/install.sh on the Proxmox host to restore proxnix runtime helpers."
+    exit 1
+fi
+
+cp "${NIXLXC_DIR}/configuration.nix" "${BIND_CONFIG_DIR}/configuration.nix"
+cp "${NIXLXC_DIR}/base.nix"          "${MANAGED_DIR}/base.nix"
+cp "${NIXLXC_DIR}/common.nix"        "${MANAGED_DIR}/common.nix"
+cp "${NIXLXC_DIR}/security-policy.nix" "${MANAGED_DIR}/security-policy.nix"
+if [[ -f "${NIXLXC_DIR}/site.nix" ]]; then
+    cp "${NIXLXC_DIR}/site.nix"      "${MANAGED_DIR}/site.nix"
+fi
+
+for legacy_yaml in "${CONTAINER_DIR}/proxmox.yaml" "${CONTAINER_DIR}/user.yaml"; do
+    if [[ -f "$legacy_yaml" ]]; then
+        log "ERROR: legacy YAML config is no longer supported: ${legacy_yaml}"
+        log "Move container config into ${CONTAINER_DIR}/dropins/*.nix and keep base identity in the Proxmox CT config."
+        exit 1
+    fi
+done
+
+log "Rendering desired state (PVE conf: ${PVE_CONF})..."
+if ! python3 "$PVE_CONF_TO_NIX" --pve-conf "$PVE_CONF" --out-dir "$MANAGED_DIR"; then
+    log "ERROR: pve-conf-to-nix.py failed — check ${PVE_CONF}"
+    exit 1
+fi
+
+if [[ -d "${CONTAINER_DIR}/quadlets" ]] && find "${CONTAINER_DIR}/quadlets" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+    log "ERROR: raw quadlet passthrough is no longer supported: ${CONTAINER_DIR}/quadlets"
+    log "Move Podman workloads into dropins/*.nix via site-managed Nix imports."
+    exit 1
+fi
+
+if [[ -d "$TEMPLATE_SELECTOR_DIR" ]]; then
+    if [[ ! -d "$CONTAINER_TEMPLATE_DIR" ]]; then
+        log "ERROR: ${TEMPLATE_SELECTOR_DIR} exists but ${CONTAINER_TEMPLATE_DIR} is missing."
+        exit 1
+    fi
+
+    while IFS= read -r -d '' selector; do
+        selector_name="$(basename "$selector")"
+        template_name="${selector_name%.template}"
+        template_source="${CONTAINER_TEMPLATE_DIR}/${template_name}"
+
+        if [[ ! -d "$template_source" ]]; then
+            log "ERROR: selected template not found: ${template_source}"
+            exit 1
+        fi
+
+        mkdir -p "$MANAGED_TEMPLATE_DIR"
+        cp -a "$template_source" "${MANAGED_TEMPLATE_DIR}/${template_name}"
+    done < <(find "$TEMPLATE_SELECTOR_DIR" -maxdepth 1 -type f -name '*.template' -print0 2>/dev/null | sort -z)
+fi
+
+if [[ -d "$DROPIN_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        fname="$(basename "$f")"
+        case "$fname" in
+            *.nix)
+                cp "$f" "${MANAGED_DROPIN_DIR}/${fname}"
+                ;;
+            *.service)
+                log "ERROR: host-side dropins/*.service are no longer supported: ${f}"
+                log "Move service definitions into dropins/*.nix so they are guest Nix-managed."
+                exit 1
+                ;;
+            *.sh|*.py)
+                cp "$f" "${COPY_RUNTIME_BIN_DIR}/${fname}"
+                ;;
+            *.container|*.volume|*.network|*.pod|*.image|*.build)
+                log "ERROR: raw Quadlet drop-ins are no longer supported: ${f}"
+                log "Move Podman workloads into dropins/*.nix via site-managed Nix imports."
+                exit 1
+                ;;
+            *)
+                log "Ignored unknown drop-in type: ${fname}"
+                ;;
+        esac
+    done < <(find "$DROPIN_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+
+    while IFS= read -r -d '' d; do
+        dname="$(basename "$d")"
+        rm -rf "${MANAGED_DROPIN_DIR:?}/${dname}"
+        cp -a "$d" "${MANAGED_DROPIN_DIR}/${dname}"
+    done < <(find "$DROPIN_DIR" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+fi
+
+DESIRED_CONFIG_HASH="$(proxnix_hash_tree "$BIND_CONFIG_DIR")"
+
+EFFECTIVE_SECRETS_FILE="${CONTAINER_PRIV_DIR}/effective.sops.yaml"
+
+if [[ -f "$EFFECTIVE_SECRETS_FILE" ]]; then
+    cp "$EFFECTIVE_SECRETS_FILE" "${SECRETS_STAGE_DIR}/effective.sops.yaml"
+fi
+
+printf '%s' "$DESIRED_CONFIG_HASH" > "${BIND_RUNTIME_DIR}/current-config-hash"
+printf '%s' "$VMID" > "${BIND_RUNTIME_DIR}/vmid"
+
+cp "${BIND_CONFIG_DIR}/configuration.nix" "${COPY_ETC_NIXOS_DIR}/configuration.nix"
+cp "$PROXNIX_SECRETS_GUEST_BIN" "${COPY_RUNTIME_BIN_DIR}/proxnix-secrets"
+
+cat > "${COPY_RUNTIME_DIR}/proxnix-apply-config-runner" <<'EOF'
+#!/bin/sh
+set -eu
+
+SYSTEM_BIN="/run/current-system/sw/bin"
+MKDIR_BIN="${SYSTEM_BIN}/mkdir"
+TOUCH_BIN="${SYSTEM_BIN}/touch"
+TR_BIN="${SYSTEM_BIN}/tr"
+GREP_BIN="${SYSTEM_BIN}/grep"
+INSTALL_BIN="${SYSTEM_BIN}/install"
+SYSTEMCTL_BIN="${SYSTEM_BIN}/systemctl"
+NIX_CHANNEL_BIN="${SYSTEM_BIN}/nix-channel"
+NIXOS_REBUILD_BIN="${SYSTEM_BIN}/nixos-rebuild"
+RM_BIN="${SYSTEM_BIN}/rm"
+AWK_BIN="${SYSTEM_BIN}/awk"
+
+STAMP_DIR="/run/proxnix"
+STAMP_FILE="${STAMP_DIR}/apply-config-ran"
+CURRENT_HASH_FILE="/var/lib/proxnix/runtime/current-config-hash"
+APPLIED_HASH_FILE="/var/lib/proxnix/runtime/applied-config-hash"
+ROOT_CHANNEL_DIR="/nix/var/nix/profiles/per-user/root/channels/nixos"
+
+export PATH="${SYSTEM_BIN}:/nix/var/nix/profiles/default/bin:/bin:/usr/bin${PATH:+:$PATH}"
+
+"$MKDIR_BIN" -p "$STAMP_DIR"
+
+current=""
+if [ -r "$CURRENT_HASH_FILE" ]; then
+    current="$("$TR_BIN" -d "\r\n" < "$CURRENT_HASH_FILE")"
+fi
+
+applied=""
+if [ -r "$APPLIED_HASH_FILE" ]; then
+    applied="$("$TR_BIN" -d "\r\n" < "$APPLIED_HASH_FILE")"
+fi
+
+if [ -z "$current" ]; then
+    echo "proxnix-apply-config: no current config hash, skipping"
+    exit 0
+fi
+
+if [ "$current" = "$applied" ]; then
+    echo "proxnix-apply-config: config hash unchanged ($current)"
+    exit 0
+fi
+
+if [ -e "$STAMP_FILE" ]; then
+    echo "proxnix-apply-config: already ran this boot, skipping"
+    exit 0
+fi
+
+"$TOUCH_BIN" "$STAMP_FILE"
+trap 'status=$?; if [ "$status" -ne 0 ]; then "$RM_BIN" -f "$STAMP_FILE"; fi; exit "$status"' EXIT INT TERM
+
+if [ -z "${XDG_STATE_HOME:-}" ]; then
+    XDG_STATE_HOME="/root/.local/state"
+fi
+export XDG_STATE_HOME
+
+if [ -f /etc/set-environment ]; then
+    # shellcheck disable=SC1091
+    set +u
+    . /etc/set-environment
+    set -u
+fi
+
+if [ ! -d "$ROOT_CHANNEL_DIR" ] || [ ! -d /nix/var/nix/profiles/per-user/root/channels/nixpkgs-unstable ]; then
+    state_version="$("$GREP_BIN" -oP 'system\.stateVersion\s*=\s*"\K[^"]+' /etc/nixos/configuration.nix 2>/dev/null || true)"
+    state_version="${state_version:-25.11}"
+    echo "proxnix-apply-config: bootstrapping root channels for NixOS ${state_version}"
+    "$NIX_CHANNEL_BIN" --add "https://nixos.org/channels/nixos-${state_version}" nixos
+    "$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixpkgs-unstable nixpkgs-unstable
+    "$NIX_CHANNEL_BIN" --update
+fi
+
+export NIX_PATH="nixpkgs=${ROOT_CHANNEL_DIR}:nixos-config=/etc/nixos/configuration.nix:/nix/var/nix/profiles/per-user/root/channels${NIX_PATH:+:$NIX_PATH}"
+
+echo "proxnix-apply-config: hash changed (${applied:-unset} -> ${current}), rebuilding..."
+"$SYSTEMCTL_BIN" stop nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1 || true
+"$SYSTEMCTL_BIN" reset-failed nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1 || true
+"$NIXOS_REBUILD_BIN" switch
+
+secret_units="$(
+  "$SYSTEMCTL_BIN" list-unit-files 'proxnix-secret-*.service' --state=enabled --no-legend --plain 2>/dev/null \
+    | "$AWK_BIN" '{print $1}'
+)"
+if [ -n "$secret_units" ]; then
+  # A switch happens after multi-user.target has already been reached, so
+  # enabled proxnix secret units would otherwise wait until the next boot.
+  "$SYSTEMCTL_BIN" start $secret_units
+fi
+
+"$INSTALL_BIN" -m 0644 "$CURRENT_HASH_FILE" "$APPLIED_HASH_FILE"
+trap - EXIT INT TERM
+echo "proxnix-apply-config: rebuild complete"
+EOF
+
+cat > "${COPY_ETC_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" <<'EOF'
+[Unit]
+Description=Apply proxnix-managed NixOS config after boot
+Documentation=man:nixos-rebuild(8)
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/proxnix/runtime/current-config-hash
+
+[Service]
+Type=oneshot
+ExecStart=/var/lib/proxnix/runtime/proxnix-apply-config-runner
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+CONTAINER_IDENTITY_STORE_PATH="$(proxnix_container_age_identity_store_path "$VMID")"
+if [[ -f "$CONTAINER_IDENTITY_STORE_PATH" ]]; then
+    if ! proxnix_decrypt_host_identity_store_to_file "$CONTAINER_IDENTITY_STORE_PATH" "${SECRETS_STAGE_DIR}/identity"; then
+        log "ERROR: failed to decrypt host-relay container identity: ${CONTAINER_IDENTITY_STORE_PATH}"
+        exit 1
+    fi
+fi
+
+# Restrict staged content to the container's host-side root UID so the mount
+# hook can read it. The secret files are still copied into the guest as
+# root-owned regular files instead of being bind-mounted, so guest-visible
+# ownership and permissions are enforced there rather than on the host stage.
+HOST_SUBUID=""
+if [[ -f "$PVE_CONF" ]]; then
+    HOST_SUBUID=$(awk '/^lxc\.idmap: *u 0 / { print $4; exit }' "$PVE_CONF")
+fi
+
+if [[ -z "$HOST_SUBUID" && -f "$PVE_CONF" ]]; then
+    if [[ "$(awk -F': *' '$1 == "unprivileged" { print $2; exit }' "$PVE_CONF")" == "1" ]]; then
+        HOST_SUBUID="100000"
+    else
+        HOST_SUBUID="0"
+    fi
+fi
+
+if [[ -n "$HOST_SUBUID" && "$HOST_SUBUID" =~ ^[0-9]+$ ]]; then
+    chown -R "${HOST_SUBUID}" "${STAGE_DIR}"
+    find "${STAGE_DIR}" -type d -exec chmod 700 {} +
+    find "${STAGE_DIR}" -type f -exec chmod 400 {} +
+    find "${COPY_RUNTIME_BIN_DIR}" -type f -exec chmod 500 {} + 2>/dev/null || true
+    chmod 500 "${COPY_RUNTIME_DIR}/proxnix-apply-config-runner" 2>/dev/null || true
+else
+    log "ERROR: could not determine container host root UID from ${PVE_CONF}"
+    exit 1
+fi
+
+trap - EXIT
+log "Rendered staged state at ${STAGE_DIR} (host root uid: ${HOST_SUBUID})"
+exit 0

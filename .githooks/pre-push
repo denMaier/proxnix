@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+# shellcheck source=/dev/null
+source "${ROOT_DIR}/ci/release-lib.sh"
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+release_branch="${RELEASE_BRANCH:-main}"
+had_release_tag=0
+project_version="$("${ROOT_DIR}/ci/project-version.sh")"
+workstation_version="$("${ROOT_DIR}/ci/workstation-version.sh")"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -n "${local_ref:-}" ]] || continue
+
+  if [[ "$remote_ref" != refs/tags/v* ]]; then
+    continue
+  fi
+
+  had_release_tag=1
+  tag="${remote_ref#refs/tags/}"
+  validate_release_tag "$tag" >/dev/null
+  [[ "$(release_version_from_tag "$tag")" == "$project_version" ]] \
+    || release_die "release tag '${tag}' does not match VERSION '${project_version}'"
+  [[ "$project_version" == "$workstation_version" ]] \
+    || release_die "VERSION '${project_version}' does not match workstation package version '${workstation_version}'"
+
+  if [[ "$local_sha" == 0000000000000000000000000000000000000000 ]]; then
+    release_die "deleting release tags via push is blocked: ${tag}"
+  fi
+
+  if [[ "$remote_sha" != 0000000000000000000000000000000000000000 && "$remote_sha" != "$local_sha" ]]; then
+    release_die "refusing to move existing release tag '${tag}' on ${remote_name}"
+  fi
+
+  git show-ref --verify --quiet "refs/tags/${tag}" || release_die "missing local tag '${tag}'"
+  require_annotated_tag "$tag"
+  ensure_commit_on_release_branch "$tag" "$release_branch"
+
+  echo "Validated release tag ${tag} for ${remote_name:-remote} (${remote_url:-unknown-url})"
+done
+
+if [[ $had_release_tag -eq 1 ]]; then
+  echo "Version tag push detected. Forgejo package workflows will publish using that tag version."
+fi

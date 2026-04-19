@@ -8,7 +8,8 @@
       "WebFetch(domain:git.proxmox.com)",
       "Bash(git log:*)",
       "Bash(grep -En \"^[[:space:]]*#\\\\s*[a-zA-Z_].*\\\\\\(|^[[:space:]]*#\\\\s*[a-zA-Z_].*=\" /Users/denis/Projects/proxnix/proxnix-* /Users/denis/Projects/proxnix/*.sh)",
-      "Bash(cat /Users/denis/Projects/proxnix/containers/twingate/quadlets/*.container)"
+      "Bash(cat /Users/denis/Projects/proxnix/containers/twingate/quadlets/*.container)",
+      "Bash(swift build:*)"
     ]
   }
 }

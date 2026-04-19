@@ -6,3 +6,9 @@ master_age_pubkey
 .env
 .env.*
 *.local
+dist/
+.tmp-workstation-packaging/
+.tmp-host-packaging/
+.githooks/*.local
+.codex-staging/
+host/ansible/ai-agent-deploy.vars.yml

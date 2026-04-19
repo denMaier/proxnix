@@ -1,0 +1,57 @@
+name: host-packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  deb:
+    runs-on:
+      - self-hosted
+      - linux
+      - proxnix-linux
+    steps:
+      - name: Check out source
+        uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Resolve package version
+        run: |
+          echo "PACKAGE_VERSION=$(./ci/package-version.sh)" >> "$GITHUB_ENV"
+
+      - name: Build host Debian package
+        run: |
+          VERSION="$PACKAGE_VERSION" ./host/packaging/package-deb.sh
+          shasum -a 256 dist/proxnix-host_*.deb > dist/SHA256SUMS-host.txt
+
+      - name: Publish host package to Codeberg
+        if: github.event_name != 'pull_request'
+        env:
+          CODEBERG_PACKAGE_NAME: proxnix-host-deb
+          CODEBERG_PACKAGE_OWNER: ${{ github.repository_owner }}
+          CODEBERG_PACKAGE_REPLACE: "1"
+          CODEBERG_PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_PACKAGE_TOKEN }}
+        run: ./ci/upload-codeberg-package.sh dist/proxnix-host_*.deb dist/SHA256SUMS-host.txt
+
+      - name: Publish latest host release metadata
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          CODEBERG_PACKAGE_NAME: proxnix-host-meta
+          CODEBERG_PACKAGE_OWNER: ${{ github.repository_owner }}
+          CODEBERG_PACKAGE_REPLACE: "1"
+          CODEBERG_PACKAGE_VERSION: latest
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_PACKAGE_TOKEN }}
+        run: |
+          deb_file="$(basename dist/proxnix-host_*.deb)"
+          deb_sha="$(awk 'NR==1 { print $1 }' dist/SHA256SUMS-host.txt)"
+          printf 'VERSION=%s\nFILENAME=%s\nSHA256=%s\n' \
+            "${PACKAGE_VERSION}" \
+            "${deb_file}" \
+            "${deb_sha}" \
+            > dist/proxnix-host-latest.env
+          ./ci/upload-codeberg-package.sh dist/proxnix-host-latest.env

@@ -12,7 +12,7 @@ The Proxmox container config remains authoritative for:
 - hostname
 - IP addressing and gateway
 - nameservers and search domain from Proxmox
-- CT features such as `nesting=1`
+- CT features such as nesting or keyctl when your chosen guest workload needs them
 - SSH public keys defined in the WebUI
 
 proxnix reads those values from `/etc/pve/lxc/<vmid>.conf` and turns the relevant subset into `proxmox.nix`.
@@ -28,6 +28,7 @@ Typical uses:
 
 - extending `proxnix.common.extraPackages`
 - changing the shared admin user defaults
+- setting a cluster-wide firewall policy, for example `networking.firewall.enable = false;`
 - setting node-wide policy overrides without editing the install repo
 
 ### `dropins/`
@@ -42,9 +43,9 @@ Supported file types:
 | Extension | What happens |
 |-----------|-------------|
 | `*.nix` | Imported from `configuration.nix` as extra NixOS modules |
-| `*.service` | Attached under `/etc/systemd/system.attached/` |
-| `*.sh`, `*.py` | Copied to `/usr/local/bin/` |
-| `*.container`, `*.volume`, `*.network`, `*.pod`, `*.image`, `*.build` | Treated as Quadlet units |
+| `*.service` | Rejected; move the unit into `dropins/*.nix` so it stays guest Nix-managed |
+| `*.sh`, `*.py` | Copied to `/var/lib/proxnix/runtime/bin/` and exposed on `PATH` |
+| `*.container`, `*.volume`, `*.network`, `*.pod`, `*.image`, `*.build` | Rejected; raw host-side Quadlet staging is no longer supported |
 | Subdirectories | Copied into the managed drop-ins tree (for Nix files or assets they reference) |
 
 Top-level `dropins/*.nix` files are still the auto-imported entrypoints. proxnix
@@ -74,7 +75,7 @@ containers/
 ```
 
 The marker file just selects which shared template tree proxnix stages into
-`/etc/nixos/managed/_template/` for that guest. Your container drop-in still
+`/var/lib/proxnix/config/managed/_template/` for that guest. Your container drop-in still
 imports it explicitly, for example:
 
 ```nix
@@ -86,29 +87,11 @@ still allowing each template to carry helper files beside it.
 
 ### `quadlets/`
 
-Use `quadlets/` for raw host-managed Quadlet files and nearby assets.
+Raw host-side `quadlets/` trees are no longer supported.
 
-proxnix copies:
-
-- top-level Quadlet unit files into `/etc/containers/systemd/`
-- the whole tree into `/etc/proxnix/quadlets/` for app config and nearby assets
-
-This remains supported as the low-level compatibility path. Keep writable state
-out of this tree; put runtime data under `/var/lib/<app>/...` instead.
-
-### `dropins/` vs `quadlets/` — when to use which
-
-Both can hold Quadlet unit files, but they serve different roles:
-
-| | `dropins/` | `quadlets/` |
-|-|-----------|-------------|
-| **Primary use** | Nix modules, attached systemd units, scripts, and default Nix-authored Quadlet definitions | Raw Quadlet files and nearby mirrored assets |
-| **Mirroring** | Quadlet unit files are copied into `/etc/containers/systemd/`; non-unit files stay in the managed drop-ins tree | Full tree mirrored to `/etc/proxnix/quadlets/`, with top-level unit files also copied into `/etc/containers/systemd/` |
-| **Best for** | Native services, Nix-managed Quadlets, and supporting extras | Existing raw Quadlet trees, direct Quadlet authoring, and escape-hatch cases |
-
-**Rule of thumb:** Prefer `dropins/*.nix` for new Nix-managed workloads,
-including Nix-authored Quadlets. Use `quadlets/` when you want to keep raw
-Quadlet files or mirrored non-Nix app assets beside them.
+If you previously used them, migrate the workload into `dropins/*.nix` and
+import any shared container module layer, such as `quadlet-nix`, from
+`site.nix`.
 
 ## Generated files
 
@@ -116,7 +99,7 @@ Quadlet files or mirrored non-Nix app assets beside them.
 
 - `proxmox.nix`
 
-The shared entrypoint imports them from `/etc/nixos/managed/`, after the install
+The shared entrypoint imports them from `/var/lib/proxnix/config/managed/`, after the install
 layer (`base.nix`, `common.nix`) and optional `site.nix`.
 
 ## When to use which mechanism
@@ -133,14 +116,35 @@ layer (`base.nix`, `common.nix`) and optional `site.nix`.
 - you need custom systemd, firewall, tmpfiles, users, or `environment.etc`
 - you want host-managed config to stay pure Nix
 
-### Use Quadlets when
+## Firewall default
+
+NixOS enables the firewall by default, so proxnix-managed guests start with it
+on unless you override it. The usual pattern is to keep it on and open only
+the ports a workload needs, for example:
+
+```nix
+networking.firewall.allowedTCPPorts = [ 8080 ];
+```
+
+If you really want to disable it across the whole published site or cluster,
+set this in `site.nix`:
+
+```nix
+{ ... }: {
+  networking.firewall.enable = false;
+}
+```
+
+If you want to disable it only for one container, set the same option in one
+of that container's `dropins/*.nix` files.
+
+### Use container modules when
 
 - the application is container-first
 - a clean native NixOS module does not exist or is not what you want
 
-For new proxnix configs, prefer expressing those Quadlets in `dropins/*.nix`
-through a dedicated Nix Quadlet module. Keep raw files in `quadlets/` when you
-want exact hand-written Quadlet text or a minimal migration path.
+Express those workloads in `dropins/*.nix` through a dedicated Nix container
+module layer such as `quadlet-nix`.
 
 ### Use `/etc/nixos/local.nix` when
 

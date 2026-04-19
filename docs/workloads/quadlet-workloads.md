@@ -1,137 +1,128 @@
 # Quadlet Workloads
 
-Use Quadlets for container-first applications.
+Use Quadlets for container-first applications, but manage them from guest Nix
+config rather than through raw host-side Quadlet files.
 
-For new proxnix configs, prefer declaring Quadlets from `dropins/*.nix` via a
-Nix Quadlet module. Raw files under `quadlets/` remain fully supported and are
-the direct escape hatch when you want exact hand-written Quadlet text.
+The authoritative source still lives in your workstation-owned site repo under
+`containers/<vmid>/dropins/*.nix`. proxnix publishes those modules to the node,
+the guest imports them during activation, and systemd then realizes the
+generated Podman units from guest-side Nix configuration.
 
-## Quick example
+## The model
 
-For VMID 100, create a simple nginx container:
+proxnix is now opinionated here:
 
-```bash
-mkdir -p /var/lib/proxnix/containers/100/quadlets
+- proxnix itself does not import `quadlet-nix`
+- proxnix does not stage raw `quadlets/` trees
+- proxnix does not auto-enable Podman
+- site-level shared imports belong in `site.nix`
+- per-container activation belongs in `dropins/*.nix`
 
-cat > /var/lib/proxnix/containers/100/quadlets/nginx.container << 'EOF'
-[Container]
-Image=docker.io/library/nginx:latest
-PublishPort=8080:80
+That keeps container workloads in the same Nix-driven model as native services.
 
-[Service]
-Restart=always
+## Shared import vs per-container activation
 
-[Install]
-WantedBy=default.target
-EOF
+Import shared container modules once in `site.nix`, for example `quadlet-nix`.
 
-pct restart 100
+Then activate actual workloads only in the containers that need them:
+
+```nix
+{ pkgs, ... }:
+
+let
+  siteRoot = "/var/lib/nginx-container-demo/html";
+in {
+  virtualisation.quadlet.enable = true;
+  virtualisation.podman.enable = true;
+
+  systemd.tmpfiles.rules = [
+    "d ${siteRoot} 0755 root root -"
+  ];
+
+  proxnix.secrets.templates.nginx-index = {
+    source = pkgs.writeText "nginx-container-index.html" ''
+      <!doctype html>
+      <html>
+        <body>
+          <h1>__NGINX_INDEX_MESSAGE__</h1>
+        </body>
+      </html>
+    '';
+    destination = "${siteRoot}/index.html";
+    owner = "root";
+    group = "root";
+    mode = "0644";
+    substitutions = {
+      "__NGINX_INDEX_MESSAGE__" = { secret = "nginx_index_message"; };
+    };
+  };
+
+  virtualisation.quadlet.containers.nginx = {
+    autoStart = true;
+    containerConfig = {
+      image = "docker.io/library/nginx:latest";
+      publishPorts = [ "127.0.0.1:8080:80" ];
+      volumes = [ "${siteRoot}:/usr/share/nginx/html:ro" ];
+    };
+    serviceConfig.Restart = "always";
+  };
+}
 ```
 
 ## Where files go
 
-For a container VMID, place workload files under:
+For a container VMID, proxnix-managed workload code lives under:
 
 ```text
-/var/lib/proxnix/containers/<vmid>/quadlets/
+/var/lib/proxnix/containers/<vmid>/dropins/
 ```
 
-Supported unit types include:
+Use top-level `*.nix` files as the actual entrypoints.
 
-- `*.container`
-- `*.volume`
-- `*.network`
-- `*.pod`
-- `*.image`
-- `*.build`
+## Workflow
 
-`quadlets/` remains the raw-file path for container workloads. For new Nix-first
-configs, prefer `dropins/*.nix` plus a Quadlet Nix module, and use `quadlets/`
-when you want raw files or mirrored assets beside them. You can also place the
-same unit types in `dropins/` when they are just a small supplement to an
-otherwise native-service container.
+1. Add or edit `containers/<vmid>/dropins/<workload>.nix` in your site repo.
+2. If the workload needs a shared module layer such as `quadlet-nix`, import it
+   from `site.nix`.
+3. Publish with `proxnix-publish --vmid <vmid>`.
+4. If you changed only config and did not touch secrets or identities, you can
+   narrow that to `proxnix-publish --config-only --vmid <vmid>`.
+5. Restart the container with `pct restart <vmid>`.
+6. Verify inside the guest with `podman ps -a` and
+   `systemctl status podman-<name>.service`.
 
-## How proxnix maps them into the guest
+## Config and state
 
-The mount hook mirrors the workload in two ways:
+Keep mutable application state under `/var/lib/<app>/...`.
 
-| Source | Guest destination | Purpose |
-|--------|------------------|---------|
-| Top-level Quadlet unit files | `/etc/containers/systemd/` | Systemd generator input — these become actual services |
-| Full `quadlets/` tree | `/etc/proxnix/quadlets/` | App config mirror |
+For declarative config files, prefer Nix-native generation:
 
-That split is important:
+- `environment.etc`
+- `pkgs.writeText`
+- `pkgs.formats.*`
+- proxnix secret template units
 
-- `/etc/containers/systemd/` is the actual systemd generator input
-- `/etc/proxnix/quadlets/` is the host-managed config mirror
-
-## Proxmox requirement: `nesting=1`
-
-Podman-based workloads need `features: nesting=1` in the CT config.
-
-```bash
-pct set <vmid> --features nesting=1
-```
-
-`proxnix-doctor` warns if Quadlet files are present but nesting is not enabled.
-
-## Image naming rule
-
-Use fully qualified image names, for example:
-
-```text
-docker.io/library/nginx:latest
-docker.io/homeassistant/home-assistant:stable
-```
-
-That avoids registry resolution surprises during restarts and updates.
-
-## State placement rule
-
-Keep mutable application state under `/var/lib/<app>/...` rather than inside the mirrored Quadlet config tree.
-
-Use `/etc/proxnix/quadlets/<app>/...` for declarative config files that should stay host-managed.
-
-## Config files alongside Quadlets
-
-Because proxnix syncs the full `quadlets/` tree, app-owned config files can live beside the unit files on the host:
-
-```text
-quadlets/
-├── myapp.container
-├── myapp.network
-├── myapp.volume
-└── myapp/
-    └── config.yaml       ← app config, mirrored to /etc/proxnix/quadlets/myapp/
-```
-
-Reference them in Quadlets:
-
-```ini
-[Container]
-Volume=/etc/proxnix/quadlets/myapp/config.yaml:/app/config.yaml:ro
-```
+If a container needs a file mounted in, generate that file from Nix and point
+the container definition at the generated path.
 
 ## Secrets in container workloads
 
-Podman sees proxnix-managed secrets through the guest-side shell driver implemented by `/usr/local/bin/proxnix-secrets`.
+proxnix stages secrets into the guest and exposes helpers for consuming them.
 
-Use secret names directly in Quadlets:
+Common patterns:
 
-```ini
-[Container]
-# As environment variable
-Secret=db_password,type=env,target=DB_PASSWORD
+- materialize files with `proxnix.secrets.files`
+- render config or mounted content with `proxnix.secrets.templates`
+- run setup steps with `proxnix.secrets.oneshot`
+- use the Podman shell secret driver from guest config when the workload is Podman-based
 
-# As file secret
-Secret=db_password,target=db_password
-# → readable at /run/secrets/db_password
-```
+The end-to-end exercise lab validates this path by materializing secret-backed
+files, templates, oneshot consumers, and a Podman secret inside the guest, then
+publishing the guest result at `http://<guest-ip>:18080/status.json`.
 
-That means you manage the secret once on the host, then consume it from Quadlets without any manual `podman secret create` step.
+## Proxmox features
 
-## When Quadlets are absent
-
-Podman is off by default in proxnix. Raw top-level Quadlet unit files cause the
-pre-start hook to generate a small Nix drop-in that enables Podman for that
-guest. Nix-authored Quadlet modules can also enable Podman directly.
+For proxnix-managed NixOS CTs, `nesting=1,keyctl=1` should already be enabled.
+If you are working with a manually created container or a non-proxnix path, set them
+explicitly in Proxmox. proxnix no longer infers or enables those settings from
+host-side raw Quadlet files.

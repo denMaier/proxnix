@@ -1,0 +1,156 @@
+- import_playbook: install.yml
+  vars:
+    proxnix_target_hosts: "{{ proxnix_ai_target_hosts_group | default('proxmox') }}"
+
+- name: Verify proxnix host install on target Proxmox nodes
+  hosts: "{{ proxnix_ai_target_hosts_group | default('proxmox') }}"
+  connection: ssh
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run host-only proxnix doctor
+      ansible.builtin.command:
+        argv:
+          - proxnix-doctor
+          - --host-only
+      changed_when: false
+
+- name: Render workstation config and optionally run the exercise harness
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    proxnix_ai_repo_root: "{{ playbook_dir }}/../.."
+    proxnix_ai_effective_workstation_bin: "{{ proxnix_ai_workstation_bin | default(proxnix_ai_repo_root + '/workstation/bin/proxnix') }}"
+    proxnix_ai_effective_config_file_path: "{{ proxnix_ai_config_file | default(lookup('env', 'HOME') + '/.config/proxnix/config') }}"
+    proxnix_ai_effective_create_site_repo: "{{ proxnix_ai_create_site_repo | default(false) | bool }}"
+    proxnix_ai_effective_run_exercise: "{{ proxnix_ai_run_exercise | default(false) | bool }}"
+    proxnix_ai_effective_exercise_work_dir: "{{ proxnix_ai_exercise_work_dir | default(proxnix_ai_repo_root + '/.codex-staging/lxc-exercise') }}"
+
+  pre_tasks:
+    - name: Assert required bootstrap variables are present
+      ansible.builtin.assert:
+        that:
+          - proxnix_ai_site_dir is defined
+          - proxnix_ai_master_identity is defined
+          - proxnix_ai_publish_hosts is defined
+          - proxnix_ai_publish_hosts | length > 0
+          - not proxnix_ai_effective_run_exercise or (proxnix_ai_exercise_host is defined and proxnix_ai_exercise_base_vmid is defined)
+        fail_msg: >-
+          Missing required vars for host/ansible/ai-agent-bootstrap.yml.
+          Start from host/ansible/ai-agent-bootstrap.vars.example.yml and fill in the
+          site path, identity path, host list, and optional exercise settings.
+
+    - name: Verify the repo-local workstation wrapper exists
+      ansible.builtin.stat:
+        path: "{{ proxnix_ai_effective_workstation_bin }}"
+      register: proxnix_ai_workstation_bin_stat
+
+    - name: Fail when the workstation wrapper is missing
+      ansible.builtin.assert:
+        that:
+          - proxnix_ai_workstation_bin_stat.stat.exists
+          - proxnix_ai_workstation_bin_stat.stat.executable
+        fail_msg: >-
+          Expected a proxnix workstation command at {{ proxnix_ai_effective_workstation_bin }}.
+          Override proxnix_ai_workstation_bin if you want to use an installed `proxnix`
+          command instead.
+
+    - name: Check whether the master identity exists
+      ansible.builtin.stat:
+        path: "{{ proxnix_ai_master_identity }}"
+      register: proxnix_ai_master_identity_stat
+
+    - name: Fail when the master identity is missing for exercise runs
+      ansible.builtin.assert:
+        that:
+          - proxnix_ai_master_identity_stat.stat.exists
+        fail_msg: >-
+          Master identity not found: {{ proxnix_ai_master_identity }}.
+          Create it first with `ssh-keygen -t ed25519 -f {{ proxnix_ai_master_identity }}`
+          or point proxnix_ai_master_identity at an existing key.
+      when: proxnix_ai_effective_run_exercise
+
+  tasks:
+    - name: Ensure workstation site repo directories exist when requested
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ proxnix_ai_site_dir }}"
+        - "{{ proxnix_ai_site_dir }}/containers"
+        - "{{ proxnix_ai_site_dir }}/private"
+        - "{{ proxnix_ai_site_dir }}/private/shared"
+        - "{{ proxnix_ai_site_dir }}/private/groups"
+        - "{{ proxnix_ai_site_dir }}/private/containers"
+      when: proxnix_ai_effective_create_site_repo
+
+    - name: Seed a minimal site.nix when creating a new site repo
+      ansible.builtin.copy:
+        dest: "{{ proxnix_ai_site_dir }}/site.nix"
+        mode: "0644"
+        force: false
+        content: |
+          { ... }: {}
+      when: proxnix_ai_effective_create_site_repo
+
+    - name: Ensure proxnix config directory exists
+      ansible.builtin.file:
+        path: "{{ proxnix_ai_effective_config_file_path | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Render workstation config for the deployment agent
+      ansible.builtin.template:
+        src: templates/proxnix-workstation-config.j2
+        dest: "{{ proxnix_ai_effective_config_file_path }}"
+        mode: "0600"
+
+    - name: Show normalized proxnix workstation config
+      ansible.builtin.command:
+        argv:
+          - "{{ proxnix_ai_effective_workstation_bin }}"
+          - --config
+          - "{{ proxnix_ai_effective_config_file_path }}"
+          - config
+          - show
+      changed_when: false
+
+    - name: Run the disposable proxnix exercise harness
+      ansible.builtin.command:
+        argv: >-
+          {{
+            [
+              proxnix_ai_effective_workstation_bin,
+              '--config',
+              proxnix_ai_effective_config_file_path,
+              'exercise',
+              'lxc',
+              '--host',
+              proxnix_ai_exercise_host,
+              '--base-vmid',
+              proxnix_ai_exercise_base_vmid | string,
+              '--work-dir',
+              proxnix_ai_effective_exercise_work_dir,
+            ]
+            + (['--template', proxnix_ai_exercise_template] if proxnix_ai_exercise_template is defined and proxnix_ai_exercise_template | length > 0 else [])
+            + (['--storage', proxnix_ai_exercise_storage] if proxnix_ai_exercise_storage is defined and proxnix_ai_exercise_storage | length > 0 else [])
+            + (['--bridge', proxnix_ai_exercise_bridge] if proxnix_ai_exercise_bridge is defined and proxnix_ai_exercise_bridge | length > 0 else [])
+            + (['--ip', proxnix_ai_exercise_ip] if proxnix_ai_exercise_ip is defined and proxnix_ai_exercise_ip | length > 0 else [])
+            + (['--gw', proxnix_ai_exercise_gw] if proxnix_ai_exercise_gw is defined and proxnix_ai_exercise_gw | length > 0 else [])
+            + (['--timeout-seconds', proxnix_ai_exercise_timeout_seconds | string] if proxnix_ai_exercise_timeout_seconds is defined else [])
+          }}
+      register: proxnix_ai_exercise_run
+      when: proxnix_ai_effective_run_exercise
+
+    - name: Report where the exercise harness wrote its findings
+      ansible.builtin.debug:
+        msg:
+          - "Exercise harness complete."
+          - "Markdown report: {{ proxnix_ai_effective_exercise_work_dir }}/reports/latest/report.md"
+          - "JSON report: {{ proxnix_ai_effective_exercise_work_dir }}/reports/latest/report.json"
+          - "Artifacts dir: {{ proxnix_ai_effective_exercise_work_dir }}/reports/latest/artifacts"
+      when: proxnix_ai_effective_run_exercise

@@ -1,0 +1,483 @@
+#!/bin/bash
+# LXC mount hook: expose proxnix's rendered state inside the mounted guest rootfs.
+#
+# Consumes the staging directory produced by nixos-proxnix-prestart under
+# /run/proxnix/<vmid>/ and applies it to the mounted rootfs exposed at
+# $LXC_ROOTFS_MOUNT. Read-only bind mounts live under bind/, copied guest-owned
+# files live under copy/, and guest-writable runtime state remains local to the
+# guest rootfs. Secret material is always copied into the guest as root-owned
+# regular files rather than bind-mounted from host staging. This hook is the
+# only proxnix hook that writes into the guest filesystem.
+
+set -uo pipefail
+umask 022  # ensure files written into the container rootfs have sane default permissions
+
+VMID="${LXC_NAME:-}"
+ROOTFS="${LXC_ROOTFS_MOUNT:-}"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
+
+log() { echo "[proxnix-mount][${VMID}] $*" >&2; }
+
+if [[ -z "$VMID" ]]; then
+    log "ERROR: LXC_NAME is not set."
+    exit 1
+fi
+
+if [[ ! -f "$COMMON_LIB" ]]; then
+    log "ERROR: ${COMMON_LIB} not found."
+    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$COMMON_LIB"
+
+bind_ro_file() {
+    local src="$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if mountpoint -q "$dest" 2>/dev/null; then
+        umount "$dest"
+    fi
+    rm -f "$dest"
+    : > "$dest"
+    mount --bind "$src" "$dest"
+    mount -o remount,bind,ro "$dest"
+}
+
+bind_ro_dir() {
+    local src="$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if mountpoint -q "$dest" 2>/dev/null; then
+        umount "$dest"
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    mount --bind "$src" "$dest"
+    mount -o remount,bind,ro "$dest"
+}
+
+copy_guest_file() {
+    local src="$1" dest="$2" mode="$3"
+    local owner group perms
+    mkdir -p "$(dirname "$dest")"
+    if mountpoint -q "$dest" 2>/dev/null; then
+        umount "$dest"
+    fi
+    rm -rf "$dest"
+    install -o 0 -g 0 -m "$mode" "$src" "$dest"
+
+    if [[ ! -f "$dest" || -L "$dest" ]]; then
+        log "ERROR: failed to materialize regular file at ${dest}"
+        exit 1
+    fi
+
+    owner="$(stat -c '%u' "$dest" 2>/dev/null || true)"
+    group="$(stat -c '%g' "$dest" 2>/dev/null || true)"
+    perms="$(stat -c '%a' "$dest" 2>/dev/null || true)"
+    if [[ "$owner" != "0" || "$group" != "0" || "$perms" != "$mode" ]]; then
+        log "ERROR: insecure materialized file at ${dest} (uid=${owner:-?} gid=${group:-?} mode=${perms:-?}, expected 0:0 ${mode})"
+        exit 1
+    fi
+}
+
+sync_bound_file_manifest() {
+    local src_dir="$1" dest_dir="$2" manifest="$3"
+    shift 3
+    local find_expr=("$@")
+    local current_manifest="" name src dest
+
+    if [[ -f "$manifest" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            if [[ ! -f "${src_dir}/${name}" ]]; then
+                dest="${dest_dir}/${name}"
+                if mountpoint -q "$dest" 2>/dev/null; then
+                    umount "$dest"
+                fi
+                rm -f "$dest"
+            fi
+        done < "$manifest"
+    fi
+
+    if [[ -d "$src_dir" ]]; then
+        while IFS= read -r -d '' src; do
+            name="$(basename "$src")"
+            dest="${dest_dir}/${name}"
+            bind_ro_file "$src" "$dest"
+            current_manifest+="${name}"$'\n'
+        done < <(find "$src_dir" -maxdepth 1 -type f "${find_expr[@]}" -print0 2>/dev/null | sort -z)
+    fi
+
+    proxnix_write_text_if_changed "$current_manifest" "$manifest" "644" >/dev/null || true
+}
+
+sync_copied_guest_file_manifest() {
+    local src_dir="$1" dest_dir="$2" manifest="$3" mode="$4"
+    shift 4
+    local find_expr=("$@")
+    local current_manifest="" name src dest
+
+    mkdir -p "$dest_dir"
+
+    if [[ -f "$manifest" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            if [[ ! -f "${src_dir}/${name}" ]]; then
+                dest="${dest_dir}/${name}"
+                if mountpoint -q "$dest" 2>/dev/null; then
+                    umount "$dest"
+                fi
+                rm -f "$dest"
+            fi
+        done < "$manifest"
+    fi
+
+    if [[ -d "$src_dir" ]]; then
+        while IFS= read -r -d '' src; do
+            name="$(basename "$src")"
+            dest="${dest_dir}/${name}"
+            copy_guest_file "$src" "$dest" "$mode"
+            current_manifest+="${name}"$'\n'
+        done < <(find "$src_dir" -maxdepth 1 -type f "${find_expr[@]}" -print0 2>/dev/null | sort -z)
+    fi
+
+    proxnix_write_text_if_changed "$current_manifest" "$manifest" "644" >/dev/null || true
+}
+
+sync_bound_entry_manifest() {
+    local src_dir="$1" dest_dir="$2" manifest="$3"
+    local current_manifest="" name src dest
+
+    if [[ -f "$manifest" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            if [[ ! -e "${src_dir}/${name}" ]]; then
+                dest="${dest_dir}/${name}"
+                if mountpoint -q "$dest" 2>/dev/null; then
+                    umount "$dest"
+                fi
+                rm -rf "$dest"
+            fi
+        done < "$manifest"
+    fi
+
+    if [[ -d "$src_dir" ]]; then
+        while IFS= read -r -d '' src; do
+            name="$(basename "$src")"
+            dest="${dest_dir}/${name}"
+            if [[ -d "$src" ]]; then
+                bind_ro_dir "$src" "$dest"
+            else
+                bind_ro_file "$src" "$dest"
+            fi
+            current_manifest+="${name}"$'\n'
+        done < <(find "$src_dir" -mindepth 1 -maxdepth 1 ! -name '.jj' ! -name '.git' -print0 2>/dev/null | sort -z)
+    fi
+
+    proxnix_write_text_if_changed "$current_manifest" "$manifest" "644" >/dev/null || true
+}
+
+remove_guest_path() {
+    local path="$1"
+    if mountpoint -q "$path" 2>/dev/null; then
+        umount "$path"
+    fi
+    rm -rf "$path"
+}
+
+STAGE_DIR="$(proxnix_stage_dir "$VMID")"
+BIND_STAGE_DIR="${STAGE_DIR}/bind"
+BIND_CONFIG_DIR="${BIND_STAGE_DIR}/config"
+BIND_RUNTIME_DIR="${BIND_STAGE_DIR}/runtime"
+BIND_SECRETS_DIR="${BIND_STAGE_DIR}/secrets"
+BIND_QUADLET_DIR="${BIND_STAGE_DIR}/quadlet"
+COPY_STAGE_DIR="${STAGE_DIR}/copy"
+COPY_RUNTIME_DIR="${COPY_STAGE_DIR}/runtime"
+COPY_RUNTIME_BIN_DIR="${COPY_RUNTIME_DIR}/bin"
+COPY_ETC_DIR="${COPY_STAGE_DIR}/etc"
+COPY_ETC_NIXOS_DIR="${COPY_ETC_DIR}/nixos"
+COPY_ETC_SYSTEMD_ATTACHED_DIR="${COPY_ETC_DIR}/systemd/system.attached"
+DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${BIND_RUNTIME_DIR}/current-config-hash" 2>/dev/null || true)"
+CURRENT_CONFIG_HASH=""
+
+if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
+    log "ERROR: rootfs mount not accessible."
+    log "  LXC_ROOTFS_MOUNT=${LXC_ROOTFS_MOUNT:-unset}"
+    exit 1
+fi
+
+if [[ ! -d "${ROOTFS}/etc" ]]; then
+    log "ERROR: ${ROOTFS}/etc missing — rootfs does not look right."
+    exit 1
+fi
+
+if [[ ! -d "$STAGE_DIR" ]]; then
+    log "ERROR: staged proxnix state missing at ${STAGE_DIR}."
+    log "Hint: ensure nixos-proxnix-prestart ran successfully before this hook."
+    exit 1
+fi
+
+if [[ ! -f "${COPY_ETC_NIXOS_DIR}/configuration.nix" || ! -d "${BIND_CONFIG_DIR}/managed" || ! -d "$COPY_RUNTIME_BIN_DIR" || ! -f "${COPY_RUNTIME_DIR}/proxnix-apply-config-runner" || ! -f "${BIND_RUNTIME_DIR}/vmid" || ! -f "${BIND_RUNTIME_DIR}/current-config-hash" || ! -f "${COPY_ETC_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" || -z "$DESIRED_CONFIG_HASH" ]]; then
+    log "ERROR: staged proxnix state is incomplete under ${STAGE_DIR}."
+    exit 1
+fi
+
+PROXNIX_STATE_DIR="${ROOTFS}/var/lib/proxnix"
+PROXNIX_CONFIG_DIR="${PROXNIX_STATE_DIR}/config"
+PROXNIX_RUNTIME_DIR="${PROXNIX_STATE_DIR}/runtime"
+PROXNIX_RUNTIME_BIN_DIR="${PROXNIX_RUNTIME_DIR}/bin"
+PROXNIX_RUNTIME_MANIFEST_DIR="${PROXNIX_RUNTIME_DIR}/manifests"
+PROXNIX_RUNTIME_QUADLET_DIR="${PROXNIX_RUNTIME_DIR}/quadlets"
+PROXNIX_SECRET_DIR="${PROXNIX_STATE_DIR}/secrets"
+PROXNIX_MATERIALIZED_SYSTEMD_ATTACHED_DIR="${ROOTFS}/etc/systemd/system.attached"
+PROXNIX_MATERIALIZED_SYSTEMD_WANTS_DIR="${PROXNIX_MATERIALIZED_SYSTEMD_ATTACHED_DIR}/multi-user.target.wants"
+PROXNIX_RUNTIME_CURRENT_HASH="${PROXNIX_RUNTIME_DIR}/current-config-hash"
+PROXNIX_RUNTIME_APPLIED_HASH="${PROXNIX_RUNTIME_DIR}/applied-config-hash"
+PROXNIX_RUNTIME_VMID="${PROXNIX_RUNTIME_DIR}/vmid"
+PROXNIX_APPLY_CONFIG_RUNNER="${PROXNIX_RUNTIME_DIR}/proxnix-apply-config-runner"
+PROXNIX_RUNTIME_BIN_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-runtime-bin.list"
+PROXNIX_SECRET_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-secrets.list"
+
+# Only immutable desired-state markers are injected from the host. Guest-local
+# runtime state such as applied-config-hash and the manifest files remains
+# writable inside the container under /var/lib/proxnix/runtime.
+
+# Clean up any real /etc/systemd/system/ directory left by an older proxnix
+# version — NixOS setup-etc.pl requires it to be a symlink, not a directory.
+if [[ -d "${ROOTFS}/etc/systemd/system" && ! -L "${ROOTFS}/etc/systemd/system" ]]; then
+    rm -rf "${ROOTFS}/etc/systemd/system"
+fi
+
+mkdir -p \
+    "${ROOTFS}/etc/nixos" \
+    "${PROXNIX_CONFIG_DIR}" \
+    "${PROXNIX_RUNTIME_DIR}" \
+    "${PROXNIX_RUNTIME_BIN_DIR}" \
+    "${PROXNIX_RUNTIME_MANIFEST_DIR}" \
+    "${PROXNIX_RUNTIME_QUADLET_DIR}" \
+    "${PROXNIX_SECRET_DIR}" \
+    "${ROOTFS}/etc/secrets" \
+    "${PROXNIX_MATERIALIZED_SYSTEMD_ATTACHED_DIR}" \
+    "${PROXNIX_MATERIALIZED_SYSTEMD_WANTS_DIR}"
+chmod 700 "${ROOTFS}/etc/secrets"
+chmod 700 "${PROXNIX_SECRET_DIR}"
+
+CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${PROXNIX_RUNTIME_CURRENT_HASH}" 2>/dev/null || true)"
+copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix" "644"
+bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"
+remove_guest_path "${ROOTFS}/etc/nixos/managed"
+rm -f "${ROOTFS}/etc/nixos/base.nix" "${ROOTFS}/etc/nixos/common.nix" "${ROOTFS}/etc/nixos/proxmox.nix"
+rm -rf "${ROOTFS}/etc/nixos/dropins"
+if [[ "$DESIRED_CONFIG_HASH" != "$CURRENT_CONFIG_HASH" ]]; then
+    log "Updated managed NixOS config (hash ${DESIRED_CONFIG_HASH})"
+else
+    log "Managed NixOS config unchanged (hash ${DESIRED_CONFIG_HASH})"
+fi
+bind_ro_file "${BIND_RUNTIME_DIR}/current-config-hash" "${PROXNIX_RUNTIME_CURRENT_HASH}"
+bind_ro_file "${BIND_RUNTIME_DIR}/vmid" "${PROXNIX_RUNTIME_VMID}"
+remove_guest_path "${PROXNIX_RUNTIME_BIN_DIR}"
+mkdir -p "${PROXNIX_RUNTIME_BIN_DIR}"
+sync_copied_guest_file_manifest "${COPY_RUNTIME_BIN_DIR}" "${PROXNIX_RUNTIME_BIN_DIR}" "${PROXNIX_RUNTIME_BIN_MANIFEST}" "555"
+copy_guest_file "${COPY_RUNTIME_DIR}/proxnix-apply-config-runner" "${PROXNIX_APPLY_CONFIG_RUNNER}" "555"
+copy_guest_file "${COPY_ETC_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" "${PROXNIX_MATERIALIZED_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" "644"
+ln -sfn ../proxnix-apply-config.service "${PROXNIX_MATERIALIZED_SYSTEMD_WANTS_DIR}/proxnix-apply-config.service"
+
+if [[ -e "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator" ]]; then
+    rm -f "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator"
+fi
+
+if [[ -e "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/etc/systemd/system/proxnix-apply-config.service"
+fi
+if [[ -e "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/etc/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
+fi
+if [[ -e "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer" ]]; then
+    rm -f "${ROOTFS}/etc/systemd/system/timers.target.wants/proxnix-apply-config.timer"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.service"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/multi-user.target.wants/proxnix-apply-config.service"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/proxnix-apply-config.timer"
+fi
+if [[ -e "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer" ]]; then
+    rm -f "${ROOTFS}/usr/lib/systemd/system/timers.target.wants/proxnix-apply-config.timer"
+fi
+
+QUADLET_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-quadlets.list"
+QUADLET_SYSTEMD_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-quadlet-units.list"
+
+sync_bound_entry_manifest "${BIND_QUADLET_DIR}" "${PROXNIX_RUNTIME_QUADLET_DIR}" "$QUADLET_MANIFEST"
+sync_bound_file_manifest "${BIND_QUADLET_DIR}" "${ROOTFS}/etc/containers/systemd" "$QUADLET_SYSTEMD_MANIFEST" \
+    \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \)
+sync_copied_guest_file_manifest "${BIND_SECRETS_DIR}" "${PROXNIX_SECRET_DIR}" "${PROXNIX_SECRET_MANIFEST}" "600"
+
+rmdir "${PROXNIX_RUNTIME_QUADLET_DIR}" 2>/dev/null || true
+rmdir "${ROOTFS}/etc/containers/systemd" 2>/dev/null || true
+
+remove_guest_path "${ROOTFS}/etc/proxnix/current-config-hash"
+remove_guest_path "${ROOTFS}/etc/proxnix/applied-config-hash"
+remove_guest_path "${ROOTFS}/etc/proxnix/vmid"
+remove_guest_path "${ROOTFS}/etc/proxnix/proxnix-apply-config-runner"
+remove_guest_path "${ROOTFS}/etc/proxnix/secrets"
+remove_guest_path "${ROOTFS}/etc/proxnix/quadlets"
+rm -f \
+    "${ROOTFS}/etc/proxnix/managed-quadlets.list" \
+    "${ROOTFS}/etc/proxnix/managed-quadlet-units.list"
+rmdir "${ROOTFS}/etc/proxnix" 2>/dev/null || true
+
+rm -f "${ROOTFS}/etc/containers/containers.conf.d/age-secrets.conf" 2>/dev/null || true
+find "${ROOTFS}/etc/secrets" -maxdepth 1 -type f -name '*.age' -delete 2>/dev/null || true
+
+
+python3 - "$ROOTFS" "$VMID" "$PROXNIX_SECRET_DIR" <<'PYEOF'
+import json
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+rootfs = Path(sys.argv[1])
+vmid = sys.argv[2]
+secrets_dir = Path(sys.argv[3])
+
+def top_level_keys(path: Path):
+    if not path.exists():
+        return set()
+    keys = set()
+    for line in path.read_text().splitlines():
+        if not line or line[0].isspace() or ":" not in line:
+            continue
+        key = line.split(":", 1)[0].strip()
+        if key and key != "sops":
+            keys.add(key)
+    return keys
+
+live_names = set()
+if secrets_dir.is_dir():
+    live_names.update(top_level_keys(secrets_dir / "effective.sops.yaml"))
+
+SECRETS_JSON = rootfs / "var/lib/containers/storage/secrets/secrets.json"
+IDS_DIR = rootfs / "etc/secrets/.ids"
+LABEL_KEY = "proxnix.managed"
+
+DRIVER_OPTS = {
+    "store": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman store",
+    "lookup": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman lookup",
+    "list": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman list",
+    "delete": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman delete",
+}
+
+def make_uuid(vmid: str, name: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_DNS, f"proxnix:{vmid}:{name}").hex
+
+IDS_DIR.mkdir(parents=True, exist_ok=True)
+SECRETS_JSON.parent.mkdir(parents=True, exist_ok=True)
+SECRETS_JSON.parent.chmod(0o700)
+
+if SECRETS_JSON.exists():
+    try:
+        data = json.loads(SECRETS_JSON.read_text())
+    except Exception:
+        data = {}
+else:
+    data = {}
+
+if not isinstance(data.get("secrets"), dict):
+    data["secrets"] = {}
+if not isinstance(data.get("nameToID"), dict):
+    data["nameToID"] = {}
+if not isinstance(data.get("idToName"), dict):
+    data["idToName"] = {}
+
+now = datetime.now(timezone.utc).isoformat()
+changed = False
+
+stale_ids = [
+    sid for sid, entry in data["secrets"].items()
+    if isinstance(entry.get("labels"), dict)
+    and entry["labels"].get(LABEL_KEY) == "true"
+    and (entry.get("name") or "") not in live_names
+]
+for sid in stale_ids:
+    name = data["secrets"][sid].get("name", "")
+    del data["secrets"][sid]
+    data["nameToID"].pop(name, None)
+    data["idToName"].pop(sid, None)
+    (IDS_DIR / sid).unlink(missing_ok=True)
+    print(f"[proxnix-mount][{vmid}] Unregistered removed secret: {name}", file=sys.stderr)
+    changed = True
+
+for name in sorted(live_names):
+    sid = make_uuid(vmid, name)
+    existing = data["secrets"].get(sid, {})
+    created_at = existing.get("createdAt") or now
+
+    entry = {
+        "name": name,
+        "id": sid,
+        "labels": {LABEL_KEY: "true"},
+        "metadata": {},
+        "createdAt": created_at,
+        "updatedAt": now,
+        "driver": "shell",
+        "driverOptions": DRIVER_OPTS,
+    }
+    if data["secrets"].get(sid) != entry:
+        data["secrets"][sid] = entry
+        data["nameToID"][name] = sid
+        data["idToName"][sid] = name
+        changed = True
+
+    ids_file = IDS_DIR / sid
+    if not ids_file.exists() or ids_file.read_text() != name:
+        ids_file.write_text(name)
+        ids_file.chmod(0o640)
+
+if changed:
+    SECRETS_JSON.write_text(json.dumps(data, indent=2) + "\n")
+    SECRETS_JSON.chmod(0o600)
+    print(
+        f"[proxnix-mount][{vmid}] Podman secrets.json reconciled ({len(live_names)} secret(s))",
+        file=sys.stderr,
+    )
+PYEOF
+
+STATE_VERSION="$(grep -oP 'system\.stateVersion\s*=\s*"\K[^"]+' "${BIND_CONFIG_DIR}/configuration.nix" || true)"
+STATE_VERSION="${STATE_VERSION:-25.11}"
+cat > "${ROOTFS}/root/proxnix-bootstrap.sh" <<'EOF'
+#!/run/current-system/sw/bin/bash
+set -euo pipefail
+SYSTEM_BIN="/run/current-system/sw/bin"
+INSTALL_BIN="${SYSTEM_BIN}/install"
+NIX_CHANNEL_BIN="${SYSTEM_BIN}/nix-channel"
+NIXOS_REBUILD_BIN="${SYSTEM_BIN}/nixos-rebuild"
+if [ -z "${XDG_STATE_HOME:-}" ]; then
+    XDG_STATE_HOME="/root/.local/state"
+fi
+export XDG_STATE_HOME
+if [ -f /etc/set-environment ]; then
+    # shellcheck disable=SC1091
+    set +u
+    source /etc/set-environment
+    set -u
+fi
+STATE_VERSION="__PROXNIX_STATE_VERSION__"
+"$NIX_CHANNEL_BIN" --add "https://nixos.org/channels/nixos-${STATE_VERSION}" nixos
+"$NIX_CHANNEL_BIN" --add https://nixos.org/channels/nixpkgs-unstable nixpkgs-unstable
+"$NIX_CHANNEL_BIN" --update
+"$NIXOS_REBUILD_BIN" switch
+if [ -f /var/lib/proxnix/runtime/current-config-hash ]; then
+    "$INSTALL_BIN" -m 0644 /var/lib/proxnix/runtime/current-config-hash /var/lib/proxnix/runtime/applied-config-hash
+fi
+EOF
+sed -i "s/__PROXNIX_STATE_VERSION__/${STATE_VERSION}/" "${ROOTFS}/root/proxnix-bootstrap.sh"
+chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"
+
+log "Mount-time bind setup complete."
+exit 0

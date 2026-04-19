@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxnix-workstation"
+version = "0.1.0"
+description = "Workstation CLI and TUI tooling for proxnix relay-cache publishing and secrets management"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+  { name = "Denis Maier" },
+]
+keywords = [
+  "proxmox",
+  "nixos",
+  "sops",
+  "workstation",
+  "deployment",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: Console :: Curses",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Installation/Setup",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = [
+  "cryptography>=44",
+]
+
+[project.urls]
+Homepage = "https://codeberg.org/maieretal/proxnix"
+Repository = "https://codeberg.org/maieretal/proxnix"
+Documentation = "https://codeberg.org/maieretal/proxnix/src/branch/main/docs"
+
+[project.scripts]
+proxnix = "proxnix_workstation.cli:main"
+proxnix-workstation-python = "proxnix_workstation.cli:main"
+proxnix-secrets = "proxnix_workstation.secrets_cli:main"
+proxnix-publish = "proxnix_workstation.publish_cli:main"
+proxnix-doctor = "proxnix_workstation.doctor_cli:main"
+proxnix-tui = "proxnix_workstation.tui:main"
+proxnix-lxc-exercise = "proxnix_workstation.exercise_cli:main"
+proxnix-secrets-python = "proxnix_workstation.secrets_cli:main"
+proxnix-publish-python = "proxnix_workstation.publish_cli:main"
+proxnix-doctor-python = "proxnix_workstation.doctor_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

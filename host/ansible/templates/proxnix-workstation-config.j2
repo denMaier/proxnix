@@ -1,0 +1,15 @@
+PROXNIX_SITE_DIR={{ proxnix_ai_site_dir }}
+PROXNIX_MASTER_IDENTITY={{ proxnix_ai_master_identity }}
+PROXNIX_HOSTS="{{ proxnix_ai_publish_hosts | join(' ') }}"
+{% if proxnix_ai_publish_ssh_identity | default('') %}
+PROXNIX_SSH_IDENTITY={{ proxnix_ai_publish_ssh_identity }}
+{% endif %}
+{% if proxnix_ai_remote_dir | default('') %}
+PROXNIX_REMOTE_DIR={{ proxnix_ai_remote_dir }}
+{% endif %}
+{% if proxnix_ai_remote_priv_dir | default('') %}
+PROXNIX_REMOTE_PRIV_DIR={{ proxnix_ai_remote_priv_dir }}
+{% endif %}
+{% if proxnix_ai_remote_host_relay_identity | default('') %}
+PROXNIX_REMOTE_HOST_RELAY_IDENTITY={{ proxnix_ai_remote_host_relay_identity }}
+{% endif %}

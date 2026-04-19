@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.uv-cache/
+.tmp-workstation-packaging/
+dist/*
+!dist/.gitignore
+src/*.egg-info/
+src/proxnix_workstation.egg-info/
+apps/ProxnixManager/.build/
+apps/ProxnixManager/.swiftpm/

@@ -16,8 +16,8 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 3. **Config hash:** Are the hashes in sync?
    ```bash
-   pct exec <vmid> -- cat /etc/proxnix/current-config-hash
-   pct exec <vmid> -- cat /etc/proxnix/applied-config-hash
+   pct exec <vmid> -- cat /var/lib/proxnix/runtime/current-config-hash
+   pct exec <vmid> -- cat /var/lib/proxnix/runtime/applied-config-hash
    ```
 
 4. **Doctor:** Run the full health check:
@@ -69,27 +69,29 @@ Check:
 
 3. Check the service inside the guest:
    ```bash
-   pct exec <vmid> -- systemctl status proxnix-common-admin-password.service
-   pct exec <vmid> -- journalctl -u proxnix-common-admin-password.service -b
+   pct exec <vmid> -- systemctl status proxnix-secret-oneshot-proxnix-common-admin-password.service
+   pct exec <vmid> -- journalctl -u proxnix-secret-oneshot-proxnix-common-admin-password.service -b
    ```
 
-## Quadlet workloads do not start correctly
+## Container workloads do not start correctly
 
-Check the Proxmox CT features and make sure `nesting=1` is enabled.
+Check the guest Nix workload first.
 
 From the host:
 
 ```bash
-pct config <vmid>
 proxnix-doctor <vmid>
 ```
 
-If nesting is not set:
+Then inspect the guest:
 
 ```bash
-pct set <vmid> --features nesting=1
-pct restart <vmid>
+pct exec <vmid> -- journalctl -b
+pct exec <vmid> -- systemctl --failed
 ```
+
+If a proxnix-managed NixOS CT is missing `nesting=1,keyctl=1`, correct the CT
+features in Proxmox and restart the container.
 
 ## Secrets cannot be encrypted for a container
 
@@ -159,18 +161,16 @@ Check three things:
    ```nix
    {
      proxnix.secrets.files.the-secret = {
-       unit = "proxnix-myservice-secrets";
-       path = "/run/myservice-secrets/the_secret";
+       path = "/var/lib/myservice-secrets/the_secret";
        owner = "root";
        group = "myservice";
        mode = "0640";
-       before = [ "myservice.service" ];
-       wantedBy = [ "myservice.service" ];
+       restartUnits = [ "myservice.service" ];
      };
    }
    ```
 
-3. The service configuration actually points at the generated `/run/...` path
+3. The service configuration actually points at the generated path
 
 Remember that proxnix only extracts the secret file. The service still needs to consume that path.
 
@@ -189,8 +189,8 @@ This is the expected behavior, not a bug. See [day-2 operations](day-2.md).
 Inside the guest, compare:
 
 ```bash
-cat /etc/proxnix/current-config-hash
-cat /etc/proxnix/applied-config-hash
+cat /var/lib/proxnix/runtime/current-config-hash
+cat /var/lib/proxnix/runtime/applied-config-hash
 ```
 
 If they differ, inspect the generated service:
@@ -211,18 +211,27 @@ Common causes:
 Run the installer again on that node:
 
 ```bash
-./install.sh
+apt install ./proxnix-host_<version>_<arch>.deb
+```
+
+If that node still uses the shell installer path instead of the package, run:
+
+```bash
+host/install.sh
 ```
 
 The hooks and helper binaries are per-node assets. If a node was reinstalled or upgraded, the local files may be missing.
+The original repo checkout is not required after a successful install.
 
 ## Container migration to another node
 
 After migrating a container to a different Proxmox node, make sure proxnix is installed on that node:
 
 ```bash
-./install.sh
+apt install ./proxnix-host_<version>_<arch>.deb
 ```
+
+If that node still uses the shell installer path instead of the package, run `host/install.sh` there instead.
 
 proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a container to another node, make sure that node has both proxnix installed and the expected `/var/lib/proxnix/` data for that container.
 

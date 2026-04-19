@@ -1,5 +1,0 @@
-[Unit]
-Description=Ente VersityGW data volume
-
-[Volume]
-VolumeName=ente-versity-data
