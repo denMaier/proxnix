@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSTATION_DIR="${ROOT_DIR}/workstation"
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/.tmp-workstation-packaging}"

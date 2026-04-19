@@ -1,11 +1,8 @@
 cask "proxnix-manager" do
-  arch arm: "arm64", intel: "x86_64"
-
   version "{{VERSION}}"
-  sha256 arm:   "{{SHA256_ARM64}}",
-         intel: "{{SHA256_X86_64}}"
+  sha256 "{{SHA256_ARM64}}"
 
-  url "{{DOWNLOAD_BASE}}/proxnix-manager-#{version}-macos-#{arch}.dmg"
+  url "{{DOWNLOAD_BASE}}/proxnix-manager-#{version}-macos-arm64.dmg"
   name "Proxnix Manager"
   desc "macOS GUI for proxnix"
   homepage "{{HOMEPAGE}}"

@@ -20,15 +20,7 @@ on:
 
 jobs:
   dmg:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            asset_arch: x86_64
-          - runner: macos-14
-            asset_arch: arm64
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14
     permissions:
       contents: write
     steps:
@@ -57,13 +49,13 @@ jobs:
 
       - name: Build ProxnixManager DMG
         run: |
-          VERSION="$PACKAGE_VERSION" ARCH="${{ matrix.asset_arch }}" ./workstation/packaging/package-macos.sh
+          VERSION="$PACKAGE_VERSION" ARCH="arm64" ./workstation/packaging/package-macos.sh
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proxnix-manager-dmg-${{ env.PACKAGE_VERSION }}-${{ matrix.asset_arch }}
-          path: dist/proxnix-manager-${{ env.PACKAGE_VERSION }}-macos-${{ matrix.asset_arch }}.dmg
+          name: proxnix-manager-dmg-${{ env.PACKAGE_VERSION }}-arm64
+          path: dist/proxnix-manager-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
           if-no-files-found: error
 
       - name: Publish DMG release asset
@@ -75,4 +67,4 @@ jobs:
           tag="${RELEASE_TAG:-${GITHUB_REF_NAME}}"
           gh release view "$tag" >/dev/null 2>&1 || \
             gh release create "$tag" --title "Release ${tag}" --generate-notes
-          gh release upload "$tag" dist/proxnix-manager-${PACKAGE_VERSION}-macos-${{ matrix.asset_arch }}.dmg --clobber
+          gh release upload "$tag" dist/proxnix-manager-${PACKAGE_VERSION}-macos-arm64.dmg --clobber

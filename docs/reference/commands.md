@@ -126,7 +126,7 @@ Render the Homebrew tap cask for `ProxnixManager`:
 
 ```bash
 ./ci/render-homebrew-cask.sh --version 0.1.0
-./ci/render-homebrew-cask.sh --version 0.1.0 --sha256-arm64 <sha256> --sha256-x86_64 <sha256>
+./ci/render-homebrew-cask.sh --version 0.1.0 --sha256-arm64 <sha256>
 ./ci/render-homebrew-cask.sh --version 0.1.0 --output ../homebrew-tap/Casks/proxnix-manager.rb
 ```
 

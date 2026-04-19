@@ -1,7 +1,7 @@
 # Homebrew packaging
 
 `ProxnixManager` is intended to ship through a dedicated tap so users can
-install it with a single command:
+install it with a single command on Apple Silicon Macs:
 
 ```bash
 brew install --cask denMaier/tap/proxnix-manager
@@ -23,13 +23,12 @@ From the repo root:
 ./ci/render-homebrew-cask.sh --version 0.1.0
 ```
 
-Or provide the DMG digests explicitly:
+Or provide the DMG digest explicitly:
 
 ```bash
 ./ci/render-homebrew-cask.sh \
   --version 0.1.0 \
-  --sha256-arm64 <sha256> \
-  --sha256-x86_64 <sha256>
+  --sha256-arm64 <sha256>
 ```
 
 Write directly into a tap checkout:

@@ -1,7 +1,7 @@
 # ProxnixManager
 
 `ProxnixManager` is the macOS GUI for proxnix. The intended install surface is
-a Homebrew tap so users can install it with one command:
+a Homebrew tap so Apple Silicon users can install it with one command:
 
 ```bash
 brew install --cask denMaier/tap/proxnix-manager
@@ -15,6 +15,7 @@ The Homebrew cask is designed to install:
 - a bundled script directory inside the app bundle so the GUI can find
   `proxnix-publish`, `proxnix-secrets`, and related commands without extra
   manual path setup
+- the arm64 DMG release asset for the matching proxnix tag
 
 The cask depends on these Homebrew formulae:
 
@@ -25,6 +26,10 @@ Runtime tools still expected from the machine:
 
 - `ssh`
 - `rsync`
+
+Current target platform:
+
+- Apple Silicon (`arm64`) macOS
 
 ## Cask source
 
