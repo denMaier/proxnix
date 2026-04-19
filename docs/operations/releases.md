@@ -5,7 +5,7 @@ The ergonomic release path is:
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
 3. let GitHub Actions publish the host package, the workstation Python package, and the ProxnixManager DMG assets from the pushed tag
-4. render and update the Homebrew tap cask for `ProxnixManager`
+4. render and update the Homebrew tap formula for `proxnix-workstation` and the cask for `ProxnixManager`
 
 ## Install the git hooks
 
@@ -110,9 +110,10 @@ Pushing a matching `v*` tag triggers:
 Those workflows publish artifacts using the tag as the package version.
 
 The Homebrew tap remains a separate repo. After tagging a release here, render
-the matching cask with:
+the matching formula and cask with:
 
 ```bash
+./ci/render-homebrew-formula.sh --version 0.1.0
 ./ci/render-homebrew-cask.sh --version 0.1.0
 ```
 

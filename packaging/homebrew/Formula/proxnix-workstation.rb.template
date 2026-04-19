@@ -1,0 +1,58 @@
+class ProxnixWorkstation < Formula
+  include Language::Python::Virtualenv
+
+  desc "CLI and TUI workstation tooling for proxnix"
+  homepage "{{HOMEPAGE}}"
+  url "{{URL}}"
+  sha256 "{{SHA256}}"
+  license "MIT"
+
+  depends_on arch: :arm64
+  depends_on macos: :ventura
+  depends_on "python@3.12"
+  depends_on "sops"
+
+  resource "pycparser" do
+    url "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl"
+    sha256 "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"
+  end
+
+  resource "cffi" do
+    url "https://files.pythonhosted.org/packages/df/a2/781b623f57358e360d62cdd7a8c681f074a71d445418a776eef0aadb4ab4/cffi-2.0.0-cp312-cp312-macosx_11_0_arm64.whl"
+    sha256 "8eca2a813c1cb7ad4fb74d368c2ffbbb4789d377ee5bb8df98373c2cc0dee76c"
+  end
+
+  resource "cryptography" do
+    url "https://files.pythonhosted.org/packages/0b/5d/4a8f770695d73be252331e60e526291e3df0c9b27556a90a6b47bccca4c2/cryptography-46.0.7-cp311-abi3-macosx_10_9_universal2.whl"
+    sha256 "ea42cbe97209df307fdc3b155f1b6fa2577c0defa8f1f7d3be7d31d189108ad4"
+  end
+
+  def install
+    python = Formula["python@3.12"].opt_bin/"python3.12"
+    venv = virtualenv_create(libexec, python)
+    venv.pip_install resource("pycparser")
+    venv.pip_install resource("cffi")
+    venv.pip_install resource("cryptography")
+    venv.pip_install_and_link buildpath/"workstation"
+  end
+
+  def caveats
+    <<~EOS
+      Installed commands:
+        proxnix
+        proxnix-publish
+        proxnix-secrets
+        proxnix-doctor
+        proxnix-lxc-exercise
+        proxnix-tui
+
+      Runtime tools expected from the system:
+        ssh
+        rsync
+    EOS
+  end
+
+  test do
+    assert_match "usage:", shell_output("#{bin}/proxnix --help 2>&1").downcase
+  end
+end

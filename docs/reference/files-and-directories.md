@@ -23,6 +23,7 @@ This page maps every important proxnix path by role.
 | `ci/install-git-hooks.sh` | Installs the repo-managed git hooks via `core.hooksPath` |
 | `ci/install-workstation.sh` | Installs or upgrades the workstation Python package with pip |
 | `ci/render-homebrew-cask.sh` | Renders a concrete Homebrew cask for `ProxnixManager` from the template |
+| `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `proxnix-workstation` from the template |
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/pyproject.toml` |
 | `host/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
 | `host/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
@@ -45,7 +46,7 @@ This page maps every important proxnix path by role.
 | `workstation/packaging/` | Workstation packaging scripts used by CI and release builds |
 | `workstation/src/` | Publishable Python package source |
 | `workstation/apps/ProxnixManager/` | SwiftUI macOS app |
-| `packaging/homebrew/` | Homebrew tap cask scaffold for `ProxnixManager` |
+| `packaging/homebrew/` | Homebrew tap scaffolds for the `proxnix-workstation` formula and `ProxnixManager` cask |
 | `.github/workflows/host-packages.yml` | GitHub Actions workflow for host Debian package builds and GitHub release assets |
 | `.github/workflows/pypi-publish.yml` | GitHub Actions workflow for workstation Python package builds and PyPI publishing |
 | `.github/workflows/proxnix-manager-dmg.yml` | GitHub Actions workflow for ProxnixManager DMG builds and release assets |

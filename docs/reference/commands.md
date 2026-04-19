@@ -130,6 +130,16 @@ Render the Homebrew tap cask for `ProxnixManager`:
 ./ci/render-homebrew-cask.sh --version 0.1.0 --output ../homebrew-tap/Casks/proxnix-manager.rb
 ```
 
+### `ci/render-homebrew-formula.sh`
+
+Render the Homebrew tap formula for the workstation CLI and TUI:
+
+```bash
+./ci/render-homebrew-formula.sh --version 0.1.0
+./ci/render-homebrew-formula.sh --version 0.1.0 --sha256 <sha256>
+./ci/render-homebrew-formula.sh --version 0.1.0 --output ../homebrew-tap/Formula/proxnix-workstation.rb
+```
+
 ### `ci/bootstrap-workstation-venv.sh`
 
 Create or reuse `workstation/.venv`, install `ansible`, and install the current

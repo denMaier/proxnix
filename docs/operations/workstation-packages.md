@@ -22,6 +22,12 @@ Preferred install:
 pip install proxnix-workstation
 ```
 
+Optional Homebrew tap install on Apple Silicon macOS:
+
+```bash
+brew install denMaier/tap/proxnix-workstation
+```
+
 Repo helper:
 
 ```bash

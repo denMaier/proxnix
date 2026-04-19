@@ -239,6 +239,12 @@ proxnix
 proxnix-tui
 ```
 
+On Apple Silicon macOS, the Homebrew tap can also ship the same terminal tools as:
+
+```bash
+brew install denMaier/tap/proxnix-workstation
+```
+
 ### ProxnixManager on macOS
 
 `ProxnixManager` is intended to ship from a Homebrew tap so the macOS app can
