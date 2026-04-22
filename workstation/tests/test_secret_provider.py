@@ -6,7 +6,8 @@ from pathlib import Path, PurePosixPath
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from proxnix_workstation.config import WorkstationConfig
+from proxnix_workstation.config import WorkstationConfig, load_workstation_config
+from proxnix_workstation.exercise_cli import build_generated_config, render_config_file
 from proxnix_workstation.publish_cli import build_compiled_secret_store
 from proxnix_workstation.secret_provider import ExecSecretProvider, load_secret_provider
 from proxnix_workstation.paths import SitePaths
@@ -77,6 +78,26 @@ class ExecSecretProviderTests(unittest.TestCase):
         with patch("proxnix_workstation.secret_provider.run_command", side_effect=responses):
             with self.assertRaises(ProxnixWorkstationError):
                 provider.export_scope(type("Ref", (), {"scope": "shared", "vmid": None, "group": None, "cli_args": lambda self: ["--scope", "shared"]})())
+
+    def test_exec_provider_forwards_configured_provider_environment(self) -> None:
+        provider = ExecSecretProvider(
+            ["provider-helper"],
+            extra_env={
+                "PROXNIX_PASS_STORE_DIR": "/tmp/pass-store",
+                "VAULT_ADDR": "https://vault.example.test",
+            },
+        )
+        responses = [
+            CompletedProcess(args=["provider-helper"], returncode=0, stdout='{"capabilities":["export-scope"]}\n', stderr=""),
+            CompletedProcess(args=["provider-helper"], returncode=0, stdout='{"data":{}}\n', stderr=""),
+        ]
+
+        with patch("proxnix_workstation.secret_provider.run_command", side_effect=responses) as run_mock:
+            provider.export_scope(type("Ref", (), {"scope": "shared", "vmid": None, "group": None, "cli_args": lambda self: ["--scope", "shared"]})())
+
+        forwarded_env = run_mock.call_args_list[1].kwargs["env"]
+        self.assertEqual(forwarded_env["PROXNIX_PASS_STORE_DIR"], "/tmp/pass-store")
+        self.assertEqual(forwarded_env["VAULT_ADDR"], "https://vault.example.test")
 
     def test_named_provider_alias_returns_internal_exec_adapter(self) -> None:
         config = _test_config()
@@ -626,6 +647,68 @@ class NamedAdapterTests(unittest.TestCase):
                 "/proxnix/groups/storage",
             ],
         )
+
+
+class ConfigProviderEnvironmentTests(unittest.TestCase):
+    def test_load_workstation_config_preserves_provider_settings_from_config_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "PROXNIX_SECRET_PROVIDER='passhole'",
+                        "PROXNIX_PASSHOLE_DATABASE='~/secrets/proxnix.kdbx'",
+                        "PROXNIX_SECRET_PATH_PREFIX='team/proxnix'",
+                        "VAULT_ADDR='https://vault.example.test'",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_workstation_config(
+                config_path,
+                environ={"HOME": "/home/tester"},
+            )
+
+        self.assertEqual(config.secret_provider, "passhole")
+        self.assertEqual(
+            config.provider_environment_map(),
+            {
+                "PROXNIX_PASSHOLE_DATABASE": "/home/tester/secrets/proxnix.kdbx",
+                "PROXNIX_SECRET_PATH_PREFIX": "team/proxnix",
+                "VAULT_ADDR": "https://vault.example.test",
+            },
+        )
+
+    def test_generated_config_file_re_emits_provider_environment(self) -> None:
+        source = WorkstationConfig(
+            config_file=Path("/tmp/source-config"),
+            site_dir=Path("/tmp/source-site"),
+            master_identity=Path("/tmp/id_master"),
+            hosts=("root@node1",),
+            ssh_identity=None,
+            remote_dir=PurePosixPath("/var/lib/proxnix"),
+            remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
+            remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
+            secret_provider="passhole",
+            secret_provider_command=None,
+            provider_environment=(
+                ("PROXNIX_PASSHOLE_DATABASE", "/tmp/proxnix.kdbx"),
+                ("VAULT_ADDR", "https://vault.example.test"),
+            ),
+        )
+
+        generated = build_generated_config(
+            source,
+            config_path=Path("/tmp/generated-config"),
+            site_dir=Path("/tmp/generated-site"),
+            host="root@test-host",
+        )
+        rendered = render_config_file(generated)
+
+        self.assertIn("PROXNIX_PASSHOLE_DATABASE=/tmp/proxnix.kdbx", rendered)
+        self.assertIn("VAULT_ADDR=https://vault.example.test", rendered)
 
 
 class PublishSecretProviderTests(unittest.TestCase):

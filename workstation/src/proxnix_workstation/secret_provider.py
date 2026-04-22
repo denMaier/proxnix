@@ -7,7 +7,7 @@ import sys
 from .config import WorkstationConfig
 from .errors import ConfigError, ProxnixWorkstationError
 from .paths import SitePaths
-from .runtime import ensure_commands, run_command
+from .runtime import command_env, ensure_commands, run_command
 from .secret_provider_embedded import (
     EmbeddedSopsProvider,
     container_recipients,
@@ -35,10 +35,11 @@ from .secret_provider_types import (
 class ExecSecretProvider(SecretProvider):
     name = "exec"
 
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], *, extra_env: dict[str, str] | None = None) -> None:
         if not command:
             raise ConfigError("exec secret provider requires a command")
         self.command = command
+        self.extra_env = dict(extra_env or {})
         self._capabilities: set[str] | None = None
 
     def describe(self) -> str:
@@ -121,7 +122,11 @@ class ExecSecretProvider(SecretProvider):
             args.extend(ref.cli_args())
         if name is not None:
             args.extend(["--name", name])
-        completed = run_command(args, input_text=input_text)
+        completed = run_command(
+            args,
+            input_text=input_text,
+            env=command_env(self.extra_env) if self.extra_env else None,
+        )
         try:
             payload = json.loads(completed.stdout or "{}")
         except json.JSONDecodeError as exc:
@@ -157,13 +162,13 @@ def load_secret_provider(
             raise ConfigError("exec secret provider requires a command after exec:")
         command = shlex.split(command_text)
         ensure_commands([command[0]])
-        return ExecSecretProvider(command)
+        return ExecSecretProvider(command, extra_env=config.provider_environment_map())
     if provider_name == "exec":
         if not config.secret_provider_command:
             raise ConfigError("PROXNIX_SECRET_PROVIDER=exec requires PROXNIX_SECRET_PROVIDER_COMMAND")
         command = shlex.split(config.secret_provider_command)
         ensure_commands([command[0]])
-        return ExecSecretProvider(command)
+        return ExecSecretProvider(command, extra_env=config.provider_environment_map())
     if provider_name in {
         "pass",
         "gopass",
@@ -180,7 +185,10 @@ def load_secret_provider(
         "onepassword",
         "infisical",
     }:
-        return ExecSecretProvider(named_provider_command(provider_name))
+        return ExecSecretProvider(
+            named_provider_command(provider_name),
+            extra_env=config.provider_environment_map(),
+        )
     raise ConfigError(f"unsupported secret provider: {provider_name}")
 
 

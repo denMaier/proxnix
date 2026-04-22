@@ -55,6 +55,18 @@ export PROXNIX_SECRET_PROVIDER=exec
 export PROXNIX_SECRET_PROVIDER_COMMAND='/path/to/proxnix-secret-provider-helper'
 ```
 
+The same settings can live in the standard workstation config file:
+
+```bash
+# ~/.config/proxnix/config
+PROXNIX_SECRET_PROVIDER='passhole'
+PROXNIX_PASSHOLE_DATABASE='~/.local/share/passhole/proxnix.kdbx'
+PROXNIX_PASSHOLE_PASSWORD_FILE='~/.config/proxnix/passhole-password'
+```
+
+Provider-specific values read from that file are forwarded to the configured
+provider automatically.
+
 Built-in named providers:
 
 | Provider | Notes |

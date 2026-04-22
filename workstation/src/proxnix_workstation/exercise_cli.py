@@ -349,6 +349,7 @@ def build_generated_config(
         secret_provider=source.secret_provider,
         secret_provider_command=source.secret_provider_command,
         scripts_dir=source.scripts_dir,
+        provider_environment=source.provider_environment,
     )
 
 
@@ -368,6 +369,8 @@ def render_config_file(config: WorkstationConfig) -> str:
         lines.append(f"PROXNIX_SSH_IDENTITY={shlex.quote(str(config.ssh_identity))}")
     if config.scripts_dir is not None:
         lines.append(f"PROXNIX_SCRIPTS_DIR={shlex.quote(str(config.scripts_dir))}")
+    for key, value in config.provider_environment:
+        lines.append(f"{key}={shlex.quote(value)}")
     return "\n".join(lines) + "\n"
 
 

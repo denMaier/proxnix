@@ -53,6 +53,13 @@ def _normalize_lines(text: str) -> list[str]:
     return lines
 
 
+def _env_path(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return ""
+    return str(Path(value).expanduser())
+
+
 class _BaseNamedAdapter:
     name = "unknown"
 
@@ -98,7 +105,7 @@ class _PasswordStoreAdapter(_BaseNamedAdapter):
 
     def _command_env(self) -> dict[str, str]:
         env = command_env()
-        store_dir = os.environ.get(self.store_dir_env_name, "").strip()
+        store_dir = _env_path(self.store_dir_env_name)
         if store_dir:
             env["PASSWORD_STORE_DIR"] = store_dir
         elif self.store_dir_fallback and "PASSWORD_STORE_DIR" not in env:
@@ -161,8 +168,8 @@ class PassholeAdapter(_BaseNamedAdapter):
 
     def _database_args(self) -> list[str]:
         args: list[str] = []
-        database = os.environ.get("PROXNIX_PASSHOLE_DATABASE", "").strip()
-        config = os.environ.get("PROXNIX_PASSHOLE_CONFIG", "").strip()
+        database = _env_path("PROXNIX_PASSHOLE_DATABASE")
+        config = _env_path("PROXNIX_PASSHOLE_CONFIG")
         if database:
             args.extend(["--database", database])
         elif config:
@@ -171,7 +178,7 @@ class PassholeAdapter(_BaseNamedAdapter):
             raise AdapterError(
                 "PROXNIX_PASSHOLE_DATABASE or PROXNIX_PASSHOLE_CONFIG is required for passhole provider"
             )
-        keyfile = os.environ.get("PROXNIX_PASSHOLE_KEYFILE", "").strip()
+        keyfile = _env_path("PROXNIX_PASSHOLE_KEYFILE")
         if keyfile:
             args.extend(["--keyfile", keyfile])
         no_password = os.environ.get("PROXNIX_PASSHOLE_NO_PASSWORD", "").strip().lower()
@@ -191,7 +198,7 @@ class PassholeAdapter(_BaseNamedAdapter):
         password = os.environ.get("PROXNIX_PASSHOLE_PASSWORD", "")
         if password:
             return password if password.endswith("\n") else password + "\n"
-        password_file = os.environ.get("PROXNIX_PASSHOLE_PASSWORD_FILE", "").strip()
+        password_file = _env_path("PROXNIX_PASSHOLE_PASSWORD_FILE")
         if not password_file:
             return None
         value = Path(password_file).expanduser().read_text(encoding="utf-8")
@@ -295,13 +302,13 @@ class PyKeePassAdapter(_BaseNamedAdapter):
     name = "pykeepass"
 
     def _database_path(self) -> str:
-        path = os.environ.get("PROXNIX_PYKEEPASS_DATABASE", "").strip()
+        path = _env_path("PROXNIX_PYKEEPASS_DATABASE")
         if not path:
             raise AdapterError("PROXNIX_PYKEEPASS_DATABASE is required for pykeepass provider")
         return path
 
     def _keyfile_path(self) -> str | None:
-        path = os.environ.get("PROXNIX_PYKEEPASS_KEYFILE", "").strip()
+        path = _env_path("PROXNIX_PYKEEPASS_KEYFILE")
         return path or None
 
     def _password(self) -> str | None:
@@ -311,7 +318,7 @@ class PyKeePassAdapter(_BaseNamedAdapter):
         password = os.environ.get("PROXNIX_PYKEEPASS_PASSWORD", "")
         if password:
             return password
-        password_file = os.environ.get("PROXNIX_PYKEEPASS_PASSWORD_FILE", "").strip()
+        password_file = _env_path("PROXNIX_PYKEEPASS_PASSWORD_FILE")
         if not password_file:
             return None
         return Path(password_file).expanduser().read_text(encoding="utf-8").rstrip("\n")
@@ -433,15 +440,15 @@ class KeePassXCCliAdapter(_BaseNamedAdapter):
         return ["list", "get", "set", "remove", "export-scope"]
 
     def _database_path(self) -> str:
-        path = os.environ.get("PROXNIX_KEEPASSXC_DATABASE", "").strip()
+        path = _env_path("PROXNIX_KEEPASSXC_DATABASE")
         if not path:
             raise AdapterError("PROXNIX_KEEPASSXC_DATABASE is required for keepassxc-cli provider")
         return path
 
     def _unlock_args(self) -> list[str]:
         args: list[str] = []
-        password_file = os.environ.get("PROXNIX_KEEPASSXC_PASSWORD_FILE", "").strip()
-        key_file = os.environ.get("PROXNIX_KEEPASSXC_KEY_FILE", "").strip()
+        password_file = _env_path("PROXNIX_KEEPASSXC_PASSWORD_FILE")
+        key_file = _env_path("PROXNIX_KEEPASSXC_KEY_FILE")
         no_password = os.environ.get("PROXNIX_KEEPASSXC_NO_PASSWORD", "").strip().lower()
         if password_file:
             args.extend(["--password-file", password_file])

@@ -135,6 +135,10 @@ export PROXNIX_PYKEEPASS_DATABASE=~/.local/share/keepass/proxnix.kdbx
 export PROXNIX_PYKEEPASS_PASSWORD_FILE=~/.config/proxnix/keepass-password
 ```
 
+Those same provider variables can also be written directly into
+`~/.config/proxnix/config`. That is the preferred place for stable proxnix
+provider settings.
+
 ## Examples
 
 ```bash

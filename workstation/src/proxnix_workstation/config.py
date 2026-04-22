@@ -68,6 +68,7 @@ class WorkstationConfig:
     secret_provider: str = "embedded-sops"
     secret_provider_command: str | None = None
     scripts_dir: Path | None = None
+    provider_environment: tuple[tuple[str, str], ...] = ()
 
     def to_json(self) -> str:
         payload = asdict(self)
@@ -82,7 +83,11 @@ class WorkstationConfig:
         payload["secret_provider"] = self.secret_provider
         payload["secret_provider_command"] = self.secret_provider_command
         payload["scripts_dir"] = None if self.scripts_dir is None else str(self.scripts_dir)
+        payload["provider_environment"] = dict(self.provider_environment)
         return json.dumps(payload, indent=2, sort_keys=True)
+
+    def provider_environment_map(self) -> dict[str, str]:
+        return dict(self.provider_environment)
 
     def require_site_dir(self) -> Path:
         if self.site_dir is None:
@@ -100,6 +105,22 @@ def load_workstation_config(
     env = dict(os.environ if environ is None else environ)
     config_path = default_config_path() if config_file is None else Path(config_file).expanduser()
     home = Path(env.get("HOME", str(Path.home()))).expanduser()
+    config_values: dict[str, str] = {}
+    if config_path.is_file():
+        config_values = _parse_config_lines(config_path.read_text(encoding="utf-8"))
+
+    core_keys = {
+        "PROXNIX_SITE_DIR",
+        "PROXNIX_MASTER_IDENTITY",
+        "PROXNIX_HOSTS",
+        "PROXNIX_SSH_IDENTITY",
+        "PROXNIX_REMOTE_DIR",
+        "PROXNIX_REMOTE_PRIV_DIR",
+        "PROXNIX_REMOTE_HOST_RELAY_IDENTITY",
+        "PROXNIX_SECRET_PROVIDER",
+        "PROXNIX_SECRET_PROVIDER_COMMAND",
+        "PROXNIX_SCRIPTS_DIR",
+    }
 
     raw_values = {
         "PROXNIX_SITE_DIR": env.get("PROXNIX_SITE_DIR", ""),
@@ -116,8 +137,7 @@ def load_workstation_config(
         "PROXNIX_SCRIPTS_DIR": env.get("PROXNIX_SCRIPTS_DIR", ""),
     }
 
-    if config_path.is_file():
-        raw_values.update(_parse_config_lines(config_path.read_text(encoding="utf-8")))
+    raw_values.update(config_values)
 
     site_dir_raw = _expand_home_string(raw_values["PROXNIX_SITE_DIR"], home).strip()
     master_identity_raw = _expand_home_string(raw_values["PROXNIX_MASTER_IDENTITY"], home).strip()
@@ -133,6 +153,18 @@ def load_workstation_config(
     )
 
     hosts_value = raw_values["PROXNIX_HOSTS"].strip()
+    provider_environment: dict[str, str] = {
+        key: value
+        for key, value in env.items()
+        if key.startswith("PROXNIX_") and key not in core_keys and value != ""
+    }
+    provider_environment.update(
+        {
+            key: _expand_home_string(value, home)
+            for key, value in config_values.items()
+            if key not in core_keys
+        }
+    )
 
     return WorkstationConfig(
         config_file=config_path,
@@ -146,4 +178,5 @@ def load_workstation_config(
         secret_provider=raw_values["PROXNIX_SECRET_PROVIDER"].strip() or "embedded-sops",
         secret_provider_command=raw_values["PROXNIX_SECRET_PROVIDER_COMMAND"].strip() or None,
         scripts_dir=Path(scripts_dir_raw) if scripts_dir_raw else None,
+        provider_environment=tuple(sorted(provider_environment.items())),
     )
