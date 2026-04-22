@@ -23,8 +23,16 @@ from .publish_cli import (
 )
 from .publish_cli import do_rsync as publish_do_rsync
 from .publish_cli import stage_relay_identities_into_tree
+from .secret_provider import (
+    EmbeddedSopsProvider,
+    SecretProvider,
+    container_scope,
+    group_scope,
+    load_secret_provider,
+    shared_scope,
+)
 from .site import collect_site_vmids, read_container_secret_groups
-from .sops_ops import identity_public_key_from_store, sops_decrypt_json
+from .sops_ops import identity_public_key_from_store
 from .ssh_ops import SSHSession
 
 
@@ -62,19 +70,24 @@ class DoctorReporter:
         return 0
 
 
-def validate_store_payload(config, store: Path, label: str, reporter: DoctorReporter) -> None:
+def validate_provider_scope_payload(
+    provider: SecretProvider,
+    ref,
+    label: str,
+    reporter: DoctorReporter,
+) -> None:
     try:
-        data = sops_decrypt_json(config, store)
+        data = provider.export_scope(ref)
     except Exception:
-        reporter.fail(f"{label} failed to decrypt: {store}")
+        reporter.fail(f"{label} failed to load from secret provider")
         return
     if not isinstance(data, dict):
-        reporter.fail(f"{label} has invalid payload shape: {store}")
+        reporter.fail(f"{label} has invalid payload shape from secret provider")
         return
-    if any(key != "sops" and not isinstance(value, str) for key, value in data.items()):
-        reporter.fail(f"{label} has invalid payload shape: {store}")
+    if any(not isinstance(key, str) or not isinstance(value, str) for key, value in data.items()):
+        reporter.fail(f"{label} has invalid payload shape from secret provider")
         return
-    reporter.ok(f"{label} decrypts to a flat string map")
+    reporter.ok(f"{label} resolves to a flat string map")
 
 
 def validate_identity_store(config, store: Path, label: str, reporter: DoctorReporter) -> None:
@@ -86,7 +99,12 @@ def validate_identity_store(config, store: Path, label: str, reporter: DoctorRep
     reporter.ok(f"{label} decrypts and yields a public key")
 
 
-def check_container_group_file(site_paths: SitePaths, vmid: str, reporter: DoctorReporter) -> None:
+def check_container_group_file(
+    site_paths: SitePaths,
+    provider: SecretProvider,
+    vmid: str,
+    reporter: DoctorReporter,
+) -> None:
     path = site_paths.container_secret_groups_file(vmid)
     if not path.is_file():
         return
@@ -97,14 +115,19 @@ def check_container_group_file(site_paths: SitePaths, vmid: str, reporter: Docto
         return
     reporter.ok(f"secret group list valid for container {vmid}")
     for group in groups:
-        if site_paths.group_store(group).is_file():
+        if provider.has_any(group_scope(group)):
             reporter.ok(f"container {vmid} group store present: {group}")
         else:
             reporter.warn(f"container {vmid} references missing group store: {group}")
 
 
-def check_container_secret_requirements(site_paths: SitePaths, vmid: str, reporter: DoctorReporter) -> None:
-    if container_has_any_store(site_paths, vmid):
+def check_container_secret_requirements(
+    site_paths: SitePaths,
+    provider: SecretProvider,
+    vmid: str,
+    reporter: DoctorReporter,
+) -> None:
+    if container_has_any_store(site_paths, provider, vmid):
         if site_paths.container_identity_store(vmid).is_file():
             reporter.ok(f"container {vmid} has an identity for compiled secret delivery")
         else:
@@ -123,10 +146,12 @@ def check_expected_tree_dir(path: Path, label: str, reporter: DoctorReporter) ->
 def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, reporter: DoctorReporter, temp_root: Path) -> None:
     tree = temp_root / "lint-tree"
     fails_before = reporter.fails
+    provider = load_secret_provider(config, site_paths)
 
     reporter.heading("site")
     reporter.ok("workstation tools and config present")
     reporter.ok(f"site repo present: {site_paths.site_dir}")
+    reporter.ok(f"secret provider configured: {provider.describe()}")
     if options.config_only:
         reporter.info("config-only mode skips secret-store prerequisites")
     else:
@@ -153,35 +178,45 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
         else:
             reporter.warn(f"host relay identity store missing: {site_paths.host_relay_identity_store}")
 
-        if site_paths.shared_store.is_file():
-            validate_store_payload(config, site_paths.shared_store, "shared secret store", reporter)
+        if provider.has_any(shared_scope()):
+            validate_provider_scope_payload(provider, shared_scope(), "shared secret store", reporter)
         else:
             reporter.info("no shared secret store")
 
         if site_paths.shared_identity_store.is_file():
             validate_identity_store(config, site_paths.shared_identity_store, "shared identity store", reporter)
 
-        groups_dir = site_paths.private_dir / "groups"
-        if groups_dir.is_dir():
-            for store in sorted(groups_dir.rglob("secrets.sops.yaml")):
-                label = f"group store {store.relative_to(groups_dir.parent)}"
-                validate_store_payload(config, store, label, reporter)
+        if isinstance(provider, EmbeddedSopsProvider):
+            groups_dir = site_paths.private_dir / "groups"
+            if groups_dir.is_dir():
+                for store in sorted(groups_dir.rglob("secrets.sops.yaml")):
+                    label = f"group store {store.relative_to(groups_dir.parent)}"
+                    validate_provider_scope_payload(
+                        provider,
+                        group_scope(store.parent.name),
+                        label,
+                        reporter,
+                    )
 
     if options.target_vmid is not None:
-        validate_target_vmid_repo(config, site_paths, options.target_vmid, config_only=options.config_only)
+        validate_target_vmid_repo(config, site_paths, provider, options.target_vmid, config_only=options.config_only)
         vmids = [options.target_vmid]
     else:
         if not options.config_only:
-            validate_site_repo(config, site_paths)
+            validate_site_repo(config, site_paths, provider)
         vmids = collect_site_vmids(site_paths)
 
     for vmid in vmids:
-        check_container_group_file(site_paths, vmid, reporter)
+        check_container_group_file(site_paths, provider, vmid, reporter)
         if not options.config_only:
-            check_container_secret_requirements(site_paths, vmid, reporter)
-            container_store = site_paths.container_store(vmid)
-            if container_store.is_file():
-                validate_store_payload(config, container_store, f"container {vmid} secret store", reporter)
+            check_container_secret_requirements(site_paths, provider, vmid, reporter)
+            if provider.has_any(container_scope(vmid)):
+                validate_provider_scope_payload(
+                    provider,
+                    container_scope(vmid),
+                    f"container {vmid} secret store",
+                    reporter,
+                )
             identity_store = site_paths.container_identity_store(vmid)
             if identity_store.is_file():
                 validate_identity_store(config, identity_store, f"container {vmid} identity store", reporter)

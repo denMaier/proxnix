@@ -94,6 +94,47 @@ Expected settings include:
 - `PROXNIX_HOSTS`
 - `PROXNIX_SSH_IDENTITY` (optional)
 
+For source-secret retrieval, the workstation also supports:
+
+- `PROXNIX_SECRET_PROVIDER`
+- `PROXNIX_SECRET_PROVIDER_COMMAND` when `PROXNIX_SECRET_PROVIDER=exec`
+
+## Secret Providers
+
+Runtime publish artifacts always stay SOPS-based. The configurable part is the
+workstation source-secret backend used by `proxnix-secrets`,
+`proxnix-publish`, and `proxnix-doctor`.
+
+Built-in provider names:
+
+- `embedded-sops`
+- `pass`
+- `gopass`
+- `passhole`
+- `pykeepass`
+- `keepassxc-cli` and `keepassxc`
+- `op`, `1password`, `onepassword`
+- `bws`, `bitwarden-secrets`
+- `vault`, `vault-kv`
+- `infisical`
+- `exec`
+
+Example:
+
+```bash
+export PROXNIX_SECRET_PROVIDER=passhole
+export PROXNIX_PASSHOLE_DATABASE=~/.local/share/passhole/proxnix.kdbx
+export PROXNIX_PASSHOLE_PASSWORD_FILE=~/.config/proxnix/passhole-password
+```
+
+Or:
+
+```bash
+export PROXNIX_SECRET_PROVIDER=pykeepass
+export PROXNIX_PYKEEPASS_DATABASE=~/.local/share/keepass/proxnix.kdbx
+export PROXNIX_PYKEEPASS_PASSWORD_FILE=~/.config/proxnix/keepass-password
+```
+
 ## Examples
 
 ```bash
@@ -133,6 +174,10 @@ python3 -m twine upload dist/*
 
 - The package intentionally keeps `sops`, `ssh`, and `rsync` as external
   system tools.
+- Some optional secret providers also require their own external tools or
+  Python packages. For example, `keepassxc-cli`, `op`, `bws`, `vault`, and
+  `infisical` expect their respective CLIs to be installed, while
+  `pykeepass` expects the `pykeepass` Python package to be available.
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.

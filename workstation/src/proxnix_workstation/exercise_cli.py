@@ -346,6 +346,8 @@ def build_generated_config(
         remote_dir=source.remote_dir,
         remote_priv_dir=source.remote_priv_dir,
         remote_host_relay_identity=source.remote_host_relay_identity,
+        secret_provider=source.secret_provider,
+        secret_provider_command=source.secret_provider_command,
         scripts_dir=source.scripts_dir,
     )
 
@@ -358,7 +360,10 @@ def render_config_file(config: WorkstationConfig) -> str:
         f"PROXNIX_REMOTE_DIR={shlex.quote(str(config.remote_dir))}",
         f"PROXNIX_REMOTE_PRIV_DIR={shlex.quote(str(config.remote_priv_dir))}",
         f"PROXNIX_REMOTE_HOST_RELAY_IDENTITY={shlex.quote(str(config.remote_host_relay_identity))}",
+        f"PROXNIX_SECRET_PROVIDER={shlex.quote(config.secret_provider)}",
     ]
+    if config.secret_provider_command is not None:
+        lines.append(f"PROXNIX_SECRET_PROVIDER_COMMAND={shlex.quote(config.secret_provider_command)}")
     if config.ssh_identity is not None:
         lines.append(f"PROXNIX_SSH_IDENTITY={shlex.quote(str(config.ssh_identity))}")
     if config.scripts_dir is not None:

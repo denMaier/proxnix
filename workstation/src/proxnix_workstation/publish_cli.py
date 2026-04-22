@@ -13,6 +13,13 @@ from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
 from .paths import SitePaths
 from .runtime import ensure_commands, run_command
+from .secret_provider import (
+    SecretProvider,
+    container_scope,
+    group_scope,
+    load_secret_provider,
+    shared_scope,
+)
 from .site import collect_site_vmids, read_container_secret_groups
 from .sops_ops import (
     decrypt_identity_to_file,
@@ -20,7 +27,6 @@ from .sops_ops import (
     identity_public_key_from_store,
     master_recipient,
     reencrypt_identity_store_to_file,
-    sops_decrypt_json,
     sops_encrypt_json_to_file,
 )
 from .ssh_ops import SSHSession
@@ -52,46 +58,56 @@ def validate_target_container_config(vmid: str) -> None:
         raise ProxnixWorkstationError(f"container VMID must be numeric: {vmid}")
 
 
-def container_has_group_store(site_paths: SitePaths, vmid: str) -> bool:
+def container_has_group_store(site_paths: SitePaths, provider: SecretProvider, vmid: str) -> bool:
     for group in read_container_secret_groups(site_paths, vmid):
-        if site_paths.group_store(group).is_file():
+        if provider.has_any(group_scope(group)):
             return True
     return False
 
 
-def validate_target_vmid_repo(config: WorkstationConfig, site_paths: SitePaths, vmid: str, *, config_only: bool) -> None:
+def validate_target_vmid_repo(
+    config: WorkstationConfig,
+    site_paths: SitePaths,
+    provider: SecretProvider,
+    vmid: str,
+    *,
+    config_only: bool,
+) -> None:
     validate_target_container_config(vmid)
     if not (
         site_paths.container_dir(vmid).is_dir()
-        or site_paths.container_store(vmid).is_file()
         or site_paths.container_identity_store(vmid).is_file()
+        or provider.has_any(container_scope(vmid))
     ):
         raise ProxnixWorkstationError(f"no local config or secret state found for container {vmid}")
     if config_only:
         return
 
-    secret_store = site_paths.container_store(vmid)
     identity_store = site_paths.container_identity_store(vmid)
-    if secret_store.is_file() and not identity_store.is_file():
+    if provider.has_any(container_scope(vmid)) and not identity_store.is_file():
         raise ProxnixWorkstationError(
             f"container {vmid} secret store exists but identity is missing: {identity_store}"
         )
 
-    if (secret_store.is_file() or identity_store.is_file() or container_has_group_store(site_paths, vmid)) and not site_paths.host_relay_identity_store.is_file():
+    if (
+        provider.has_any(container_scope(vmid))
+        or identity_store.is_file()
+        or container_has_group_store(site_paths, provider, vmid)
+    ) and not site_paths.host_relay_identity_store.is_file():
         raise ProxnixWorkstationError(
             f"host relay identity is missing: {site_paths.host_relay_identity_store} — run: proxnix-secrets init-host-relay"
         )
 
 
-def container_has_any_store(site_paths: SitePaths, vmid: str) -> bool:
-    if site_paths.shared_store.is_file() or site_paths.container_store(vmid).is_file():
+def container_has_any_store(site_paths: SitePaths, provider: SecretProvider, vmid: str) -> bool:
+    if provider.has_any(shared_scope()) or provider.has_any(container_scope(vmid)):
         return True
-    return container_has_group_store(site_paths, vmid)
+    return container_has_group_store(site_paths, provider, vmid)
 
 
-def validate_site_repo(config: WorkstationConfig, site_paths: SitePaths) -> None:
+def validate_site_repo(config: WorkstationConfig, site_paths: SitePaths, provider: SecretProvider) -> None:
     for vmid in collect_site_vmids(site_paths):
-        if container_has_any_store(site_paths, vmid):
+        if container_has_any_store(site_paths, provider, vmid):
             identity_store = site_paths.container_identity_store(vmid)
             if not identity_store.is_file():
                 raise ProxnixWorkstationError(
@@ -103,14 +119,21 @@ def validate_site_repo(config: WorkstationConfig, site_paths: SitePaths) -> None
                 )
 
 
-def build_compiled_secret_store(config: WorkstationConfig, site_paths: SitePaths, vmid: str, out_dir: Path) -> None:
-    shared_store = site_paths.shared_store
-    container_store = site_paths.container_store(vmid)
+def build_compiled_secret_store(
+    config: WorkstationConfig,
+    site_paths: SitePaths,
+    provider: SecretProvider,
+    vmid: str,
+    out_dir: Path,
+) -> None:
     container_identity_store = site_paths.container_identity_store(vmid)
-
-    group_stores = [site_paths.group_store(group) for group in read_container_secret_groups(site_paths, vmid)]
-    existing_group_stores = [store for store in group_stores if store.is_file()]
-    have_any_store = shared_store.is_file() or container_store.is_file() or bool(existing_group_stores)
+    shared_data = provider.export_scope(shared_scope())
+    group_data_by_name = {
+        group: provider.export_scope(group_scope(group))
+        for group in read_container_secret_groups(site_paths, vmid)
+    }
+    container_data = provider.export_scope(container_scope(vmid))
+    have_any_store = bool(shared_data or container_data or any(group_data_by_name.values()))
     if not have_any_store:
         return
 
@@ -120,24 +143,12 @@ def build_compiled_secret_store(config: WorkstationConfig, site_paths: SitePaths
         )
 
     merged: dict[str, str] = {}
-    if shared_store.is_file():
-        shared_data = sops_decrypt_json(config, shared_store)
-        for key, value in shared_data.items():
-            if key == "sops":
-                continue
-            if not isinstance(value, str):
-                raise ProxnixWorkstationError(f"non-string secret values in {shared_store}: {key}")
-            merged[key] = value
+    for key, value in shared_data.items():
+        merged[key] = value
 
     seen_group_sources: dict[str, str] = {}
-    for store in existing_group_stores:
-        group_data = sops_decrypt_json(config, store)
-        source_name = store.parent.name
+    for source_name, group_data in group_data_by_name.items():
         for key, value in group_data.items():
-            if key == "sops":
-                continue
-            if not isinstance(value, str):
-                raise ProxnixWorkstationError(f"non-string secret values in {store}: {key}")
             if key in seen_group_sources:
                 raise ProxnixWorkstationError(
                     f"grouped secret {key} is ambiguous: {seen_group_sources[key]} and {source_name}"
@@ -145,14 +156,8 @@ def build_compiled_secret_store(config: WorkstationConfig, site_paths: SitePaths
             seen_group_sources[key] = source_name
             merged[key] = value
 
-    if container_store.is_file():
-        container_data = sops_decrypt_json(config, container_store)
-        for key, value in container_data.items():
-            if key == "sops":
-                continue
-            if not isinstance(value, str):
-                raise ProxnixWorkstationError(f"non-string secret values in {container_store}: {key}")
-            merged[key] = value
+    for key, value in container_data.items():
+        merged[key] = value
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_dir.chmod(0o700)
@@ -184,6 +189,7 @@ def _copy_file_if_present(source: Path, destination: Path) -> None:
 
 
 def build_publish_tree(config: WorkstationConfig, site_paths: SitePaths, options: PublishOptions, root: Path) -> None:
+    provider = load_secret_provider(config, site_paths)
     private_root = root / "private"
     (root / "containers").mkdir(parents=True, exist_ok=True)
     (private_root / "containers").mkdir(parents=True, exist_ok=True)
@@ -205,10 +211,22 @@ def build_publish_tree(config: WorkstationConfig, site_paths: SitePaths, options
         return
 
     if options.target_vmid is not None:
-        build_compiled_secret_store(config, site_paths, options.target_vmid, private_root / "containers" / options.target_vmid)
+        build_compiled_secret_store(
+            config,
+            site_paths,
+            provider,
+            options.target_vmid,
+            private_root / "containers" / options.target_vmid,
+        )
     else:
         for vmid in collect_site_vmids(site_paths):
-            build_compiled_secret_store(config, site_paths, vmid, private_root / "containers" / vmid)
+            build_compiled_secret_store(
+                config,
+                site_paths,
+                provider,
+                vmid,
+                private_root / "containers" / vmid,
+            )
 
     ensure_private_permissions(private_root)
 
@@ -603,10 +621,17 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
 
     try:
         site_paths = need_publish_tools(config, config_only=options.config_only)
+        provider = load_secret_provider(config, site_paths)
         if options.target_vmid is not None:
-            validate_target_vmid_repo(config, site_paths, options.target_vmid, config_only=options.config_only)
+            validate_target_vmid_repo(
+                config,
+                site_paths,
+                provider,
+                options.target_vmid,
+                config_only=options.config_only,
+            )
         elif not options.config_only:
-            validate_site_repo(config, site_paths)
+            validate_site_repo(config, site_paths, provider)
 
         hosts = list(args.hosts) if args.hosts else list(config.hosts)
         if not hosts:

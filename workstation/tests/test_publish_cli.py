@@ -27,6 +27,8 @@ def _test_config() -> WorkstationConfig:
         remote_dir=PurePosixPath("/var/lib/proxnix"),
         remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
+        secret_provider="embedded-sops",
+        secret_provider_command=None,
     )
 
 

@@ -28,6 +28,8 @@ class ConfigStore: ObservableObject {
         printf 'PROXNIX_REMOTE_DIR=%s\\n' "$PROXNIX_REMOTE_DIR"
         printf 'PROXNIX_REMOTE_PRIV_DIR=%s\\n' "$PROXNIX_REMOTE_PRIV_DIR"
         printf 'PROXNIX_REMOTE_HOST_RELAY_IDENTITY=%s\\n' "$PROXNIX_REMOTE_HOST_RELAY_IDENTITY"
+        printf 'PROXNIX_SECRET_PROVIDER=%s\\n' "$PROXNIX_SECRET_PROVIDER"
+        printf 'PROXNIX_SECRET_PROVIDER_COMMAND=%s\\n' "$PROXNIX_SECRET_PROVIDER_COMMAND"
         printf 'PROXNIX_SCRIPTS_DIR=%s\\n' "$PROXNIX_SCRIPTS_DIR"
         """
 
@@ -62,6 +64,8 @@ class ConfigStore: ObservableObject {
             case "PROXNIX_REMOTE_DIR": cfg.remoteDir = value
             case "PROXNIX_REMOTE_PRIV_DIR": cfg.remotePrivDir = value
             case "PROXNIX_REMOTE_HOST_RELAY_IDENTITY": cfg.remoteHostRelayIdentity = value
+            case "PROXNIX_SECRET_PROVIDER": cfg.secretProvider = value
+            case "PROXNIX_SECRET_PROVIDER_COMMAND": cfg.secretProviderCommand = value
             case "PROXNIX_SCRIPTS_DIR": cfg.scriptsDir = value
             default: break
             }
@@ -85,6 +89,8 @@ class ConfigStore: ObservableObject {
         emit("PROXNIX_REMOTE_DIR",                 config.remoteDir)
         emit("PROXNIX_REMOTE_PRIV_DIR",            config.remotePrivDir)
         emit("PROXNIX_REMOTE_HOST_RELAY_IDENTITY", config.remoteHostRelayIdentity)
+        emit("PROXNIX_SECRET_PROVIDER",            config.secretProvider)
+        emit("PROXNIX_SECRET_PROVIDER_COMMAND",    config.secretProviderCommand)
         emit("PROXNIX_SCRIPTS_DIR",                config.scriptsDir)
 
         try (lines.joined(separator: "\n") + "\n")

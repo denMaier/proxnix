@@ -1,10 +1,11 @@
 # Secrets
 
-proxnix uses SOPS-encrypted secret stores plus SSH-backed age identities.
+proxnix uses provider-backed workstation secret retrieval plus SOPS-encrypted
+runtime stores and SSH-backed age identities.
 
 In the current model the **workstation owns all secret state**:
 
-- encrypted secret stores
+- source secrets retrieved from a configured workstation secret provider
 - encrypted private identities
 - the master recovery key
 
@@ -27,6 +28,70 @@ At runtime, each guest receives one secret store with this precedence:
 3. container-local secrets
 
 The guest decrypts that runtime store with its staged container identity.
+
+## Workstation provider model
+
+The workstation CLI does not require one specific source-secret backend.
+`proxnix-secrets`, `proxnix-publish`, and `proxnix-doctor` talk to a
+workstation secret provider, then compile the result into the same
+`effective.sops.yaml` runtime artifact used by the host and guest.
+
+That means:
+
+- host and guest runtime behavior stays unchanged
+- source secret storage can be swapped without changing publish semantics
+- precedence rules stay owned by proxnix, not by the backend
+
+Configure the provider with:
+
+```bash
+export PROXNIX_SECRET_PROVIDER=embedded-sops
+```
+
+Or an external helper:
+
+```bash
+export PROXNIX_SECRET_PROVIDER=exec
+export PROXNIX_SECRET_PROVIDER_COMMAND='/path/to/proxnix-secret-provider-helper'
+```
+
+Built-in named providers:
+
+| Provider | Notes |
+|----------|-------|
+| `embedded-sops` | Default repo-backed source store |
+| `pass` | Uses `pass` path hierarchy |
+| `gopass` | Uses `gopass` path hierarchy |
+| `passhole` | Uses `ph` against a KeePass database |
+| `pykeepass` | Uses the Python `pykeepass` library directly |
+| `keepassxc-cli` / `keepassxc` | Uses `keepassxc-cli` |
+| `op` / `1password` / `onepassword` | Uses the 1Password CLI |
+| `bws` / `bitwarden-secrets` | Uses Bitwarden Secrets Manager |
+| `vault` / `vault-kv` | Uses Vault KV |
+| `infisical` | Uses the Infisical CLI |
+| `exec` | Arbitrary helper implementing the proxnix JSON contract |
+
+All built-in providers map proxnix scopes onto the same logical hierarchy:
+
+- `shared`
+- `groups/<group>`
+- `containers/<vmid>`
+
+Provider-specific configuration:
+
+| Provider | Required / useful environment |
+|----------|-------------------------------|
+| `embedded-sops` | none beyond normal proxnix config |
+| `pass` | `PROXNIX_PASS_STORE_DIR` optional |
+| `gopass` | `PROXNIX_GOPASS_STORE_DIR` optional |
+| `passhole` | `PROXNIX_PASSHOLE_DATABASE` or `PROXNIX_PASSHOLE_CONFIG`; optional `PROXNIX_PASSHOLE_KEYFILE`, `PROXNIX_PASSHOLE_PASSWORD`, `PROXNIX_PASSHOLE_PASSWORD_FILE`, `PROXNIX_PASSHOLE_NO_PASSWORD`, `PROXNIX_PASSHOLE_NO_CACHE`, `PROXNIX_PASSHOLE_CACHE_TIMEOUT` |
+| `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD` |
+| `keepassxc-cli` | `PROXNIX_KEEPASSXC_DATABASE`; optional `PROXNIX_KEEPASSXC_PASSWORD_FILE`, `PROXNIX_KEEPASSXC_KEY_FILE`, `PROXNIX_KEEPASSXC_NO_PASSWORD` |
+| `op` | `PROXNIX_1PASSWORD_VAULT`; optional `PROXNIX_1PASSWORD_ACCOUNT` |
+| `bws` | normal `bws` auth and environment |
+| `vault-kv` | optional `PROXNIX_VAULT_MOUNT` |
+| `infisical` | `PROXNIX_INFISICAL_PROJECT_ID`; optional `PROXNIX_INFISICAL_ENV`, `PROXNIX_INFISICAL_TYPE` |
+| all named providers | optional `PROXNIX_SECRET_PATH_PREFIX` to replace `proxnix` |
 
 ## Quick recipe
 
@@ -63,7 +128,10 @@ pct exec 120 -- proxnix-secrets get s3_access_key
 
 ## Source-of-truth paths
 
-Inside the workstation-owned site repo:
+Identities always remain SOPS-backed inside the workstation-owned site repo.
+Source secret stores live there only when `PROXNIX_SECRET_PROVIDER=embedded-sops`.
+
+Embedded-SOPS paths:
 
 | Store | Path |
 |-------|------|
@@ -73,6 +141,14 @@ Inside the workstation-owned site repo:
 | Per-container identity | `private/containers/<vmid>/age_identity.sops.yaml` |
 | Per-container source store | `private/containers/<vmid>/secrets.sops.yaml` |
 | Container group memberships | `containers/<vmid>/secret-groups.list` |
+
+With any non-embedded provider, proxnix still uses:
+
+- `private/host_relay_identity.sops.yaml`
+- `private/containers/<vmid>/age_identity.sops.yaml`
+- `containers/<vmid>/secret-groups.list`
+
+Only the source secret retrieval moves out of the repo.
 
 ## Publish flow
 

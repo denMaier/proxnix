@@ -8,6 +8,8 @@ struct ProxnixConfig: Equatable {
     var remoteDir: String = "/var/lib/proxnix"
     var remotePrivDir: String = "/var/lib/proxnix/private"
     var remoteHostRelayIdentity: String = "/etc/proxnix/host_relay_identity"
+    var secretProvider: String = "embedded-sops"
+    var secretProviderCommand: String = ""
     var scriptsDir: String = ""
 
     var hostList: [String] {

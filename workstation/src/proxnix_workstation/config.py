@@ -65,6 +65,8 @@ class WorkstationConfig:
     remote_dir: PurePosixPath
     remote_priv_dir: PurePosixPath
     remote_host_relay_identity: PurePosixPath
+    secret_provider: str = "embedded-sops"
+    secret_provider_command: str | None = None
     scripts_dir: Path | None = None
 
     def to_json(self) -> str:
@@ -77,6 +79,8 @@ class WorkstationConfig:
         payload["remote_dir"] = str(self.remote_dir)
         payload["remote_priv_dir"] = str(self.remote_priv_dir)
         payload["remote_host_relay_identity"] = str(self.remote_host_relay_identity)
+        payload["secret_provider"] = self.secret_provider
+        payload["secret_provider_command"] = self.secret_provider_command
         payload["scripts_dir"] = None if self.scripts_dir is None else str(self.scripts_dir)
         return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -107,6 +111,8 @@ def load_workstation_config(
         "PROXNIX_REMOTE_HOST_RELAY_IDENTITY": env.get(
             "PROXNIX_REMOTE_HOST_RELAY_IDENTITY", "/etc/proxnix/host_relay_identity"
         ),
+        "PROXNIX_SECRET_PROVIDER": env.get("PROXNIX_SECRET_PROVIDER", "embedded-sops"),
+        "PROXNIX_SECRET_PROVIDER_COMMAND": env.get("PROXNIX_SECRET_PROVIDER_COMMAND", ""),
         "PROXNIX_SCRIPTS_DIR": env.get("PROXNIX_SCRIPTS_DIR", ""),
     }
 
@@ -137,5 +143,7 @@ def load_workstation_config(
         remote_dir=remote_dir,
         remote_priv_dir=remote_priv_dir,
         remote_host_relay_identity=remote_host_relay_identity,
+        secret_provider=raw_values["PROXNIX_SECRET_PROVIDER"].strip() or "embedded-sops",
+        secret_provider_command=raw_values["PROXNIX_SECRET_PROVIDER_COMMAND"].strip() or None,
         scripts_dir=Path(scripts_dir_raw) if scripts_dir_raw else None,
     )

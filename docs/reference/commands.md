@@ -319,6 +319,9 @@ This is the workstation-authoritative helper for the external proxnix site repo.
 
 **Configuration:** `~/.config/proxnix/config` (see [installation step 3](../getting-started/installation.md#step-3-configure-your-workstation))
 
+Source-secret retrieval is controlled by `PROXNIX_SECRET_PROVIDER`. Runtime
+publish artifacts remain SOPS-based regardless of provider.
+
 ### Listing
 
 ```bash
@@ -364,6 +367,9 @@ proxnix-secrets rotate-shared
 proxnix-secrets rotate-group <group>
 ```
 
+These rotation commands are only available with the `embedded-sops` provider,
+because they operate on repo-local SOPS source stores directly.
+
 ### Identity initialization
 
 ```bash
@@ -374,6 +380,20 @@ proxnix-secrets init-container 120
 `set` creates guest identities automatically when needed. `init-host-relay` is
 the one shared relay key that Proxmox hosts use to decrypt guest identities
 during staging.
+
+Built-in provider names:
+
+- `embedded-sops`
+- `pass`
+- `gopass`
+- `passhole`
+- `pykeepass`
+- `keepassxc-cli` / `keepassxc`
+- `op` / `1password` / `onepassword`
+- `bws` / `bitwarden-secrets`
+- `vault` / `vault-kv`
+- `infisical`
+- `exec`
 
 ### `proxnix-publish`
 
