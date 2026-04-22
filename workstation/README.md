@@ -90,7 +90,6 @@ workflow:
 Expected settings include:
 
 - `PROXNIX_SITE_DIR`
-- `PROXNIX_MASTER_IDENTITY`
 - `PROXNIX_HOSTS`
 - `PROXNIX_SSH_IDENTITY` (optional)
 
@@ -98,6 +97,7 @@ For source-secret retrieval, the workstation also supports:
 
 - `PROXNIX_SECRET_PROVIDER`
 - `PROXNIX_SECRET_PROVIDER_COMMAND` when `PROXNIX_SECRET_PROVIDER=exec`
+- `PROXNIX_SOPS_MASTER_IDENTITY` when using `embedded-sops`
 
 ## Secret Providers
 

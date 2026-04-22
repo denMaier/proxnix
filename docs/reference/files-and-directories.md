@@ -230,7 +230,7 @@ tree after the container stops:
 
 ```text
 ~/.config/proxnix/
-└── config                             PROXNIX_SITE_DIR, PROXNIX_MASTER_IDENTITY, etc.
+└── config                             PROXNIX_SITE_DIR, provider settings, etc.
 
 <proxnix-site>/
 ├── site.nix

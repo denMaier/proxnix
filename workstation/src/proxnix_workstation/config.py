@@ -59,7 +59,6 @@ def _parse_config_lines(text: str) -> dict[str, str]:
 class WorkstationConfig:
     config_file: Path
     site_dir: Path | None
-    master_identity: Path
     hosts: tuple[str, ...]
     ssh_identity: Path | None
     remote_dir: PurePosixPath
@@ -74,7 +73,6 @@ class WorkstationConfig:
         payload = asdict(self)
         payload["config_file"] = str(self.config_file)
         payload["site_dir"] = None if self.site_dir is None else str(self.site_dir)
-        payload["master_identity"] = str(self.master_identity)
         payload["hosts"] = list(self.hosts)
         payload["ssh_identity"] = None if self.ssh_identity is None else str(self.ssh_identity)
         payload["remote_dir"] = str(self.remote_dir)
@@ -111,7 +109,6 @@ def load_workstation_config(
 
     core_keys = {
         "PROXNIX_SITE_DIR",
-        "PROXNIX_MASTER_IDENTITY",
         "PROXNIX_HOSTS",
         "PROXNIX_SSH_IDENTITY",
         "PROXNIX_REMOTE_DIR",
@@ -124,7 +121,6 @@ def load_workstation_config(
 
     raw_values = {
         "PROXNIX_SITE_DIR": env.get("PROXNIX_SITE_DIR", ""),
-        "PROXNIX_MASTER_IDENTITY": env.get("PROXNIX_MASTER_IDENTITY", str(home / ".ssh/id_ed25519")),
         "PROXNIX_HOSTS": env.get("PROXNIX_HOSTS", ""),
         "PROXNIX_SSH_IDENTITY": env.get("PROXNIX_SSH_IDENTITY", ""),
         "PROXNIX_REMOTE_DIR": env.get("PROXNIX_REMOTE_DIR", "/var/lib/proxnix"),
@@ -140,7 +136,6 @@ def load_workstation_config(
     raw_values.update(config_values)
 
     site_dir_raw = _expand_home_string(raw_values["PROXNIX_SITE_DIR"], home).strip()
-    master_identity_raw = _expand_home_string(raw_values["PROXNIX_MASTER_IDENTITY"], home).strip()
     ssh_identity_raw = _expand_home_string(raw_values["PROXNIX_SSH_IDENTITY"], home).strip()
     scripts_dir_raw = _expand_home_string(raw_values["PROXNIX_SCRIPTS_DIR"], home).strip()
 
@@ -165,11 +160,11 @@ def load_workstation_config(
             if key not in core_keys
         }
     )
+    provider_environment.setdefault("PROXNIX_SOPS_MASTER_IDENTITY", str(home / ".ssh/id_ed25519"))
 
     return WorkstationConfig(
         config_file=config_path,
         site_dir=Path(site_dir_raw) if site_dir_raw else None,
-        master_identity=Path(master_identity_raw),
         hosts=tuple(shlex.split(hosts_value)) if hosts_value else (),
         ssh_identity=Path(ssh_identity_raw) if ssh_identity_raw else None,
         remote_dir=remote_dir,

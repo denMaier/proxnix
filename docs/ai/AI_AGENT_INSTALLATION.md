@@ -25,7 +25,7 @@ Ask these in one short batch before changing anything:
 3. Do you want `host-bootstrap` only for now, or the full workstation publish flow?
 4. Do you already have a workstation site repo, or should I create a new one?
 5. Do you want a full secrets-capable setup now, or a config-only bootstrap first?
-6. What SSH targets should I publish to, should I use a dedicated publish SSH identity, and what should I use as the SOPS master identity?
+6. What SSH targets should I publish to, should I use a dedicated publish SSH identity, and if using `embedded-sops` what should I use as the SOPS master identity?
 7. Do you want me to stop at host validation, or also run the proxnix exercise harness for an end-to-end report?
 8. If I run the exercise harness, which Proxmox host should I target and which base VMID should I reserve for the disposable test containers?
 
@@ -266,10 +266,11 @@ Write:
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
 PROXNIX_SITE_DIR=~/src/proxnix-site
-PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
 PROXNIX_HOSTS="root@node1 root@node2"
 # Optional when SSH config or the agent already handles auth:
 # PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
+# Only needed for the embedded-sops provider:
+PROXNIX_SOPS_MASTER_IDENTITY=~/.ssh/proxnix-master
 EOF
 ```
 
@@ -281,7 +282,7 @@ Show the normalized config and confirm it matches the answers:
 proxnix config show
 ```
 
-If `publish_mode=full`, make sure the configured master identity file exists.
+If `publish_mode=full` with `embedded-sops`, make sure the configured `PROXNIX_SOPS_MASTER_IDENTITY` file exists.
 If the user wants a dedicated key and it does not exist yet, create one:
 
 ```bash

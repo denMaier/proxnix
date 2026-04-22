@@ -203,19 +203,20 @@ Create `~/.config/proxnix/config`:
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
 PROXNIX_SITE_DIR=~/src/proxnix-site
-PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
 PROXNIX_HOSTS="root@node1 root@node2"
 # Optional when your SSH agent/config already handles auth:
 # PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
+# Only needed for the embedded-sops provider:
+PROXNIX_SOPS_MASTER_IDENTITY=~/.ssh/proxnix-master
 EOF
 ```
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `PROXNIX_SITE_DIR` | Local proxnix site repo | *(required)* |
-| `PROXNIX_MASTER_IDENTITY` | Local SSH private key used by SOPS for encrypted identities and stores | `~/.ssh/id_ed25519` |
 | `PROXNIX_HOSTS` | Space-separated SSH targets used by `proxnix-publish` | *(required for publishing)* |
 | `PROXNIX_SSH_IDENTITY` | Optional SSH private key used to connect to relay hosts; if unset, use normal SSH agent/config | *(optional)* |
+| `PROXNIX_SOPS_MASTER_IDENTITY` | SSH private key used by the `embedded-sops` provider for encrypted identities and stores | `~/.ssh/id_ed25519` |
 | `PROXNIX_REMOTE_DIR` | Relay cache dir on the Proxmox host | `/var/lib/proxnix` |
 | `PROXNIX_REMOTE_PRIV_DIR` | Relay cache private dir on the Proxmox host | `/var/lib/proxnix/private` |
 | `PROXNIX_REMOTE_HOST_RELAY_IDENTITY` | Host path for the plaintext host relay key | `/etc/proxnix/host_relay_identity` |

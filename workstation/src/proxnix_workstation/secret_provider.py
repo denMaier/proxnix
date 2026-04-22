@@ -7,13 +7,15 @@ import sys
 from .config import WorkstationConfig
 from .errors import ConfigError, ProxnixWorkstationError
 from .paths import SitePaths
+from .provider_keys import (
+    ensure_container_identity as ensure_provider_container_identity,
+    ensure_host_relay_identity as ensure_provider_host_relay_identity,
+)
 from .runtime import command_env, ensure_commands, run_command
 from .secret_provider_embedded import (
     EmbeddedSopsProvider,
     container_recipients,
     create_identity_store,
-    ensure_container_identity,
-    ensure_host_relay_identity,
     ensure_shared_identity,
     group_recipients,
     read_sops_store_map,
@@ -190,6 +192,16 @@ def load_secret_provider(
             extra_env=config.provider_environment_map(),
         )
     raise ConfigError(f"unsupported secret provider: {provider_name}")
+
+
+def ensure_host_relay_identity(config: WorkstationConfig, site_paths: SitePaths) -> None:
+    provider = load_secret_provider(config, site_paths)
+    ensure_provider_host_relay_identity(config, provider, site_paths)
+
+
+def ensure_container_identity(config: WorkstationConfig, site_paths: SitePaths, vmid: str) -> None:
+    provider = load_secret_provider(config, site_paths)
+    ensure_provider_container_identity(config, provider, site_paths, vmid)
 
 
 __all__ = [

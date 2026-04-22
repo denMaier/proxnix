@@ -16,7 +16,9 @@ from typing import Any, Sequence
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, ProxnixWorkstationError
 from .paths import SitePaths
+from .provider_keys import master_public_key
 from .runtime import CommandError, run_command, shell_join
+from .secret_provider import load_secret_provider
 from .secrets_cli import (
     container_recipients,
     ensure_container_identity,
@@ -340,7 +342,6 @@ def build_generated_config(
     return WorkstationConfig(
         config_file=config_path,
         site_dir=site_dir,
-        master_identity=source.master_identity,
         hosts=(host,),
         ssh_identity=source.ssh_identity,
         remote_dir=source.remote_dir,
@@ -356,7 +357,6 @@ def build_generated_config(
 def render_config_file(config: WorkstationConfig) -> str:
     lines = [
         f"PROXNIX_SITE_DIR={shlex.quote(str(config.site_dir))}",
-        f"PROXNIX_MASTER_IDENTITY={shlex.quote(str(config.master_identity))}",
         f"PROXNIX_HOSTS={shlex.quote(' '.join(config.hosts))}",
         f"PROXNIX_REMOTE_DIR={shlex.quote(str(config.remote_dir))}",
         f"PROXNIX_REMOTE_PRIV_DIR={shlex.quote(str(config.remote_priv_dir))}",
@@ -1542,8 +1542,10 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
             ["--config", str(config_path), "--report-changes", host],
         )
 
-        public_identity = source_config.ssh_identity or source_config.master_identity
-        public_key = derive_public_key(public_identity)
+        if source_config.ssh_identity is not None:
+            public_key = derive_public_key(source_config.ssh_identity)
+        else:
+            public_key = master_public_key(source_config, load_secret_provider(source_config, SitePaths.from_config(source_config)))
 
         with SSHSession(generated_config, host) as session:
             run_logged_remote_command(

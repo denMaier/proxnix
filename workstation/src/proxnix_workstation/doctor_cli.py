@@ -21,6 +21,13 @@ from .publish_cli import (
     validate_target_container_config,
     validate_target_vmid_repo,
 )
+from .provider_keys import (
+    container_private_key_text,
+    have_container_private_key,
+    have_host_relay_private_key,
+    host_relay_private_key_text,
+    master_private_key_text,
+)
 from .publish_cli import do_rsync as publish_do_rsync
 from .publish_cli import stage_relay_identities_into_tree
 from .secret_provider import (
@@ -32,7 +39,7 @@ from .secret_provider import (
     shared_scope,
 )
 from .site import collect_site_vmids, read_container_secret_groups
-from .sops_ops import identity_public_key_from_store
+from .sops_ops import identity_public_key_from_store, public_key_from_private_text
 from .ssh_ops import SSHSession
 
 
@@ -99,6 +106,15 @@ def validate_identity_store(config, store: Path, label: str, reporter: DoctorRep
     reporter.ok(f"{label} decrypts and yields a public key")
 
 
+def validate_private_key_text(private_text: str, label: str, reporter: DoctorReporter) -> None:
+    try:
+        public_key_from_private_text(private_text, source=label)
+    except Exception:
+        reporter.fail(f"{label} failed to derive a public key")
+        return
+    reporter.ok(f"{label} yields a public key")
+
+
 def check_container_group_file(
     site_paths: SitePaths,
     provider: SecretProvider,
@@ -122,17 +138,18 @@ def check_container_group_file(
 
 
 def check_container_secret_requirements(
+    config,
     site_paths: SitePaths,
     provider: SecretProvider,
     vmid: str,
     reporter: DoctorReporter,
 ) -> None:
     if container_has_any_store(site_paths, provider, vmid):
-        if site_paths.container_identity_store(vmid).is_file():
+        if have_container_private_key(config, provider, site_paths, vmid):
             reporter.ok(f"container {vmid} has an identity for compiled secret delivery")
         else:
             reporter.fail(
-                f"container {vmid} needs an identity store for compiled secret delivery: {site_paths.container_identity_store(vmid)}"
+                f"container {vmid} needs an identity for compiled secret delivery"
             )
 
 
@@ -155,7 +172,10 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
     if options.config_only:
         reporter.info("config-only mode skips secret-store prerequisites")
     else:
-        reporter.ok(f"master identity present: {config.master_identity}")
+        try:
+            validate_private_key_text(master_private_key_text(config, provider), "master identity", reporter)
+        except Exception:
+            reporter.fail("master identity is missing or invalid")
 
     if site_paths.site_nix.is_file():
         reporter.ok("site.nix present")
@@ -173,17 +193,18 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
         reporter.info("no private site dir yet")
 
     if not options.config_only:
-        if site_paths.host_relay_identity_store.is_file():
-            validate_identity_store(config, site_paths.host_relay_identity_store, "host relay identity store", reporter)
+        relay_private_text = host_relay_private_key_text(config, provider, site_paths)
+        if relay_private_text is not None:
+            validate_private_key_text(relay_private_text, "host relay identity", reporter)
         else:
-            reporter.warn(f"host relay identity store missing: {site_paths.host_relay_identity_store}")
+            reporter.warn("host relay identity missing")
 
         if provider.has_any(shared_scope()):
             validate_provider_scope_payload(provider, shared_scope(), "shared secret store", reporter)
         else:
             reporter.info("no shared secret store")
 
-        if site_paths.shared_identity_store.is_file():
+        if isinstance(provider, EmbeddedSopsProvider) and site_paths.shared_identity_store.is_file():
             validate_identity_store(config, site_paths.shared_identity_store, "shared identity store", reporter)
 
         if isinstance(provider, EmbeddedSopsProvider):
@@ -209,7 +230,7 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
     for vmid in vmids:
         check_container_group_file(site_paths, provider, vmid, reporter)
         if not options.config_only:
-            check_container_secret_requirements(site_paths, provider, vmid, reporter)
+            check_container_secret_requirements(config, site_paths, provider, vmid, reporter)
             if provider.has_any(container_scope(vmid)):
                 validate_provider_scope_payload(
                     provider,
@@ -217,16 +238,16 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
                     f"container {vmid} secret store",
                     reporter,
                 )
-            identity_store = site_paths.container_identity_store(vmid)
-            if identity_store.is_file():
-                validate_identity_store(config, identity_store, f"container {vmid} identity store", reporter)
+            identity_private_text = container_private_key_text(config, provider, site_paths, vmid)
+            if identity_private_text is not None:
+                validate_private_key_text(identity_private_text, f"container {vmid} identity", reporter)
 
     if reporter.fails > fails_before:
         reporter.info("skipping compiled publish-tree validation until site errors are fixed")
         return
 
     build_publish_tree(config, site_paths, options, tree)
-    if not options.config_only and site_paths.host_relay_identity_store.is_file():
+    if not options.config_only and have_host_relay_private_key(config, provider, site_paths):
         stage_relay_identities_into_tree(config, site_paths, options, tree)
 
     if options.target_vmid is not None:
@@ -244,7 +265,7 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
             check_expected_tree_dir(tree / "private" / "containers", "compiled private tree", reporter)
             if (tree / "private" / "host_relay_identity").is_file():
                 reporter.ok("host relay identity staged for publish")
-            elif site_paths.host_relay_identity_store.is_file():
+            elif have_host_relay_private_key(config, provider, site_paths):
                 reporter.fail("host relay identity did not stage into the publish tree")
             else:
                 reporter.info("host relay identity not staged because no local store exists")
@@ -423,7 +444,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-doctor") -> int:
 
             relay_tree = temp_root / "relay"
             build_publish_tree(config, site_paths, options, relay_tree)
-            if not options.config_only and site_paths.host_relay_identity_store.is_file():
+            if not options.config_only and have_host_relay_private_key(config, provider, site_paths):
                 stage_relay_identities_into_tree(config, site_paths, options, relay_tree)
 
             for host in hosts:

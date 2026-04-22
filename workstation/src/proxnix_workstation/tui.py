@@ -70,7 +70,6 @@ def resolve_command_path(name: str) -> Path | None:
 @dataclass
 class Config:
     site_dir: str = ""
-    master_identity: str = ""
     hosts: list[str] = field(default_factory=list)
     ssh_identity: str = ""
     remote_dir: str = "/var/lib/proxnix"
@@ -173,7 +172,6 @@ def load_config() -> Config:
     if loaded is not None:
         return Config(
             site_dir="" if loaded.site_dir is None else str(loaded.site_dir),
-            master_identity=str(loaded.master_identity),
             hosts=list(loaded.hosts),
             ssh_identity="" if loaded.ssh_identity is None else str(loaded.ssh_identity),
             remote_dir=str(loaded.remote_dir),
@@ -189,7 +187,6 @@ set -e
 source {shell_quote(str(COMMON_SCRIPT))}
 load_proxnix_workstation_config
 printf 'PROXNIX_SITE_DIR=%s\\n' "$PROXNIX_SITE_DIR"
-printf 'PROXNIX_MASTER_IDENTITY=%s\\n' "$PROXNIX_MASTER_IDENTITY"
 printf 'PROXNIX_HOSTS=%s\\n' "$PROXNIX_HOSTS"
 printf 'PROXNIX_SSH_IDENTITY=%s\\n' "$PROXNIX_SSH_IDENTITY"
 printf 'PROXNIX_REMOTE_DIR=%s\\n' "$PROXNIX_REMOTE_DIR"
@@ -216,7 +213,6 @@ printf 'PROXNIX_REMOTE_HOST_RELAY_IDENTITY=%s\\n' "$PROXNIX_REMOTE_HOST_RELAY_ID
 
     return Config(
         site_dir=values.get("PROXNIX_SITE_DIR", ""),
-        master_identity=values.get("PROXNIX_MASTER_IDENTITY", ""),
         hosts=values.get("PROXNIX_HOSTS", "").split(),
         ssh_identity=values.get("PROXNIX_SSH_IDENTITY", ""),
         remote_dir=values.get("PROXNIX_REMOTE_DIR", "/var/lib/proxnix"),
@@ -1923,7 +1919,6 @@ def _settings_fields(app: AppState) -> list[tuple[str, list[tuple[str, str]]]]:
     return [
         ("Site Repo", [
             ("Site directory", c.site_dir),
-            ("Master identity", c.master_identity),
         ]),
         ("Hosts", [
             ("SSH hosts", " ".join(c.hosts) if c.hosts else ""),
@@ -1941,7 +1936,6 @@ def activate_settings(stdscr: curses.window, app: AppState) -> None:
     """Interactive Settings editor."""
     editable = [
         ("Site directory", "site_dir"),
-        ("Master identity", "master_identity"),
         ("SSH hosts", "hosts"),
         ("SSH identity", "ssh_identity"),
         ("Remote dir", "remote_dir"),
@@ -2022,7 +2016,6 @@ def _save_config(stdscr: curses.window, app: AppState) -> None:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         lines = [
             f"PROXNIX_SITE_DIR={app.config.site_dir}",
-            f"PROXNIX_MASTER_IDENTITY={app.config.master_identity}",
             f"PROXNIX_HOSTS={' '.join(app.config.hosts)}",
             f"PROXNIX_SSH_IDENTITY={app.config.ssh_identity}",
             f"PROXNIX_REMOTE_DIR={app.config.remote_dir}",

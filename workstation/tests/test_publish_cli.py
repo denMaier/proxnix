@@ -21,7 +21,6 @@ def _test_config() -> WorkstationConfig:
     return WorkstationConfig(
         config_file=Path("/tmp/proxnix-config"),
         site_dir=None,
-        master_identity=Path("/tmp/id_master"),
         hosts=("root@node1",),
         ssh_identity=None,
         remote_dir=PurePosixPath("/var/lib/proxnix"),
@@ -29,6 +28,7 @@ def _test_config() -> WorkstationConfig:
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
         secret_provider="embedded-sops",
         secret_provider_command=None,
+        provider_environment=(("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),),
     )
 
 

@@ -31,7 +31,9 @@ from .orb_exercise_cli import (
 )
 from .paths import SitePaths
 from .publish_cli import PublishOptions, build_publish_tree, stage_relay_identities_into_tree, validate_target_vmid_repo
+from .provider_keys import have_host_relay_private_key, master_public_key
 from .runtime import CommandError, ensure_commands, run_command, shell_join
+from .secret_provider import load_secret_provider
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -131,7 +133,7 @@ def build_target_host_tree(config, host_tree: Path, *, vmid: str) -> None:
         shutil.rmtree(host_tree)
     site_paths = SitePaths.from_config(config)
     options = PublishOptions(target_vmid=vmid)
-    validate_target_vmid_repo(config, site_paths, vmid, config_only=False)
+    validate_target_vmid_repo(config, site_paths, load_secret_provider(config, site_paths), vmid, config_only=False)
     build_publish_tree(config, site_paths, options, host_tree)
     stage_relay_identities_into_tree(config, site_paths, options, host_tree)
 
@@ -570,8 +572,13 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix exercise orb-sit
             keys = read_root_authorized_keys([path.expanduser() for path in args.root_authorized_key])
             root_public_key = "\n".join(keys).strip()
         else:
-            public_identity = source_config.ssh_identity or source_config.master_identity
-            root_public_key = derive_public_key(public_identity)
+            if source_config.ssh_identity is not None:
+                root_public_key = derive_public_key(source_config.ssh_identity)
+            else:
+                root_public_key = master_public_key(
+                    source_config,
+                    load_secret_provider(source_config, SitePaths.from_config(source_config)),
+                )
         render_fake_pve_conf(
             pve_conf_path,
             container=container,

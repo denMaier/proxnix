@@ -97,7 +97,6 @@ class _BaseNamedAdapter:
                 data[name] = value
         return data
 
-
 class _PasswordStoreAdapter(_BaseNamedAdapter):
     command_name = ""
     store_dir_env_name = ""
@@ -147,7 +146,6 @@ class _PasswordStoreAdapter(_BaseNamedAdapter):
     def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
         target = self.secret_path(scope=scope, vmid=vmid, group=group, name=name)
         self._run(["rm", "-f", target], check=False)
-
 
 class PassAdapter(_PasswordStoreAdapter):
     name = "pass"
@@ -297,7 +295,6 @@ class PassholeAdapter(_BaseNamedAdapter):
             return {}
         return {str(key): value for key, value in payload.items() if isinstance(value, str)}
 
-
 class PyKeePassAdapter(_BaseNamedAdapter):
     name = "pykeepass"
 
@@ -432,7 +429,6 @@ class PyKeePassAdapter(_BaseNamedAdapter):
                 data[entry.title] = entry.password
         return data
 
-
 class KeePassXCCliAdapter(_BaseNamedAdapter):
     name = "keepassxc-cli"
 
@@ -501,7 +497,6 @@ class KeePassXCCliAdapter(_BaseNamedAdapter):
             ["rm", "-q", *self._unlock_args(), self._database_path(), target],
             check=False,
         )
-
 
 class OnePasswordAdapter(_BaseNamedAdapter):
     name = "op"
@@ -651,7 +646,6 @@ class OnePasswordAdapter(_BaseNamedAdapter):
                 )
                 return
 
-
 class BitwardenSecretsAdapter(_BaseNamedAdapter):
     name = "bws"
 
@@ -758,7 +752,6 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
                 data[key] = value
         return data
 
-
 class InfisicalAdapter(_BaseNamedAdapter):
     name = "infisical"
 
@@ -847,7 +840,6 @@ class InfisicalAdapter(_BaseNamedAdapter):
             check=False,
         )
 
-
 class VaultKvAdapter(_BaseNamedAdapter):
     name = "vault-kv"
 
@@ -913,7 +905,6 @@ class VaultKvAdapter(_BaseNamedAdapter):
             if value is not None:
                 data[name] = value
         return data
-
 
 def _adapter_for_name(name: str) -> _BaseNamedAdapter:
     if name == "pass":

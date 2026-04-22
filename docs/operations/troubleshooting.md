@@ -95,13 +95,13 @@ features in Proxmox and restart the container.
 
 ## Secrets cannot be encrypted for a container
 
-`proxnix-secrets set <vmid> ...` needs access to the workstation site repo and the master identity.
+`proxnix-secrets set <vmid> ...` needs access to the workstation site repo and, for `embedded-sops`, the configured SOPS master identity.
 
 Check:
 
 ```bash
 ls "$PROXNIX_SITE_DIR/private/containers/<vmid>/age_identity.sops.yaml"
-ls "$PROXNIX_MASTER_IDENTITY"
+ls "$PROXNIX_SOPS_MASTER_IDENTITY"
 ```
 
 If the encrypted identity is missing, `proxnix-secrets set <vmid> ...` will create it automatically.
@@ -114,9 +114,9 @@ Check the workstation config:
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
 PROXNIX_SITE_DIR=~/src/proxnix-site
-PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
 PROXNIX_HOSTS="root@your-proxmox-host"
 PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
+PROXNIX_SOPS_MASTER_IDENTITY=~/.ssh/proxnix-master
 EOF
 ```
 
@@ -130,22 +130,22 @@ The workstation config file is missing. Create it:
 mkdir -p ~/.config/proxnix
 cat > ~/.config/proxnix/config << 'EOF'
 PROXNIX_SITE_DIR=~/src/proxnix-site
-PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
 PROXNIX_HOSTS="root@your-proxmox-host"
 PROXNIX_SSH_IDENTITY=~/.ssh/id_ed25519
+PROXNIX_SOPS_MASTER_IDENTITY=~/.ssh/proxnix-master
 EOF
 ```
 
 See [installation step 3](../getting-started/installation.md#step-3-configure-your-workstation).
 
-## `proxnix-secrets` says "master SSH identity not found"
+## `proxnix-secrets` says "SOPS master SSH identity not found"
 
-The identity file specified in `PROXNIX_MASTER_IDENTITY` doesn't exist. Check the path in `~/.config/proxnix/config`.
+The identity file specified in `PROXNIX_SOPS_MASTER_IDENTITY` doesn't exist. Check the path in `~/.config/proxnix/config`.
 
 Default location:
 
 ```bash
-PROXNIX_MASTER_IDENTITY=~/.ssh/proxnix-master
+PROXNIX_SOPS_MASTER_IDENTITY=~/.ssh/proxnix-master
 ```
 
 ## A native service cannot read its secret file

@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
 from .paths import SitePaths
+from .provider_keys import initialize_container_identity, initialize_host_relay_identity
 from .runtime import ensure_commands
 from .site import collect_site_vmids
 from .secret_provider import (
@@ -227,7 +228,8 @@ def cmd_rotate_group(config: WorkstationConfig, group: str) -> int:
 
 def cmd_init_host_relay(config: WorkstationConfig) -> int:
     site_paths = need_tools(config)
-    label, pubkey = create_identity_store(config, site_paths, site_paths.host_relay_identity_store, "host relay")
+    provider = load_secret_provider(config, site_paths)
+    label, pubkey = initialize_host_relay_identity(config, provider, site_paths)
     print(f"Initialized {label} SSH-backed age keypair")
     print(f"Public key: {pubkey}")
     return 0
@@ -243,9 +245,8 @@ def cmd_init_shared(config: WorkstationConfig) -> int:
 
 def cmd_init_container(config: WorkstationConfig, vmid: str) -> int:
     site_paths = need_tools(config)
-    label, pubkey = create_identity_store(
-        config, site_paths, site_paths.container_identity_store(vmid), f"container {vmid}"
-    )
+    provider = load_secret_provider(config, site_paths)
+    label, pubkey = initialize_container_identity(config, provider, site_paths, vmid)
     print(f"Initialized {label} SSH-backed age keypair")
     print(f"Public key: {pubkey}")
     return 0

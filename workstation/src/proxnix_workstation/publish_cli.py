@@ -12,6 +12,16 @@ from pathlib import Path, PurePosixPath
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
 from .paths import SitePaths
+from .provider_keys import (
+    container_private_key_text,
+    container_public_key,
+    have_container_private_key,
+    have_host_relay_private_key,
+    host_relay_private_key_text,
+    host_relay_public_key,
+    master_private_key_text,
+    write_private_key_file,
+)
 from .runtime import ensure_commands, run_command
 from .secret_provider import (
     SecretProvider,
@@ -22,11 +32,9 @@ from .secret_provider import (
 )
 from .site import collect_site_vmids, read_container_secret_groups
 from .sops_ops import (
-    decrypt_identity_to_file,
     ensure_private_permissions,
-    identity_public_key_from_store,
+    encrypt_identity_text_to_file,
     master_recipient,
-    reencrypt_identity_store_to_file,
     sops_encrypt_json_to_file,
 )
 from .ssh_ops import SSHSession
@@ -46,8 +54,9 @@ def need_publish_tools(config: WorkstationConfig, *, config_only: bool) -> SiteP
     if not config_only:
         required_commands.insert(0, "sops")
     ensure_commands(required_commands)
-    if not config_only and not config.master_identity.is_file():
-        raise ConfigError(f"master SSH identity not found: {config.master_identity}")
+    if not config_only:
+        provider = load_secret_provider(config, site_paths)
+        master_private_key_text(config, provider)
     if config.ssh_identity is not None and not config.ssh_identity.is_file():
         raise ConfigError(f"publish SSH identity not found: {config.ssh_identity}")
     return site_paths
@@ -83,19 +92,18 @@ def validate_target_vmid_repo(
     if config_only:
         return
 
-    identity_store = site_paths.container_identity_store(vmid)
-    if provider.has_any(container_scope(vmid)) and not identity_store.is_file():
+    if provider.has_any(container_scope(vmid)) and not have_container_private_key(config, provider, site_paths, vmid):
         raise ProxnixWorkstationError(
-            f"container {vmid} secret store exists but identity is missing: {identity_store}"
+            f"container {vmid} secret store exists but identity is missing: {vmid}"
         )
 
     if (
         provider.has_any(container_scope(vmid))
-        or identity_store.is_file()
+        or have_container_private_key(config, provider, site_paths, vmid)
         or container_has_group_store(site_paths, provider, vmid)
-    ) and not site_paths.host_relay_identity_store.is_file():
+    ) and not have_host_relay_private_key(config, provider, site_paths):
         raise ProxnixWorkstationError(
-            f"host relay identity is missing: {site_paths.host_relay_identity_store} — run: proxnix-secrets init-host-relay"
+            "host relay identity is missing — run: proxnix-secrets init-host-relay"
         )
 
 
@@ -108,14 +116,13 @@ def container_has_any_store(site_paths: SitePaths, provider: SecretProvider, vmi
 def validate_site_repo(config: WorkstationConfig, site_paths: SitePaths, provider: SecretProvider) -> None:
     for vmid in collect_site_vmids(site_paths):
         if container_has_any_store(site_paths, provider, vmid):
-            identity_store = site_paths.container_identity_store(vmid)
-            if not identity_store.is_file():
+            if not have_container_private_key(config, provider, site_paths, vmid):
                 raise ProxnixWorkstationError(
-                    f"container {vmid} secret store exists but identity is missing: {identity_store}"
+                    f"container {vmid} secret store exists but identity is missing: {vmid}"
                 )
-            if not site_paths.host_relay_identity_store.is_file():
+            if not have_host_relay_private_key(config, provider, site_paths):
                 raise ProxnixWorkstationError(
-                    f"host relay identity is missing: {site_paths.host_relay_identity_store} — run: proxnix-secrets init-host-relay"
+                    "host relay identity is missing — run: proxnix-secrets init-host-relay"
                 )
 
 
@@ -126,7 +133,6 @@ def build_compiled_secret_store(
     vmid: str,
     out_dir: Path,
 ) -> None:
-    container_identity_store = site_paths.container_identity_store(vmid)
     shared_data = provider.export_scope(shared_scope())
     group_data_by_name = {
         group: provider.export_scope(group_scope(group))
@@ -136,11 +142,6 @@ def build_compiled_secret_store(
     have_any_store = bool(shared_data or container_data or any(group_data_by_name.values()))
     if not have_any_store:
         return
-
-    if not container_identity_store.is_file():
-        raise ProxnixWorkstationError(
-            f"container {vmid} compiled secret store needs container identity: {container_identity_store}"
-        )
 
     merged: dict[str, str] = {}
     for key, value in shared_data.items():
@@ -159,18 +160,30 @@ def build_compiled_secret_store(
     for key, value in container_data.items():
         merged[key] = value
 
+    if not have_container_private_key(config, provider, site_paths, vmid):
+        raise ProxnixWorkstationError(
+            f"container {vmid} compiled secret store needs a container identity"
+        )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     out_dir.chmod(0o700)
+    master_key_text = master_private_key_text(config, provider)
     with tempfile.TemporaryDirectory(prefix="proxnix-publish-merged.") as temp_dir:
         plain_json = Path(temp_dir) / "effective.json"
         plain_json.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         recipients = ",".join(
             [
-                identity_public_key_from_store(config, container_identity_store),
-                master_recipient(config),
+                container_public_key(config, provider, site_paths, vmid),
+                master_recipient(config, master_private_key_text=master_key_text),
             ]
         )
-        sops_encrypt_json_to_file(config, plain_json, recipients, out_dir / "effective.sops.yaml")
+        sops_encrypt_json_to_file(
+            config,
+            plain_json,
+            recipients,
+            out_dir / "effective.sops.yaml",
+            master_private_key_text=master_key_text,
+        )
 
 
 def _copy_tree_if_present(source: Path, destination: Path) -> None:
@@ -229,24 +242,16 @@ def build_publish_tree(config: WorkstationConfig, site_paths: SitePaths, options
             )
 
     ensure_private_permissions(private_root)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def stage_identity_for_relay(
     config: WorkstationConfig,
-    source_store: Path,
+    identity_private_text: str,
     recipients: str,
     destination: Path,
     cache_file: Path,
+    *,
+    master_private_key_text: str,
 ) -> None:
-    source_hash = _file_sha256(source_store)
+    source_hash = hashlib.sha256(identity_private_text.encode("utf-8")).hexdigest()
     sorted_recipients = ":".join(sorted(filter(None, recipients.split(",")))) + ":"
     inputs_hash = f"{source_hash}  {sorted_recipients}"
     inputs_file = cache_file.with_name(cache_file.name + ".inputs")
@@ -257,7 +262,13 @@ def stage_identity_for_relay(
         destination.chmod(0o600)
         return
 
-    reencrypt_identity_store_to_file(config, source_store, recipients, destination)
+    encrypt_identity_text_to_file(
+        config,
+        identity_private_text,
+        recipients,
+        destination,
+        master_private_key_text=master_private_key_text,
+    )
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(destination.read_text(encoding="utf-8"), encoding="utf-8")
     cache_file.chmod(0o600)
@@ -271,40 +282,46 @@ def stage_relay_identities_into_tree(
     options: PublishOptions,
     tree: Path,
 ) -> None:
+    provider = load_secret_provider(config, site_paths)
     private_root = tree / "private"
-    relay_store = site_paths.host_relay_identity_store
-    relay_recipient = identity_public_key_from_store(config, relay_store)
-    identity_recipients = ",".join([relay_recipient, master_recipient(config)])
+    master_key_text = master_private_key_text(config, provider)
+    relay_private_text = host_relay_private_key_text(config, provider, site_paths)
+    if relay_private_text is None:
+        return
+    relay_recipient = host_relay_public_key(config, provider, site_paths)
+    identity_recipients = ",".join(
+        [relay_recipient, master_recipient(config, master_private_key_text=master_key_text)]
+    )
 
     relay_private = private_root / "host_relay_identity"
-    relay_private.parent.mkdir(parents=True, exist_ok=True)
-    decrypt_identity_to_file(config, relay_store, relay_private)
-    relay_private.chmod(0o600)
+    write_private_key_file(relay_private_text, relay_private)
 
     if options.target_vmid is not None:
-        store = site_paths.container_identity_store(options.target_vmid)
-        if store.is_file():
+        identity_private_text = container_private_key_text(config, provider, site_paths, options.target_vmid)
+        if identity_private_text is not None:
             dest = private_root / "containers" / options.target_vmid / "age_identity.sops.yaml"
             stage_identity_for_relay(
                 config,
-                store,
+                identity_private_text,
                 identity_recipients,
                 dest,
                 site_paths.relay_cache_container_identity(options.target_vmid),
+                master_private_key_text=master_key_text,
             )
         return
 
     for vmid in collect_site_vmids(site_paths):
-        store = site_paths.container_identity_store(vmid)
-        if not store.is_file():
+        identity_private_text = container_private_key_text(config, provider, site_paths, vmid)
+        if identity_private_text is None:
             continue
         dest = private_root / "containers" / vmid / "age_identity.sops.yaml"
         stage_identity_for_relay(
             config,
-            store,
+            identity_private_text,
             identity_recipients,
             dest,
             site_paths.relay_cache_container_identity(vmid),
+            master_private_key_text=master_key_text,
         )
 
 
@@ -644,7 +661,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
 
             for host in hosts:
                 with SSHSession(config, host, temp_root=temp_root) as session:
-                    if not options.config_only and site_paths.host_relay_identity_store.is_file():
+                    if not options.config_only and have_host_relay_private_key(config, provider, site_paths):
                         stage_relay_identities_into_tree(config, site_paths, options, relay_tree)
                     publish_selected_host(session, config, options, relay_tree)
 

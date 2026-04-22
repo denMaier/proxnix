@@ -2,7 +2,7 @@
 
 This page walks through the complete lifecycle for onboarding a new proxnix-managed NixOS container — from creation through health check.
 
-> **Before you start:** Make sure you've completed all steps in [installation](installation.md), including the workstation site repo, master identity, and publish workflow. Skipping those will cause subtle failures later.
+> **Before you start:** Make sure you've completed all steps in [installation](installation.md), including the workstation site repo, provider configuration, and publish workflow. Skipping those will cause subtle failures later.
 
 ## Overview
 

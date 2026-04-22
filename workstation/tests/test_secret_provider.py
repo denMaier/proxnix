@@ -29,7 +29,6 @@ def _test_config(*, site_dir: Path | None = None) -> WorkstationConfig:
     return WorkstationConfig(
         config_file=Path("/tmp/proxnix-config"),
         site_dir=site_dir,
-        master_identity=Path("/tmp/id_master"),
         hosts=("root@node1",),
         ssh_identity=None,
         remote_dir=PurePosixPath("/var/lib/proxnix"),
@@ -37,6 +36,7 @@ def _test_config(*, site_dir: Path | None = None) -> WorkstationConfig:
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
         secret_provider="embedded-sops",
         secret_provider_command=None,
+        provider_environment=(("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),),
     )
 
 
@@ -104,7 +104,6 @@ class ExecSecretProviderTests(unittest.TestCase):
         config = WorkstationConfig(
             config_file=config.config_file,
             site_dir=config.site_dir,
-            master_identity=config.master_identity,
             hosts=config.hosts,
             ssh_identity=config.ssh_identity,
             remote_dir=config.remote_dir,
@@ -112,6 +111,7 @@ class ExecSecretProviderTests(unittest.TestCase):
             remote_host_relay_identity=config.remote_host_relay_identity,
             secret_provider="pass",
             secret_provider_command=None,
+            provider_environment=config.provider_environment,
         )
 
         provider = load_secret_provider(config)
@@ -140,7 +140,6 @@ class ExecSecretProviderTests(unittest.TestCase):
             config = WorkstationConfig(
                 config_file=base.config_file,
                 site_dir=base.site_dir,
-                master_identity=base.master_identity,
                 hosts=base.hosts,
                 ssh_identity=base.ssh_identity,
                 remote_dir=base.remote_dir,
@@ -148,6 +147,7 @@ class ExecSecretProviderTests(unittest.TestCase):
                 remote_host_relay_identity=base.remote_host_relay_identity,
                 secret_provider=alias,
                 secret_provider_command=None,
+                provider_environment=base.provider_environment,
             )
             provider = load_secret_provider(config)
             self.assertIsInstance(provider, ExecSecretProvider)
@@ -677,6 +677,7 @@ class ConfigProviderEnvironmentTests(unittest.TestCase):
             {
                 "PROXNIX_PASSHOLE_DATABASE": "/home/tester/secrets/proxnix.kdbx",
                 "PROXNIX_SECRET_PATH_PREFIX": "team/proxnix",
+                "PROXNIX_SOPS_MASTER_IDENTITY": "/home/tester/.ssh/id_ed25519",
                 "VAULT_ADDR": "https://vault.example.test",
             },
         )
@@ -685,7 +686,6 @@ class ConfigProviderEnvironmentTests(unittest.TestCase):
         source = WorkstationConfig(
             config_file=Path("/tmp/source-config"),
             site_dir=Path("/tmp/source-site"),
-            master_identity=Path("/tmp/id_master"),
             hosts=("root@node1",),
             ssh_identity=None,
             remote_dir=PurePosixPath("/var/lib/proxnix"),
@@ -694,6 +694,7 @@ class ConfigProviderEnvironmentTests(unittest.TestCase):
             secret_provider="passhole",
             secret_provider_command=None,
             provider_environment=(
+                ("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),
                 ("PROXNIX_PASSHOLE_DATABASE", "/tmp/proxnix.kdbx"),
                 ("VAULT_ADDR", "https://vault.example.test"),
             ),
@@ -732,15 +733,20 @@ class PublishSecretProviderTests(unittest.TestCase):
             out_dir = Path(temp_dir) / "out"
             captured: dict[str, str] = {}
 
-            def fake_encrypt_json_to_file(config, source_json, recipients, destination):
+            def fake_encrypt_json_to_file(config, source_json, recipients, destination, **kwargs):
                 captured["json"] = source_json.read_text(encoding="utf-8")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("encrypted\n", encoding="utf-8")
 
-            with patch("proxnix_workstation.publish_cli.identity_public_key_from_store", return_value="ssh-ed25519 AAAA"):
-                with patch("proxnix_workstation.publish_cli.master_recipient", return_value="ssh-ed25519 BBBB"):
-                    with patch("proxnix_workstation.publish_cli.sops_encrypt_json_to_file", side_effect=fake_encrypt_json_to_file):
-                        build_compiled_secret_store(config, site_paths, provider, "120", out_dir)
+            with patch("proxnix_workstation.publish_cli.have_container_private_key", return_value=True):
+                with patch("proxnix_workstation.publish_cli.container_public_key", return_value="ssh-ed25519 AAAA"):
+                    with patch("proxnix_workstation.publish_cli.master_private_key_text", return_value="master-private-key"):
+                        with patch("proxnix_workstation.publish_cli.master_recipient", return_value="ssh-ed25519 BBBB"):
+                            with patch(
+                                "proxnix_workstation.publish_cli.sops_encrypt_json_to_file",
+                                side_effect=fake_encrypt_json_to_file,
+                            ):
+                                build_compiled_secret_store(config, site_paths, provider, "120", out_dir)
 
         self.assertIn('"a": "shared-a"', captured["json"])
         self.assertIn('"b": "group-b"', captured["json"])
