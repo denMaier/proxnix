@@ -773,7 +773,7 @@ let
         UMask = "0077";
         Environment = [ "HOME=/root" ];
       };
-      path = [ pkgs.coreutils pkgs.python3Minimal ];
+      path = [ pkgs.coreutils ];
       script = ''
         set -euo pipefail
 
@@ -1126,7 +1126,7 @@ let
           Environment = [ "HOME=/root" ];
           RemainAfterExit = true;
         };
-        path = [ pkgs.coreutils pkgs.python3Minimal ];
+        path = [ pkgs.coreutils ];
         script = ''
           set -euo pipefail
 
@@ -1153,19 +1153,16 @@ let
     let
       secretPlaceholders = lib.attrNames templateCfg.substitutions;
       literalPlaceholders = lib.attrNames templateCfg.literalSubstitutions;
+      gomplateExpression = gomplateRenderExpression secretPlaceholders literalPlaceholders;
       fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
         let
           secretCfg = templateCfg.substitutions.${placeholder};
         in ''
           ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
         ''
       ) secretPlaceholders);
       literalLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder: ''
         printf '%s' ${lib.escapeShellArg templateCfg.literalSubstitutions.${placeholder}} > "$template_workdir/literal-${toString idx}"
-        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_FILE="$template_workdir/literal-${toString idx}"
       '') literalPlaceholders);
     in ''
       dest=${lib.escapeShellArg templateCfg.destination}
@@ -1174,13 +1171,9 @@ let
 
       ${fetchLines}
       ${literalLines}
+      ${gomplateDatasourceArgs "${templateCfg.source}" secretPlaceholders literalPlaceholders}
 
-      export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length secretPlaceholders))}
-      export PROXNIX_TEMPLATE_LITERAL_COUNT=${lib.escapeShellArg (toString (builtins.length literalPlaceholders))}
-      export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
-      export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
-
-      python3 -c ${pythonRenderer}
+      ${pkgs.gomplate}/bin/gomplate "''${datasource_args[@]}" -i ${gomplateExpression} > "$template_workdir/rendered"
 
       mkdir -p "$(dirname "$dest")"
       tmp="$template_workdir/output"
@@ -1244,7 +1237,7 @@ let
       lib.nameValuePair service {
         preStart = lib.mkAfter (mkServiceSecretPreStart service ops);
         postStop = lib.mkAfter (mkServiceSecretPostStop ops);
-        path = [ pkgs.coreutils pkgs.python3Minimal ];
+      path = [ pkgs.coreutils ];
       }
     ) serviceSecretOpsByService;
 
@@ -1426,21 +1419,29 @@ let
       ]
     ) secretsCfg.templates);
 
-  pythonRenderer = lib.escapeShellArg (lib.concatStringsSep "\n" [
-    "import os"
-    "from pathlib import Path"
-    ""
-    "content = Path(os.environ[\"PROXNIX_TEMPLATE_SOURCE\"]).read_text()"
-    "for idx in range(int(os.environ[\"PROXNIX_TEMPLATE_SECRET_COUNT\"])):"
-    "    token = os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_TOKEN\"]"
-    "    value = Path(os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_FILE\"]).read_text().rstrip(\"\\r\\n\")"
-    "    content = content.replace(token, value)"
-    "for idx in range(int(os.environ.get(\"PROXNIX_TEMPLATE_LITERAL_COUNT\", \"0\"))):"
-    "    token = os.environ[f\"PROXNIX_TEMPLATE_LITERAL_{idx}_TOKEN\"]"
-    "    value = Path(os.environ[f\"PROXNIX_TEMPLATE_LITERAL_{idx}_FILE\"]).read_text()"
-    "    content = content.replace(token, value)"
-    "Path(os.environ[\"PROXNIX_TEMPLATE_OUTPUT\"]).write_text(content)"
-  ]);
+  gomplateRenderExpression = secretPlaceholders: literalPlaceholders:
+    let
+      sourceExpr = ''include ${builtins.toJSON "template_source"}'';
+      secretTransforms = lib.imap0 (idx: placeholder:
+        '' | strings.ReplaceAll ${builtins.toJSON placeholder} (include ${builtins.toJSON "secret_${toString idx}"} | strings.TrimRight ${builtins.toJSON "\r\n"})''
+      ) secretPlaceholders;
+      literalTransforms = lib.imap0 (idx: placeholder:
+        '' | strings.ReplaceAll ${builtins.toJSON placeholder} (include ${builtins.toJSON "literal_${toString idx}"})''
+      ) literalPlaceholders;
+    in
+    lib.escapeShellArg "{{ ${sourceExpr}${lib.concatStrings secretTransforms}${lib.concatStrings literalTransforms} }}";
+
+  gomplateDatasourceArgs = templateSource: secretPlaceholders: literalPlaceholders: ''
+    datasource_args=(
+      --datasource ${lib.escapeShellArg "template_source=file://${templateSource}?type=text/plain"}
+    )
+    ${lib.concatStringsSep "\n" (lib.imap0 (idx: _: ''
+      datasource_args+=(--datasource "secret_${toString idx}=file://$template_workdir/secret-${toString idx}?type=text/plain")
+    '') secretPlaceholders)}
+    ${lib.concatStringsSep "\n" (lib.imap0 (idx: _: ''
+      datasource_args+=(--datasource "literal_${toString idx}=file://$template_workdir/literal-${toString idx}?type=text/plain")
+    '') literalPlaceholders)}
+  '';
 
   mkFileOpScript = opId: secretCfg: ''
     dest=${lib.escapeShellArg secretCfg.path}
@@ -1481,19 +1482,16 @@ let
     let
       secretPlaceholders = lib.attrNames templateCfg.substitutions;
       literalPlaceholders = lib.attrNames templateCfg.literalSubstitutions;
+      gomplateExpression = gomplateRenderExpression secretPlaceholders literalPlaceholders;
       fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
         let
           secretCfg = templateCfg.substitutions.${placeholder};
         in ''
           ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
         ''
       ) secretPlaceholders);
       literalLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder: ''
         printf '%s' ${lib.escapeShellArg templateCfg.literalSubstitutions.${placeholder}} > "$template_workdir/literal-${toString idx}"
-        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_FILE="$template_workdir/literal-${toString idx}"
       '') literalPlaceholders);
     in ''
       dest=${lib.escapeShellArg templateCfg.destination}
@@ -1505,13 +1503,9 @@ let
 
         ${fetchLines}
         ${literalLines}
+        ${gomplateDatasourceArgs "${templateCfg.source}" secretPlaceholders literalPlaceholders}
 
-        export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length secretPlaceholders))}
-        export PROXNIX_TEMPLATE_LITERAL_COUNT=${lib.escapeShellArg (toString (builtins.length literalPlaceholders))}
-        export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
-        export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
-
-        python3 -c ${pythonRenderer}
+        ${pkgs.gomplate}/bin/gomplate "''${datasource_args[@]}" -i ${gomplateExpression} > "$template_workdir/rendered"
 
         dest_dir="$(dirname "$dest")"
         base_name="$(basename "$dest")"
@@ -1570,7 +1564,7 @@ let
       } // lib.optionalAttrs hasMaterializedState {
         RemainAfterExit = true;
       };
-      path = [ pkgs.coreutils pkgs.python3Minimal ] ++ allRuntimeInputs;
+      path = [ pkgs.coreutils ] ++ allRuntimeInputs;
       script = ''
         set -euo pipefail
 
@@ -1582,68 +1576,56 @@ let
     };
 in {
 
-  options.proxnix = lib.mkOption {
+  options.proxnix.common = lib.mkOption {
+    type = lib.types.submodule {
+      options = commonOptions;
+    };
     default = {};
     description = lib.mdDoc ''
-      Public proxnix guest configuration model. Use `proxnix.secrets` for
-      secret sources and delivery, `proxnix.configs` for rendered config
-      artifacts, and `proxnix.common` for the shared guest baseline.
+      Shared proxnix guest baseline.
+    '';
+  };
+
+  options.proxnix.secrets = lib.mkOption {
+    type = lib.types.attrsOf publicSecretType;
+    default = {};
+    description = lib.mdDoc ''
+      Public proxnix-managed secret declarations.
+    '';
+  };
+
+  options.proxnix.configs = lib.mkOption {
+    type = lib.types.attrsOf publicConfigType;
+    default = {};
+    description = lib.mdDoc ''
+      Public proxnix-managed rendered config declarations.
+    '';
+  };
+
+  options.proxnix._internal = lib.mkOption {
+    default = {};
+    description = lib.mdDoc ''
+      Internal proxnix plumbing and compatibility hooks.
     '';
     type = lib.types.submodule {
       options = {
-        common = lib.mkOption {
-          type = lib.types.submodule {
-            options = commonOptions;
-          };
-          default = {};
-          description = lib.mdDoc ''
-            Shared proxnix guest baseline.
-          '';
-        };
-
         secrets = lib.mkOption {
-          type = lib.types.attrsOf publicSecretType;
-          default = {};
-          description = lib.mdDoc ''
-            Public proxnix-managed secret declarations.
-          '';
-        };
-
-        configs = lib.mkOption {
-          type = lib.types.attrsOf publicConfigType;
-          default = {};
-          description = lib.mdDoc ''
-            Public proxnix-managed rendered config declarations.
-          '';
-        };
-
-        _internal = lib.mkOption {
-          default = {};
-          description = lib.mdDoc ''
-            Internal proxnix plumbing and compatibility hooks.
-          '';
           type = lib.types.submodule {
-            options = {
-              secrets = lib.mkOption {
-                type = lib.types.submodule {
-                  options = lowLevelSecretsOptions;
-                };
-                default = {};
-                description = lib.mdDoc ''
-                  Internal low-level secret/template engine.
-                '';
-              };
-
-              configTemplateSources = lib.mkOption {
-                type = lib.types.attrsOf lib.types.path;
-                default = {};
-                description = lib.mdDoc ''
-                  Internal registry mapping logical config source names to
-                  template files.
-                '';
-              };
-            };
+            options = lowLevelSecretsOptions;
           };
+          default = {};
+          description = lib.mdDoc ''
+            Internal low-level secret/template engine.
+          '';
+        };
+
+        configTemplateSources = lib.mkOption {
+          type = lib.types.attrsOf lib.types.path;
+          default = {};
+          description = lib.mdDoc ''
+            Internal registry mapping logical config source names to
+            template files.
+          '';
         };
       };
     };

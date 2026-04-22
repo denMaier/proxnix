@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
-
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from .config import WorkstationConfig
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
@@ -40,31 +38,33 @@ def _master_env(config: WorkstationConfig) -> dict[str, str]:
     return env
 
 
-def _load_private_key(data: bytes, *, source: str):
-    try:
-        return serialization.load_ssh_private_key(data, password=None)
-    except (ValueError, TypeError):
-        try:
-            return serialization.load_pem_private_key(data, password=None)
-        except (ValueError, TypeError) as exc:
-            raise ConfigError(
-                f"PROXNIX_MASTER_IDENTITY must point to an SSH private key usable as an age identity: {source}"
-            ) from exc
-
-
-def _public_openssh_bytes(private_key) -> bytes:
-    return private_key.public_key().public_bytes(
-        serialization.Encoding.OpenSSH,
-        serialization.PublicFormat.OpenSSH,
+def _ssh_public_key_from_private_path(path: Path, *, source: str) -> str:
+    completed = run_command(
+        ["ssh-keygen", "-y", "-f", str(path)],
+        check=False,
+        capture_output=True,
     )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise ConfigError(
+            "PROXNIX_MASTER_IDENTITY must point to an SSH private key usable as an age identity: "
+            f"{source}{suffix}"
+        )
+    return completed.stdout.strip()
+
+
+def _ssh_public_key_from_private_text(private_text: str, *, source: str) -> str:
+    with tempfile.TemporaryDirectory(prefix="proxnix-identity-key.") as temp_dir:
+        private_path = Path(temp_dir) / "identity"
+        private_path.write_text(private_text, encoding="utf-8")
+        private_path.chmod(0o600)
+        return _ssh_public_key_from_private_path(private_path, source=source)
 
 
 def master_recipient(config: WorkstationConfig) -> str:
     _master_env(config)
-    key_bytes = config.master_identity.read_bytes()
-    return _public_openssh_bytes(
-        _load_private_key(key_bytes, source=str(config.master_identity))
-    ).decode("utf-8").strip()
+    return _ssh_public_key_from_private_path(config.master_identity, source=str(config.master_identity))
 
 
 def sops_path(name: str) -> str:
@@ -230,8 +230,7 @@ def decrypt_identity_text(config: WorkstationConfig, store: Path) -> str:
 
 def identity_public_key_from_store(config: WorkstationConfig, store: Path) -> str:
     identity_text = decrypt_identity_text(config, store)
-    private_key = _load_private_key(identity_text.encode("utf-8"), source=str(store))
-    return _public_openssh_bytes(private_key).decode("utf-8").strip()
+    return _ssh_public_key_from_private_text(identity_text, source=str(store))
 
 
 def reencrypt_identity_store_to_file(
@@ -247,16 +246,14 @@ def reencrypt_identity_store_to_file(
 
 
 def generate_identity_keypair() -> tuple[str, str]:
-    private_key = ed25519.Ed25519PrivateKey.generate()
-    private_text = private_key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.OpenSSH,
-        serialization.NoEncryption(),
-    ).decode("utf-8")
-    public_text = private_key.public_key().public_bytes(
-        serialization.Encoding.OpenSSH,
-        serialization.PublicFormat.OpenSSH,
-    ).decode("utf-8")
+    with tempfile.TemporaryDirectory(prefix="proxnix-identity-generate.") as temp_dir:
+        private_path = Path(temp_dir) / "identity"
+        run_command(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private_path)],
+            capture_output=True,
+        )
+        private_text = private_path.read_text(encoding="utf-8")
+        public_text = private_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
     return private_text, public_text
 
 
