@@ -8,8 +8,8 @@ The repository contains a few useful patterns under `containers/`.
 
 - enable a native NixOS service
 - serve a small static site from `/var/lib/nginx-demo/www`
-- render `index.html` through `proxnix.secrets.templates`
-- reload nginx automatically when the activation-time template changes
+- render `index.html` through `proxnix.configs.*`
+- reload nginx automatically when the managed config changes
 
 This pattern is useful when you want the simplest possible native-service demo
 for proxnix: one module, one secret, one HTTP endpoint.

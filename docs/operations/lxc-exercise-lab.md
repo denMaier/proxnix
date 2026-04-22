@@ -20,7 +20,7 @@ boot apply to finish, and then checks the feature surfaces that proxnix owns.
 - shared, grouped, and container-local secrets
 - activation-lifetime secret files and templates
 - service-lifetime secret files and templates
-- `createOnly` secret templates
+- `createOnly` secret-backed config seeds
 - secret oneshot consumers
 - Podman secret-driver integration inside a managed guest
 - targeted `--config-only --vmid <vmid>` dry-run publish reporting

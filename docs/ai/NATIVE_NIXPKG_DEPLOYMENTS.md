@@ -56,25 +56,27 @@ Example pattern:
 
 ```nix
 { pkgs, ... }: {
-  proxnix.secrets.templates.nginx-index = {
-    source = pkgs.writeText "nginx-index.html" ''
+  proxnix.secrets.nginx_index_message.source = {
+    scope = "container";
+    name = "nginx_index_message";
+  };
+
+  proxnix._internal.configTemplateSources.nginx_index = pkgs.writeText "nginx-index.html" ''
       <!doctype html>
       <html>
         <body>
-          <h1>__NGINX_INDEX_MESSAGE__</h1>
+          <h1>{{ secrets.nginx_index_message }}</h1>
         </body>
       </html>
-    '';
-    destination = "/var/lib/nginx-demo/www/index.html";
+  '';
+
+  proxnix.configs.nginx_index = {
+    service = "nginx";
+    path = "/var/lib/nginx-demo/www/index.html";
     owner = "root";
     group = "root";
     mode = "0644";
-    restartUnits = [ "nginx.service" ];
-    substitutions = {
-      "__NGINX_INDEX_MESSAGE__" = {
-        secret = "nginx_index_message";
-      };
-    };
+    secretValues = [ "nginx_index_message" ];
   };
 
   services.nginx = {
@@ -132,5 +134,5 @@ Before finishing a native app config, verify:
 
 - every managed service has `enable = true;`
 - service-specific settings live in `dropins/*.nix`
-- secrets are declared through `proxnix.secrets.*` and consumed from the configured paths
+- secrets are declared through `proxnix.secrets.*` or `proxnix.configs.*` and consumed from the configured paths
 - no container definitions are mixed into the native-service config

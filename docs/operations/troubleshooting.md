@@ -160,12 +160,17 @@ Check three things:
 2. The service declared it in a host-side `dropins/*.nix` module:
    ```nix
    {
-     proxnix.secrets.files.the-secret = {
-       path = "/var/lib/myservice-secrets/the_secret";
-       owner = "root";
-       group = "myservice";
-       mode = "0640";
-       restartUnits = [ "myservice.service" ];
+     proxnix.secrets.the_secret = {
+       source = {
+         scope = "container";
+         name = "the_secret";
+       };
+       file = {
+         owner = "root";
+         group = "myservice";
+         mode = "0640";
+         restartUnits = [ "myservice.service" ];
+       };
      };
    }
    ```

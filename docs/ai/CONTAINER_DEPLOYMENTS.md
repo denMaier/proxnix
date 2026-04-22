@@ -71,24 +71,26 @@ in {
     "d ${siteRoot} 0755 root root -"
   ];
 
-  proxnix.secrets.templates.nginx-index = {
-    source = pkgs.writeText "nginx-container-index.html" ''
+  proxnix.secrets.nginx_index_message.source = {
+    scope = "container";
+    name = "nginx_index_message";
+  };
+
+  proxnix._internal.configTemplateSources.nginx_index = pkgs.writeText "nginx-container-index.html" ''
       <!doctype html>
       <html>
         <body>
-          <h1>__NGINX_INDEX_MESSAGE__</h1>
+          <h1>{{ secrets.nginx_index_message }}</h1>
         </body>
       </html>
-    '';
-    destination = "${siteRoot}/index.html";
+  '';
+
+  proxnix.configs.nginx_index = {
+    path = "${siteRoot}/index.html";
     owner = "root";
     group = "root";
     mode = "0644";
-    substitutions = {
-      "__NGINX_INDEX_MESSAGE__" = {
-        secret = "nginx_index_message";
-      };
-    };
+    secretValues = [ "nginx_index_message" ];
   };
 
   virtualisation.quadlet.containers.nginx = {
@@ -114,8 +116,8 @@ proxnix secrets set <vmid> nginx_index_message
 Secrets are managed on the Proxmox host with `proxnix-secrets`. They are stored
 in SOPS YAML stores and staged into the guest at boot.
 
-For native services, materialize them with `proxnix.secrets.files`,
-`proxnix.secrets.templates`, or `proxnix.secrets.oneshot`.
+For native services, materialize them with `proxnix.secrets.<name>.file`,
+`proxnix.configs.<name>`, or `proxnix._internal.secrets.oneshot`.
 
 For Podman workloads managed from guest Nix, use the same secret primitives or
 the proxnix Podman shell secret driver from guest config.

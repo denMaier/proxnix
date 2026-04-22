@@ -39,22 +39,26 @@ in {
     "d ${siteRoot} 0755 root root -"
   ];
 
-  proxnix.secrets.templates.nginx-index = {
-    source = pkgs.writeText "nginx-container-index.html" ''
+  proxnix.secrets.nginx_index_message.source = {
+    scope = "container";
+    name = "nginx_index_message";
+  };
+
+  proxnix._internal.configTemplateSources.nginx_index = pkgs.writeText "nginx-container-index.html" ''
       <!doctype html>
       <html>
         <body>
-          <h1>__NGINX_INDEX_MESSAGE__</h1>
+          <h1>{{ secrets.nginx_index_message }}</h1>
         </body>
       </html>
-    '';
-    destination = "${siteRoot}/index.html";
+  '';
+
+  proxnix.configs.nginx_index = {
+    path = "${siteRoot}/index.html";
     owner = "root";
     group = "root";
     mode = "0644";
-    substitutions = {
-      "__NGINX_INDEX_MESSAGE__" = { secret = "nginx_index_message"; };
-    };
+    secretValues = [ "nginx_index_message" ];
   };
 
   virtualisation.quadlet.containers.nginx = {
@@ -100,7 +104,7 @@ For declarative config files, prefer Nix-native generation:
 - `environment.etc`
 - `pkgs.writeText`
 - `pkgs.formats.*`
-- proxnix secret template units
+- `proxnix.configs.*`
 
 If a container needs a file mounted in, generate that file from Nix and point
 the container definition at the generated path.
@@ -111,9 +115,9 @@ proxnix stages secrets into the guest and exposes helpers for consuming them.
 
 Common patterns:
 
-- materialize files with `proxnix.secrets.files`
-- render config or mounted content with `proxnix.secrets.templates`
-- run setup steps with `proxnix.secrets.oneshot`
+- materialize files with `proxnix.secrets.<name>.file`
+- render config or mounted content with `proxnix.configs.<name>`
+- run setup steps with `proxnix._internal.secrets.oneshot`
 - use the Podman shell secret driver from guest config when the workload is Podman-based
 
 The end-to-end exercise lab validates this path by materializing secret-backed

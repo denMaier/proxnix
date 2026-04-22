@@ -88,31 +88,42 @@ Minimal shape:
 
 ### Secrets
 
-Declare proxnix secrets through the unified `proxnix.secrets` API.
+For native services, use the direct public API:
+
+```nix
+proxnix.secrets.<name>
+proxnix.configs.<name>
+```
+
+Use `proxnix.secrets.<name>.file/env/credential` for secret delivery and
+`proxnix.configs.<name>` for rendered files that reference declared public
+secrets explicitly.
 
 Example:
 
 ```nix
 { pkgs, ... }: {
-  proxnix.secrets.templates.nginx-index = {
-    source = pkgs.writeText "nginx-index.html" ''
+  proxnix.secrets.nginx_index_message.source = {
+    scope = "container";
+    name = "nginx_index_message";
+  };
+
+  proxnix._internal.configTemplateSources.nginx_index = pkgs.writeText "nginx-index.html" ''
       <!doctype html>
       <html>
         <body>
-          <h1>__NGINX_INDEX_MESSAGE__</h1>
+          <h1>{{ secrets.nginx_index_message }}</h1>
         </body>
       </html>
-    '';
-    destination = "/var/lib/nginx-demo/www/index.html";
+  '';
+
+  proxnix.configs.nginx_index = {
+    service = "nginx";
+    path = "/var/lib/nginx-demo/www/index.html";
     owner = "root";
     group = "root";
     mode = "0644";
-    restartUnits = [ "nginx.service" ];
-    substitutions = {
-      "__NGINX_INDEX_MESSAGE__" = {
-        secret = "nginx_index_message";
-      };
-    };
+    secretValues = [ "nginx_index_message" ];
   };
 
   services.nginx = {
@@ -133,11 +144,11 @@ Example:
 }
 ```
 
-Use `proxnix.secrets.templates` when nginx should serve rendered content from a
-secret-backed template. Use `lifecycle = "activation"` for files that should
-survive service and container restarts. Use `lifecycle = "service"` with a
-`/run/...` path and a single owning `service` when the secret should only exist
-while that service is running.
+Use `proxnix.configs.*` when a native service should read a rendered
+secret-backed file, and read the final path from
+`config.proxnix.configs.<name>.path`. Use `proxnix.secrets.*.file.path` when
+the service needs a raw secret file instead. Public configs restart their
+owning service automatically after an update when `service = "..."` is set.
 
 **Important:** You must also create the secret on the host:
 
@@ -169,8 +180,8 @@ The repository's `containers/nginx-native/` template shows a good native-service
 
 - enable a standard NixOS module
 - serve a predictable static site from a managed guest path
-- render the served content with `proxnix.secrets.templates`
-- restart nginx automatically when the activation-time template changes
+- render the served content with `proxnix.configs.*`
+- restart nginx automatically when the managed config changes
 
 ## What not to do
 

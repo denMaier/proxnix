@@ -118,98 +118,191 @@ proxnix-secrets ls
 proxnix-secrets get <name>
 ```
 
-## Unified Nix API
+## Public guest model
 
-For `dropins/*.nix`, proxnix exposes declarative helpers under
-`proxnix.secrets`.
-
-### Files
-
-Use `proxnix.secrets.files` when a service needs a plaintext file at runtime.
-
-Activation-lifetime file:
+For `dropins/*.nix`, the public API is:
 
 ```nix
-proxnix.secrets.files.db-password = {
-  path = "/var/lib/myapp-secrets/db_password";
-  owner = "root";
-  group = "myapp";
-  mode = "0640";
-  restartUnits = [ "myapp.service" ];
+proxnix.secrets.<name>
+proxnix.configs.<name>
+```
+
+`proxnix.secrets.<name>` declares a secret source and one or more delivery
+modes. `proxnix.configs.<name>` declares a rendered file that can reference
+public secrets explicitly.
+
+### Public secrets
+
+Every public secret starts with a `source` block:
+
+```nix
+proxnix.secrets.db_password.source = {
+  scope = "shared";
+  name = "common_db_password";
 };
 ```
 
-This is materialized persistently and survives normal service restarts and full
-container restarts.
+Supported scopes:
 
-Service-bound file:
+- `container`
+- `group`
+- `shared`
 
-```nix
-proxnix.secrets.files.db-password = {
-  lifecycle = "service";
-  service = "myapp.service";
-  path = "/run/myapp-secrets/db_password";
-  owner = "root";
-  group = "myapp";
-  mode = "0640";
-};
-```
+When `scope = "group"`, set `group = "<group-name>"`. Today this is validated
+at declaration time, but the runtime store is still merged before guest lookup,
+so scope does not change the in-guest `proxnix-secrets get <name>` interface.
 
-This is created when the owning service starts and removed when it stops.
+#### File delivery
 
-### Templates
-
-Use `proxnix.secrets.templates` when you want proxnix to render a file from a
-template and secret placeholders.
-
-Activation-lifetime template:
+Use `file` when a service needs a plaintext file path:
 
 ```nix
-proxnix.secrets.templates.myapp = {
-  source = ./config.toml;
-  destination = "/var/lib/myapp/config.toml";
-  owner = "myapp";
-  group = "myapp";
-  mode = "0600";
-  restartUnits = [ "myapp.service" ];
-  substitutions = {
-    "__PASSWORD__" = { secret = "db_password"; };
+proxnix.secrets.db_password = {
+  source = {
+    scope = "shared";
+    name = "common_db_password";
+  };
+  file = {
+    owner = "root";
+    group = "myapp";
+    mode = "0640";
+    restartUnits = [ "myapp.service" ];
   };
 };
 ```
 
-This is materialized persistently and survives normal service and container
-restarts.
-
-Service-bound template:
+Then consume the resolved path with:
 
 ```nix
-proxnix.secrets.templates.myapp = {
-  lifecycle = "service";
-  service = "myapp.service";
-  source = ./config.toml;
-  destination = "/run/myapp/config.toml";
-  owner = "myapp";
-  group = "myapp";
-  mode = "0600";
-  substitutions = {
-    "__PASSWORD__" = { secret = "db_password"; };
+config.proxnix.secrets.db_password.file.path
+```
+
+Public file secrets are container-lifetime files. If you set `restartUnits` or
+`reloadUnits`, proxnix rewrites the file during activation and then triggers
+the listed systemd units.
+
+#### Environment delivery
+
+Use `env` when a service should receive the secret through an environment file:
+
+```nix
+proxnix.secrets.db_password = {
+  source = {
+    scope = "shared";
+    name = "common_db_password";
+  };
+  env = {
+    service = "myapp";
+    variable = "DB_PASSWORD";
   };
 };
 ```
 
-This is created when the owning service starts and removed when it stops.
+proxnix generates a helper unit that runs before `myapp.service` and appends
+the generated file to `EnvironmentFile=`.
+
+#### Credential delivery
+
+Use `credential` when a service supports native systemd credentials:
+
+```nix
+proxnix.secrets.db_password = {
+  source = {
+    scope = "shared";
+    name = "common_db_password";
+  };
+  credential = {
+    service = "myapp";
+    name = "db-password";
+  };
+};
+```
+
+proxnix prepares the credential file before service start and appends it to
+`LoadCredential=`.
+
+`env` and `credential` bindings are refreshed before service start. They do not
+currently trigger automatic restarts on secret rotation; a later service
+restart picks up the new value.
+
+### Public rendered configs
+
+Use `proxnix.configs.<name>` when you want proxnix to render a file from a
+template plus explicit secret or literal value references.
+
+Template source registration:
+
+```nix
+proxnix._internal.configTemplateSources.myapp = pkgs.writeText "myapp.conf.in" ''
+  password = {{ secrets.db_password }}
+  mode = {{ values.mode }}
+'';
+```
+
+Rendered config declaration:
+
+```nix
+proxnix.configs.myapp = {
+  service = "myapp";
+  path = "/var/lib/myapp/config.toml";
+  owner = "myapp";
+  group = "myapp";
+  mode = "0600";
+  secretValues = [ "db_password" ];
+  values.mode = "production";
+};
+```
+
+Then consume the resolved path with:
+
+```nix
+config.proxnix.configs.myapp.path
+```
+
+For managed configs, proxnix automatically restarts the owning service after
+rewriting the file when `service = "..."` is set. You can add extra
+`restartUnits` or `reloadUnits` as needed.
 
 Use `createOnly = true` for mutable seed files that should be initialized once
-and then left alone.
+and then left alone:
+
+```nix
+proxnix.configs.myapp = {
+  service = "myapp";
+  path = "/var/lib/myapp/config.toml";
+  createOnly = true;
+  owner = "myapp";
+  group = "myapp";
+  mode = "0600";
+  secretValues = [ "db_password" ];
+};
+```
+
+For `createOnly` configs, proxnix orders the seed unit before the owning
+service and skips future rewrites once the file already exists. Because later
+updates are intentionally skipped, `restartUnits` and `reloadUnits` are not
+allowed there.
+
+## Internal engine
+
+The old low-level engine still exists under:
+
+```nix
+proxnix._internal.secrets.files
+proxnix._internal.secrets.templates
+proxnix._internal.secrets.oneshot
+```
+
+Treat that as internal plumbing. Use it only for low-level cases that the
+public API does not model cleanly yet.
 
 ### One-shot consumers
 
-Use `proxnix.secrets.oneshot` when a secret should be consumed transiently and
-not left behind as a managed plaintext file:
+Use `proxnix._internal.secrets.oneshot` when a secret should be consumed
+transiently and not left behind as a managed plaintext file:
 
 ```nix
-proxnix.secrets.oneshot.example = {
+proxnix._internal.secrets.oneshot.example = {
   unit = "proxnix-example-secret-init";
   secret = "common_admin_password_hash";
   wantedBy = [ "multi-user.target" ];

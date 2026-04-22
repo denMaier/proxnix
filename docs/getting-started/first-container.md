@@ -76,6 +76,29 @@ cat > ~/src/proxnix-site/containers/$VMID/dropins/nginx.nix << 'EOF'
 { pkgs, ... }:
 
 {
+  proxnix.secrets.nginx_index_message.source = {
+    scope = "container";
+    name = "nginx_index_message";
+  };
+
+  proxnix._internal.configTemplateSources.nginx_index = pkgs.writeText "nginx-index.html" ''
+    <!doctype html>
+    <html>
+      <body>
+        <h1>{{ secrets.nginx_index_message }}</h1>
+      </body>
+    </html>
+  '';
+
+  proxnix.configs.nginx_index = {
+    service = "nginx";
+    path = "/var/lib/nginx-demo/www/index.html";
+    owner = "root";
+    group = "root";
+    mode = "0644";
+    secretValues = [ "nginx_index_message" ];
+  };
+
   services.nginx = {
     enable = true;
     virtualHosts."proxnix-native" = {
@@ -83,27 +106,6 @@ cat > ~/src/proxnix-site/containers/$VMID/dropins/nginx.nix << 'EOF'
       listen = [{ addr = "0.0.0.0"; port = 8080; }];
       root = "/var/lib/nginx-demo/www";
       locations."/".tryFiles = "$uri $uri/ /index.html";
-    };
-  };
-
-  proxnix.secrets.templates.nginx-index = {
-    source = pkgs.writeText "nginx-index.html" ''
-      <!doctype html>
-      <html>
-        <body>
-          <h1>__NGINX_INDEX_MESSAGE__</h1>
-        </body>
-      </html>
-    '';
-    destination = "/var/lib/nginx-demo/www/index.html";
-    owner = "root";
-    group = "root";
-    mode = "0644";
-    restartUnits = [ "nginx.service" ];
-    substitutions = {
-      "__NGINX_INDEX_MESSAGE__" = {
-        secret = "nginx_index_message";
-      };
     };
   };
 
