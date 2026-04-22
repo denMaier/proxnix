@@ -2,7 +2,7 @@
 
 let
   cfg = config.proxnix.common;
-  secretsCfg = config.proxnix.secrets;
+  secretsCfg = config.proxnix._internal.secrets;
   activationFiles =
     lib.filterAttrs (_: secretCfg: secretCfg.lifecycle == "activation") secretsCfg.files;
   serviceFiles =
@@ -32,6 +32,8 @@ let
   activationTemplateUnitName = name: "proxnix-secret-template-${sanitizeUnitName name}";
   systemdServiceAttrName = service:
     if lib.hasSuffix ".service" service then lib.removeSuffix ".service" service else service;
+  systemdUnitName = service:
+    if lib.hasSuffix ".service" service then service else "${service}.service";
 
   mkUnitListOption = description: lib.mkOption {
     type = lib.types.listOf lib.types.str;
@@ -230,6 +232,14 @@ let
         '';
       };
 
+      literalSubstitutions = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = {};
+        description = lib.mdDoc ''
+          Mapping of placeholder text to literal values.
+        '';
+      };
+
       owner = lib.mkOption {
         type = lib.types.str;
         default = "root";
@@ -325,501 +335,554 @@ let
     };
   });
 
-  allSecretOps =
-    (lib.mapAttrsToList (name: templateCfg: {
-      kind = "template";
-      name = name;
-      unit = templateCfg.unit;
-      cfg = templateCfg;
-    }) createOnlyTemplates)
-    ++
-    (lib.mapAttrsToList (name: secretCfg: {
-      kind = "oneshot";
-      name = name;
-      unit = secretCfg.unit;
-      cfg = secretCfg;
-    }) secretsCfg.oneshot);
-
-  secretOpsByUnit = lib.groupBy (op: op.unit) allSecretOps;
-
-  activationFileServiceConfigs =
-    lib.mapAttrs' (name: secretCfg:
-      lib.nameValuePair (activationFileUnitName name) {
-        description = "Materialize proxnix secret ${secretCfg.secret}";
-        after = [ "local-fs.target" ];
-        before = lib.unique (secretCfg.restartUnits ++ secretCfg.reloadUnits);
-        wantedBy = lib.unique ([ "multi-user.target" ] ++ secretCfg.restartUnits ++ secretCfg.reloadUnits);
-        unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
-        serviceConfig = {
-          Type = "oneshot";
-          UMask = "0077";
-          Environment = [ "HOME=/root" ];
-          RemainAfterExit = true;
-        };
-        path = [ pkgs.coreutils ];
-        script = ''
-          set -euo pipefail
-
-          workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName (activationFileUnitName name)}.XXXXXX)"
-          trap 'rm -rf "$workdir"' EXIT
-
-          ${mkFileOpScript "${activationFileUnitName name}-${name}" secretCfg}
-        '';
-      }
-    ) activationFiles;
-
-  activationTemplateServiceConfigs =
-    lib.mapAttrs' (name: templateCfg:
-      lib.nameValuePair (activationTemplateUnitName name) {
-        description = "Render proxnix secret template ${name}";
-        after = [ "local-fs.target" ];
-        before = lib.unique (templateCfg.restartUnits ++ templateCfg.reloadUnits);
-        wantedBy = lib.unique ([ "multi-user.target" ] ++ templateCfg.restartUnits ++ templateCfg.reloadUnits);
-        unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
-        serviceConfig = {
-          Type = "oneshot";
-          UMask = "0077";
-          Environment = [ "HOME=/root" ];
-          RemainAfterExit = true;
-        };
-        path = [ pkgs.coreutils pkgs.python3Minimal ];
-        script = ''
-          set -euo pipefail
-
-          workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName (activationTemplateUnitName name)}.XXXXXX)"
-          trap 'rm -rf "$workdir"' EXIT
-
-          ${mkTemplateOpScript "${activationTemplateUnitName name}-${name}" templateCfg}
-        '';
-      }
-    ) activationTemplates;
-
-  serviceFileOpScript = opId: secretCfg: ''
-    dest=${lib.escapeShellArg secretCfg.path}
-    mkdir -p "$(dirname "$dest")"
-    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
-
-    ${secretFetchCommand secretCfg} > "$tmp"
-    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
-    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
-    mv "$tmp" "$dest"
-  '';
-
-  serviceTemplateOpScript = opId: templateCfg:
-    let
-      placeholders = lib.attrNames templateCfg.substitutions;
-      fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
-        let
-          secretCfg = templateCfg.substitutions.${placeholder};
-        in ''
-          ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
-        ''
-      ) placeholders);
-    in ''
-      dest=${lib.escapeShellArg templateCfg.destination}
-      template_workdir="$workdir/template-${sanitizeUnitName opId}"
-      mkdir -p "$template_workdir"
-
-      ${fetchLines}
-
-      export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length placeholders))}
-      export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
-      export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
-
-      python3 -c ${pythonRenderer}
-
-      mkdir -p "$(dirname "$dest")"
-      tmp="$template_workdir/output"
-      cat "$template_workdir/rendered" > "$tmp"
-      chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
-      chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
-      mv "$tmp" "$dest"
-    '';
-
-  serviceSecretOps =
-    (lib.mapAttrsToList (name: secretCfg: {
-      kind = "file";
-      name = name;
-      service = secretCfg.service;
-      cfg = secretCfg;
-      cleanupPath = secretCfg.path;
-    }) serviceFiles)
-    ++
-    (lib.mapAttrsToList (name: templateCfg: {
-      kind = "template";
-      name = name;
-      service = templateCfg.service;
-      cfg = templateCfg;
-      cleanupPath = templateCfg.destination;
-    }) serviceTemplates);
-
-  serviceSecretOpsByService =
-    lib.filterAttrs (service: _: service != null)
-      (lib.groupBy (op: systemdServiceAttrName op.service) serviceSecretOps);
-
-  mkServiceSecretPreStart = service: ops:
-    let
-      scriptBody = lib.concatStringsSep "\n\n" (map
-        (op:
-          if op.kind == "file" then
-            serviceFileOpScript "${service}-${op.name}" op.cfg
-          else
-            serviceTemplateOpScript "${service}-${op.name}" op.cfg)
-        ops);
-    in ''
-      set -euo pipefail
-
-      workdir="$(mktemp -d /run/proxnix-service-secret-${sanitizeUnitName service}.XXXXXX)"
-      trap 'rm -rf "$workdir"' EXIT
-
-      ${scriptBody}
-    '';
-
-  mkServiceSecretPostStop = ops:
-    let
-      cleanupLines = lib.concatStringsSep "\n" (map (op: ''
-        rm -f ${lib.escapeShellArg op.cleanupPath}
-      '') ops);
-    in ''
-      set -euo pipefail
-      ${cleanupLines}
-    '';
-
-  serviceSecretServiceConfigs =
-    lib.mapAttrs' (service: ops:
-      lib.nameValuePair service {
-        preStart = lib.mkAfter (mkServiceSecretPreStart service ops);
-        postStop = lib.mkAfter (mkServiceSecretPostStop ops);
-        path = [ pkgs.coreutils pkgs.python3Minimal ];
-      }
-    ) serviceSecretOpsByService;
-
-  invalidManagedTemplateAssertions =
-    lib.flatten (lib.mapAttrsToList (name: templateCfg:
-      let
-        usesLegacyUnitKnobs =
-          templateCfg.unit != "proxnix-secret-template-${sanitizeUnitName name}"
-          || templateCfg.description != null
-          || templateCfg.after != []
-          || templateCfg.before != []
-          || templateCfg.wantedBy != []
-          || templateCfg.requiredBy != []
-          || templateCfg.partOf != []
-          || templateCfg.runtimeInputs != [];
-      in
-      lib.optionals (!templateCfg.createOnly) [
-        {
-          assertion = !usesLegacyUnitKnobs;
-          message = ''
-            proxnix.secrets.templates.${name}: unit, description, after, before,
-            wantedBy, requiredBy, partOf, and runtimeInputs are only supported
-            for createOnly templates.
-          '';
-        }
-      ]
-    ) secretsCfg.templates);
-
-  invalidServiceFileAssertions =
-    lib.flatten (lib.mapAttrsToList (name: secretCfg:
-      lib.optionals (secretCfg.lifecycle == "service") [
-        {
-          assertion = secretCfg.service != null;
-          message = ''
-            proxnix.secrets.files.${name}: service must be set when
-            lifecycle = "service".
-          '';
-        }
-        {
-          assertion =
-            lib.hasPrefix "/run/" secretCfg.path
-            || secretCfg.path == "/run"
-            || lib.hasPrefix "/var/run/" secretCfg.path
-            || secretCfg.path == "/var/run";
-          message = ''
-            proxnix.secrets.files.${name}: service-lifetime secrets must live
-            under /run or /var/run so proxnix can clean them up safely.
-          '';
-        }
-        {
-          assertion = secretCfg.restartUnits == [];
-          message = ''
-            proxnix.secrets.files.${name}: restartUnits is only supported for
-            activation-lifetime secrets.
-          '';
-        }
-        {
-          assertion = secretCfg.reloadUnits == [];
-          message = ''
-            proxnix.secrets.files.${name}: reloadUnits is only supported for
-            activation-lifetime secrets.
-          '';
-        }
-      ]
-    ) secretsCfg.files);
-
-  invalidActivationFileAssertions =
-    lib.flatten (lib.mapAttrsToList (name: secretCfg:
-      lib.optionals (secretCfg.lifecycle == "activation") [
-        {
-          assertion =
-            !(lib.hasPrefix "/run/" secretCfg.path
-            || secretCfg.path == "/run"
-            || lib.hasPrefix "/var/run/" secretCfg.path
-            || secretCfg.path == "/var/run");
-          message = ''
-            proxnix.secrets.files.${name}: activation-lifetime secrets must not
-            live under /run or /var/run because they need to survive container
-            restarts.
-          '';
-        }
-        {
-          assertion = secretCfg.service == null;
-          message = ''
-            proxnix.secrets.files.${name}: service is only supported when
-            lifecycle = "service".
-          '';
-        }
-      ]
-    ) secretsCfg.files);
-
-  invalidServiceTemplateAssertions =
-    lib.flatten (lib.mapAttrsToList (name: templateCfg:
-      lib.optionals (templateCfg.lifecycle == "service") [
-        {
-          assertion = !templateCfg.createOnly;
-          message = ''
-            proxnix.secrets.templates.${name}: createOnly templates cannot use
-            lifecycle = "service".
-          '';
-        }
-        {
-          assertion = templateCfg.service != null;
-          message = ''
-            proxnix.secrets.templates.${name}: service must be set when
-            lifecycle = "service".
-          '';
-        }
-        {
-          assertion =
-            lib.hasPrefix "/run/" templateCfg.destination
-            || templateCfg.destination == "/run"
-            || lib.hasPrefix "/var/run/" templateCfg.destination
-            || templateCfg.destination == "/var/run";
-          message = ''
-            proxnix.secrets.templates.${name}: service-lifetime templates must
-            live under /run or /var/run so proxnix can clean them up safely.
-          '';
-        }
-        {
-          assertion = templateCfg.restartUnits == [];
-          message = ''
-            proxnix.secrets.templates.${name}: restartUnits is only supported
-            for activation-lifetime templates.
-          '';
-        }
-        {
-          assertion = templateCfg.reloadUnits == [];
-          message = ''
-            proxnix.secrets.templates.${name}: reloadUnits is only supported
-            for activation-lifetime templates.
-          '';
-        }
-      ]
-    ) secretsCfg.templates);
-
-  invalidActivationTemplateAssertions =
-    lib.flatten (lib.mapAttrsToList (name: templateCfg:
-      lib.optionals (templateCfg.lifecycle == "activation" && !templateCfg.createOnly) [
-        {
-          assertion =
-            !(lib.hasPrefix "/run/" templateCfg.destination
-            || templateCfg.destination == "/run"
-            || lib.hasPrefix "/var/run/" templateCfg.destination
-            || templateCfg.destination == "/var/run");
-          message = ''
-            proxnix.secrets.templates.${name}: activation-lifetime templates
-            must not live under /run or /var/run because they need to survive
-            container restarts.
-          '';
-        }
-        {
-          assertion = templateCfg.service == null;
-          message = ''
-            proxnix.secrets.templates.${name}: service is only supported when
-            lifecycle = "service".
-          '';
-        }
-      ]
-    ) secretsCfg.templates);
-
-  invalidCreateOnlyTemplateAssertions =
-    lib.flatten (lib.mapAttrsToList (name: templateCfg:
-      lib.optionals templateCfg.createOnly [
-        {
-          assertion = templateCfg.restartUnits == [];
-          message = ''
-            proxnix.secrets.templates.${name}: restartUnits is only supported
-            for managed templates, not createOnly seed templates.
-          '';
-        }
-        {
-          assertion = templateCfg.reloadUnits == [];
-          message = ''
-            proxnix.secrets.templates.${name}: reloadUnits is only supported
-            for managed templates, not createOnly seed templates.
-          '';
-        }
-      ]
-    ) secretsCfg.templates);
-
-  pythonRenderer = lib.escapeShellArg (lib.concatStringsSep "\n" [
-    "import os"
-    "from pathlib import Path"
-    ""
-    "content = Path(os.environ[\"PROXNIX_TEMPLATE_SOURCE\"]).read_text()"
-    "for idx in range(int(os.environ[\"PROXNIX_TEMPLATE_SECRET_COUNT\"])):"
-    "    token = os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_TOKEN\"]"
-    "    value = Path(os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_FILE\"]).read_text().rstrip(\"\\r\\n\")"
-    "    content = content.replace(token, value)"
-    "Path(os.environ[\"PROXNIX_TEMPLATE_OUTPUT\"]).write_text(content)"
-  ]);
-
-  mkFileOpScript = opId: secretCfg: ''
-    dest=${lib.escapeShellArg secretCfg.path}
-    mkdir -p "$(dirname "$dest")"
-    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
-
-    ${secretFetchCommand secretCfg} > "$tmp"
-    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
-    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
-    mv "$tmp" "$dest"
-  '';
-
-  mkOneshotOpScript = opId: secretCfg: ''
-    secret_tmp="$workdir/oneshot-${sanitizeUnitName opId}.tmp"
-
-    if ! ${secretFetchCommand secretCfg} > "$secret_tmp"; then
-      if ${if secretCfg.optional then "true" else "false"}; then
-        :
-      else
-        exit 1
-      fi
-    elif [ ! -s "$secret_tmp" ]; then
-      if ${if secretCfg.optional then "true" else "false"}; then
-        :
-      else
-        echo "proxnix secret ${lib.escapeShellArg secretCfg.secret} is empty" >&2
-        exit 1
-      fi
+  configValueType = lib.types.oneOf [
+    lib.types.bool
+    lib.types.int
+    lib.types.float
+    lib.types.str
+    lib.types.path
+  ];
+  renderConfigValue = value:
+    if builtins.isBool value then
+      if value then "true" else "false"
     else
-      export PROXNIX_SECRET_FILE="$secret_tmp"
-      export SECRET_FILE="$secret_tmp"
+      toString value;
 
-      ${secretCfg.script}
-    fi
-  '';
+  mkPublicSecretSourceType = secretName: lib.types.submodule {
+    options = {
+      scope = lib.mkOption {
+        type = lib.types.enum [
+          "container"
+          "group"
+          "shared"
+        ];
+        default = "container";
+        description = lib.mdDoc ''
+          Secret lookup scope in the proxnix authoring model.
+        '';
+      };
 
-  mkTemplateOpScript = opId: templateCfg:
+      group = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = lib.mdDoc ''
+          Secret group name when `scope = "group"`.
+        '';
+      };
+
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = secretName;
+        description = lib.mdDoc ''
+          proxnix secret-store key to fetch at runtime.
+        '';
+      };
+    };
+  };
+
+  mkPublicSecretFileType = secretName: lib.types.submodule ({ ... }: {
+    options = {
+      lifecycle = lib.mkOption {
+        type = lib.types.enum [ "container" ];
+        default = "container";
+        description = lib.mdDoc ''
+          File lifecycle policy for this secret.
+        '';
+      };
+
+      owner = lib.mkOption {
+        type = lib.types.str;
+        default = "root";
+        description = lib.mdDoc ''
+          Owner for the materialized secret file.
+        '';
+      };
+
+      group = lib.mkOption {
+        type = lib.types.str;
+        default = "root";
+        description = lib.mdDoc ''
+          Group for the materialized secret file.
+        '';
+      };
+
+      mode = lib.mkOption {
+        type = lib.types.str;
+        default = "0400";
+        description = lib.mdDoc ''
+          File mode for the materialized secret file.
+        '';
+      };
+
+      restartUnits = mkUnitListOption ''
+        Optional systemd units restarted when this secret file is updated.
+      '';
+
+      reloadUnits = mkUnitListOption ''
+        Optional systemd units reloaded when this secret file is updated.
+      '';
+
+      path = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        description = lib.mdDoc ''
+          Materialized secret file path.
+        '';
+      };
+    };
+
+    config.path = "/var/lib/proxnix/secrets/${sanitizeUnitName secretName}";
+  });
+
+  mkPublicSecretCredentialType = secretName: lib.types.submodule {
+    options = {
+      service = lib.mkOption {
+        type = lib.types.str;
+        description = lib.mdDoc ''
+          Owning systemd service for this credential binding.
+        '';
+      };
+
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = secretName;
+        description = lib.mdDoc ''
+          Credential identifier exposed to the service.
+        '';
+      };
+    };
+  };
+
+  publicSecretEnvType = lib.types.submodule {
+    options = {
+      service = lib.mkOption {
+        type = lib.types.str;
+        description = lib.mdDoc ''
+          Owning systemd service for this environment binding.
+        '';
+      };
+
+      variable = lib.mkOption {
+        type = lib.types.str;
+        description = lib.mdDoc ''
+          Environment variable name exposed to the service.
+        '';
+      };
+    };
+  };
+
+  publicSecretType = lib.types.submodule ({ name, ... }: {
+    options = {
+      source = lib.mkOption {
+        type = mkPublicSecretSourceType name;
+        default = {};
+        description = lib.mdDoc ''
+          Secret source declaration.
+        '';
+      };
+
+      file = lib.mkOption {
+        type = lib.types.nullOr (mkPublicSecretFileType name);
+        default = null;
+        description = lib.mdDoc ''
+          Container-lifetime file delivery for this secret.
+        '';
+      };
+
+      credential = lib.mkOption {
+        type = lib.types.nullOr (mkPublicSecretCredentialType name);
+        default = null;
+        description = lib.mdDoc ''
+          Native systemd credential delivery for this secret.
+        '';
+      };
+
+      env = lib.mkOption {
+        type = lib.types.nullOr publicSecretEnvType;
+        default = null;
+        description = lib.mdDoc ''
+          Environment-file delivery for this secret.
+        '';
+      };
+    };
+  });
+
+  publicConfigType = lib.types.submodule ({ name, ... }: {
+    options = {
+      source = lib.mkOption {
+        type = lib.types.str;
+        default = name;
+        description = lib.mdDoc ''
+          Logical template source name. Defaults to the config attr name.
+        '';
+      };
+
+      service = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = lib.mdDoc ''
+          Optional owning systemd service for ordering and restart wiring.
+        '';
+      };
+
+      createOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = lib.mdDoc ''
+          Seed this config once and leave an existing file untouched on later
+          boots.
+        '';
+      };
+
+      secretValues = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = lib.mdDoc ''
+          Public secret names available to this template as
+          `{{ secrets.<name> }}`.
+        '';
+      };
+
+      values = lib.mkOption {
+        type = lib.types.attrsOf configValueType;
+        default = {};
+        description = lib.mdDoc ''
+          Literal values available to this template as `{{ values.<name> }}`.
+        '';
+      };
+
+      owner = lib.mkOption {
+        type = lib.types.str;
+        default = "root";
+        description = lib.mdDoc ''
+          Owner for the rendered config file.
+        '';
+      };
+
+      group = lib.mkOption {
+        type = lib.types.str;
+        default = "root";
+        description = lib.mdDoc ''
+          Group for the rendered config file.
+        '';
+      };
+
+      mode = lib.mkOption {
+        type = lib.types.str;
+        default = "0400";
+        description = lib.mdDoc ''
+          File mode for the rendered config file.
+        '';
+      };
+
+      restartUnits = mkUnitListOption ''
+        Optional systemd units restarted when this config is updated.
+      '';
+
+      reloadUnits = mkUnitListOption ''
+        Optional systemd units reloaded when this config is updated.
+      '';
+
+      path = lib.mkOption {
+        type = lib.types.str;
+        default = "/var/lib/proxnix/configs/${sanitizeUnitName name}";
+        description = lib.mdDoc ''
+          Materialized config path.
+        '';
+      };
+    };
+  });
+
+  lowLevelSecretsOptions = {
+    files = lib.mkOption {
+      type = lib.types.attrsOf fileSecretType;
+      default = {};
+      description = lib.mdDoc ''
+        Internal declarative runtime secret files backed by proxnix-secrets.
+      '';
+    };
+
+    templates = lib.mkOption {
+      type = lib.types.attrsOf templateSecretType;
+      default = {};
+      description = lib.mdDoc ''
+        Internal declarative template render units backed by proxnix-secrets.
+      '';
+    };
+
+    oneshot = lib.mkOption {
+      type = lib.types.attrsOf oneshotSecretType;
+      default = {};
+      description = lib.mdDoc ''
+        Internal declarative oneshot secret consumers backed by proxnix-secrets.
+      '';
+    };
+  };
+
+  publicSecrets = config.proxnix.secrets;
+  publicConfigs = config.proxnix.configs;
+  configTemplateSources = config.proxnix._internal.configTemplateSources;
+
+  lookupPublicSecretStoreName = secretName:
+    if builtins.hasAttr secretName publicSecrets then
+      publicSecrets.${secretName}.source.name
+    else
+      secretName;
+
+  lookupConfigTemplateSource = configName: configCfg:
+    if builtins.hasAttr configCfg.source configTemplateSources then
+      configTemplateSources.${configCfg.source}
+    else
+      pkgs.writeText "missing-proxnix-config-template-${sanitizeUnitName configName}" "";
+
+  publicCompatFileSecrets =
+    lib.mapAttrs' (secretName: secretCfg:
+      lib.nameValuePair "public-secret-file-${sanitizeUnitName secretName}" {
+        secret = secretCfg.source.name;
+        path = secretCfg.file.path;
+        owner = secretCfg.file.owner;
+        group = secretCfg.file.group;
+        mode = secretCfg.file.mode;
+        restartUnits = secretCfg.file.restartUnits;
+        reloadUnits = secretCfg.file.reloadUnits;
+      }
+    ) (lib.filterAttrs (_: secretCfg: secretCfg.file != null) publicSecrets);
+
+  mkConfigSecretToken = secretName: "{{ secrets.${secretName} }}";
+  mkConfigValueToken = valueName: "{{ values.${valueName} }}";
+
+  publicCompatTemplates =
+    lib.mapAttrs' (configName: configCfg:
+      let
+        serviceUnit =
+          if configCfg.service == null then null else systemdUnitName configCfg.service;
+        serviceRestartUnits = lib.optionals (serviceUnit != null && !configCfg.createOnly) [ serviceUnit ];
+        createOnlyBefore = lib.optionals (serviceUnit != null && configCfg.createOnly) [ serviceUnit ];
+        createOnlyRequiredBy = createOnlyBefore;
+        createOnlyWantedBy = lib.optionals (serviceUnit == null && configCfg.createOnly) [ "multi-user.target" ];
+      in
+      lib.nameValuePair "public-config-${sanitizeUnitName configName}" {
+        source = lookupConfigTemplateSource configName configCfg;
+        destination = configCfg.path;
+        substitutions = lib.listToAttrs (map
+          (secretName: {
+            name = mkConfigSecretToken secretName;
+            value = {
+              secret = lookupPublicSecretStoreName secretName;
+            };
+          })
+          configCfg.secretValues);
+        literalSubstitutions = lib.mapAttrs' (valueName: value:
+          lib.nameValuePair (mkConfigValueToken valueName) (renderConfigValue value)
+        ) configCfg.values;
+        owner = configCfg.owner;
+        group = configCfg.group;
+        mode = configCfg.mode;
+        createOnly = configCfg.createOnly;
+        restartUnits = configCfg.restartUnits ++ serviceRestartUnits;
+        reloadUnits = configCfg.reloadUnits;
+        before = createOnlyBefore;
+        requiredBy = createOnlyRequiredBy;
+        wantedBy = createOnlyWantedBy;
+      }
+    ) publicConfigs;
+
+  publicRuntimeSecretOps =
+    lib.concatLists (lib.mapAttrsToList (secretName: secretCfg:
+      let
+        credentialPath =
+          if secretCfg.credential == null then
+            null
+          else
+            "/run/proxnix/credentials/${sanitizeUnitName (systemdServiceAttrName secretCfg.credential.service)}/${sanitizeUnitName secretCfg.credential.name}";
+        envPath =
+          if secretCfg.env == null then
+            null
+          else
+            "/run/proxnix/environment/${sanitizeUnitName (systemdServiceAttrName secretCfg.env.service)}/${sanitizeUnitName secretName}.env";
+      in
+      lib.optionals (secretCfg.credential != null) [
+        {
+          kind = "credential";
+          secretName = secretName;
+          service = systemdServiceAttrName secretCfg.credential.service;
+          serviceUnit = systemdUnitName secretCfg.credential.service;
+          bindingName = secretCfg.credential.name;
+          path = credentialPath;
+          cfg = {
+            secret = secretCfg.source.name;
+            path = credentialPath;
+            owner = "root";
+            group = "root";
+            mode = "0400";
+          };
+        }
+      ]
+      ++
+      lib.optionals (secretCfg.env != null) [
+        {
+          kind = "env";
+          secretName = secretName;
+          service = systemdServiceAttrName secretCfg.env.service;
+          serviceUnit = systemdUnitName secretCfg.env.service;
+          bindingName = secretCfg.env.variable;
+          path = envPath;
+          cfg = {
+            source = pkgs.writeText "proxnix-env-${sanitizeUnitName secretName}" ''
+              ${secretCfg.env.variable}=__PROXNIX_ENV_VALUE__
+            '';
+            destination = envPath;
+            substitutions = {
+              "__PROXNIX_ENV_VALUE__" = {
+                secret = secretCfg.source.name;
+              };
+            };
+            literalSubstitutions = {};
+            owner = "root";
+            group = "root";
+            mode = "0400";
+            createOnly = false;
+          };
+        }
+      ]
+    ) publicSecrets);
+
+  publicRuntimeSecretOpsByService = lib.groupBy (op: op.service) publicRuntimeSecretOps;
+
+  publicRuntimeSecretUnitName = service: "proxnix-public-runtime-secret-${sanitizeUnitName service}";
+
+  mkPublicRuntimeSecretUnitService = service: ops:
     let
-      placeholders = lib.attrNames templateCfg.substitutions;
-      fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
-        let
-          secretCfg = templateCfg.substitutions.${placeholder};
-        in ''
-          ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
-          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
-        ''
-      ) placeholders);
-    in ''
-      dest=${lib.escapeShellArg templateCfg.destination}
-      if ${if templateCfg.createOnly then "[ -e \"$dest\" ]" else "false"}; then
-        :
-      else
-        template_workdir="$workdir/template-${sanitizeUnitName opId}"
-        mkdir -p "$template_workdir"
-
-        ${fetchLines}
-
-        export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length placeholders))}
-        export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
-        export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
-
-        python3 -c ${pythonRenderer}
-
-        dest_dir="$(dirname "$dest")"
-        base_name="$(basename "$dest")"
-        mkdir -p "$dest_dir"
-        tmp="$template_workdir/.''${base_name}.tmp"
-        cat "$template_workdir/rendered" > "$tmp"
-        chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
-        chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
-        mv "$tmp" "$dest"
-      fi
-    '';
-
-  mkSecretUnitService = unit: ops:
-    let
-      descriptions = builtins.filter (d: d != null) (map (op: op.cfg.description) ops);
-      kinds = map (op: op.kind) ops;
-      desc =
-        if descriptions != []
-        then lib.head descriptions
-        else if builtins.length ops == 1 && lib.elem "file" kinds
-        then "Materialize proxnix secret ${(lib.head ops).cfg.secret}"
-        else if builtins.length ops == 1 && lib.elem "template" kinds
-        then "Render proxnix secret template ${(lib.head ops).name}"
-        else if builtins.length ops == 1
-        then "Run proxnix secret oneshot ${(lib.head ops).name}"
-        else "Run proxnix secret materializer ${unit}";
-      allAfter = lib.unique ([ "local-fs.target" ] ++ lib.concatMap (op: op.cfg.after) ops);
-      allBefore = lib.unique (lib.concatMap (op: op.cfg.before) ops);
-      allWantedBy = lib.unique (lib.concatMap (op: op.cfg.wantedBy) ops);
-      allRequiredBy = lib.unique (lib.concatMap (op: op.cfg.requiredBy) ops);
-      allPartOf = lib.unique (lib.concatMap (op: op.cfg.partOf) ops);
-      allRuntimeInputs = lib.unique (lib.concatMap (op: op.cfg.runtimeInputs) ops);
-      hasMaterializedState = lib.any (kind: kind != "oneshot") kinds;
+      unit = publicRuntimeSecretUnitName service;
+      serviceUnit = (lib.head ops).serviceUnit;
       scriptBody = lib.concatStringsSep "\n\n" (map
         (op:
-          if op.kind == "file" then
-            mkFileOpScript "${unit}-${op.name}" op.cfg
-          else if op.kind == "template" then
-            mkTemplateOpScript "${unit}-${op.name}" op.cfg
+          if op.kind == "credential" then
+            mkFileOpScript "${unit}-${op.secretName}" op.cfg
           else
-            mkOneshotOpScript "${unit}-${op.name}" op.cfg)
+            mkTemplateOpScript "${unit}-${op.secretName}" op.cfg)
         ops);
     in
     lib.nameValuePair unit {
-      description = desc;
-      after = allAfter;
-      before = allBefore;
-      wantedBy = allWantedBy;
-      requiredBy = allRequiredBy;
-      partOf = allPartOf;
+      description = "Prepare proxnix runtime secrets for ${serviceUnit}";
+      before = [ serviceUnit ];
+      partOf = [ serviceUnit ];
       unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
       serviceConfig = {
         Type = "oneshot";
         UMask = "0077";
         Environment = [ "HOME=/root" ];
-      } // lib.optionalAttrs hasMaterializedState {
-        RemainAfterExit = true;
       };
-      path = [ pkgs.coreutils pkgs.python3Minimal ] ++ allRuntimeInputs;
+      path = [ pkgs.coreutils pkgs.python3Minimal ];
       script = ''
         set -euo pipefail
 
-        workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName unit}.XXXXXX)"
+        workdir="$(mktemp -d /run/proxnix-runtime-secret-${sanitizeUnitName unit}.XXXXXX)"
         trap 'rm -rf "$workdir"' EXIT
 
         ${scriptBody}
       '';
     };
-in {
 
-  options.proxnix.common = {
+  publicRuntimeSecretUnitConfigs =
+    lib.mapAttrs' mkPublicRuntimeSecretUnitService publicRuntimeSecretOpsByService;
 
+  publicRuntimeSecretServiceConfigs =
+    lib.mapAttrs' (service: ops:
+      let
+        unitName = "${publicRuntimeSecretUnitName service}.service";
+        credentialBindings = map (op: "${op.bindingName}:${op.path}") (
+          builtins.filter (op: op.kind == "credential") ops
+        );
+        envBindings = map (op: op.path) (
+          builtins.filter (op: op.kind == "env") ops
+        );
+      in
+      lib.nameValuePair service ({
+        wants = lib.mkAfter [ unitName ];
+        after = lib.mkAfter [ unitName ];
+      } // lib.optionalAttrs (credentialBindings != [] || envBindings != []) {
+        serviceConfig =
+          (lib.optionalAttrs (credentialBindings != []) {
+            LoadCredential = lib.mkAfter credentialBindings;
+          })
+          // (lib.optionalAttrs (envBindings != []) {
+            EnvironmentFile = lib.mkAfter envBindings;
+          });
+      })
+    ) publicRuntimeSecretOpsByService;
+
+  duplicateBindingAssertions = label: bindings:
+    lib.mapAttrsToList (_: dupBindings: {
+      assertion = false;
+      message = ''
+        ${label} ${lib.head dupBindings} is declared more than once.
+      '';
+    }) (lib.filterAttrs (_: dupBindings: builtins.length dupBindings > 1) (
+      lib.groupBy (binding: binding) bindings
+    ));
+
+  publicModelAssertions =
+    lib.flatten [
+      (lib.mapAttrsToList (secretName: secretCfg: [
+        {
+          assertion = secretCfg.source.scope != "group" || secretCfg.source.group != null;
+          message = ''
+            proxnix.secrets.${secretName}.source.group is required when
+            `scope = "group"`.
+          '';
+        }
+        {
+          assertion = secretCfg.source.scope == "group" || secretCfg.source.group == null;
+          message = ''
+            proxnix.secrets.${secretName}.source.group is only allowed when
+            `scope = "group"`.
+          '';
+        }
+      ]) publicSecrets)
+
+      (lib.mapAttrsToList (configName: configCfg: [
+        {
+          assertion = builtins.hasAttr configCfg.source configTemplateSources;
+          message = ''
+            proxnix.configs.${configName}.source refers to an unknown logical
+            template `${configCfg.source}`. Define it under
+            `proxnix._internal.configTemplateSources`.
+          '';
+        }
+        {
+          assertion = lib.all (secretName: builtins.hasAttr secretName publicSecrets) configCfg.secretValues;
+          message = ''
+            proxnix.configs.${configName}.secretValues must only reference
+            secrets declared under `proxnix.secrets`.
+          '';
+        }
+        {
+          assertion = !configCfg.createOnly || configCfg.restartUnits == [];
+          message = ''
+            proxnix.configs.${configName}.restartUnits is not supported for
+            createOnly configs.
+          '';
+        }
+        {
+          assertion = !configCfg.createOnly || configCfg.reloadUnits == [];
+          message = ''
+            proxnix.configs.${configName}.reloadUnits is not supported for
+            createOnly configs.
+          '';
+        }
+      ]) publicConfigs)
+
+      (duplicateBindingAssertions
+        "Duplicate proxnix credential binding"
+        (map (op: "${op.service}:${op.bindingName}") (builtins.filter (op: op.kind == "credential") publicRuntimeSecretOps)))
+
+      (duplicateBindingAssertions
+        "Duplicate proxnix environment binding"
+        (map (op: "${op.service}:${op.bindingName}") (builtins.filter (op: op.kind == "env") publicRuntimeSecretOps)))
+    ];
+
+  commonOptions = {
     enable = lib.mkEnableOption "shared proxnix LXC baseline";
 
     adminUser = lib.mkOption {
@@ -1004,38 +1067,598 @@ in {
         `vm.swappiness` value applied when `manageSwappiness` is enabled.
       '';
     };
-
   };
 
-  options.proxnix.secrets = {
-    files = lib.mkOption {
-      type = lib.types.attrsOf fileSecretType;
-      default = {};
-      description = lib.mdDoc ''
-        Declarative runtime secret files backed by proxnix-secrets.
+  allSecretOps =
+    (lib.mapAttrsToList (name: templateCfg: {
+      kind = "template";
+      name = name;
+      unit = templateCfg.unit;
+      cfg = templateCfg;
+    }) createOnlyTemplates)
+    ++
+    (lib.mapAttrsToList (name: secretCfg: {
+      kind = "oneshot";
+      name = name;
+      unit = secretCfg.unit;
+      cfg = secretCfg;
+    }) secretsCfg.oneshot);
+
+  secretOpsByUnit = lib.groupBy (op: op.unit) allSecretOps;
+
+  activationFileServiceConfigs =
+    lib.mapAttrs' (name: secretCfg:
+      lib.nameValuePair (activationFileUnitName name) {
+        description = "Materialize proxnix secret ${secretCfg.secret}";
+        after = [ "local-fs.target" ];
+        before = lib.unique (secretCfg.restartUnits ++ secretCfg.reloadUnits);
+        wantedBy = lib.unique ([ "multi-user.target" ] ++ secretCfg.restartUnits ++ secretCfg.reloadUnits);
+        unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
+        serviceConfig = {
+          Type = "oneshot";
+          UMask = "0077";
+          Environment = [ "HOME=/root" ];
+          RemainAfterExit = true;
+        };
+        path = [ pkgs.coreutils ];
+        script = ''
+          set -euo pipefail
+
+          workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName (activationFileUnitName name)}.XXXXXX)"
+          trap 'rm -rf "$workdir"' EXIT
+
+          ${mkFileOpScript "${activationFileUnitName name}-${name}" secretCfg}
+        '';
+      }
+    ) activationFiles;
+
+  activationTemplateServiceConfigs =
+    lib.mapAttrs' (name: templateCfg:
+      lib.nameValuePair (activationTemplateUnitName name) {
+        description = "Render proxnix secret template ${name}";
+        after = [ "local-fs.target" ];
+        before = lib.unique (templateCfg.restartUnits ++ templateCfg.reloadUnits);
+        wantedBy = lib.unique ([ "multi-user.target" ] ++ templateCfg.restartUnits ++ templateCfg.reloadUnits);
+        unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
+        serviceConfig = {
+          Type = "oneshot";
+          UMask = "0077";
+          Environment = [ "HOME=/root" ];
+          RemainAfterExit = true;
+        };
+        path = [ pkgs.coreutils pkgs.python3Minimal ];
+        script = ''
+          set -euo pipefail
+
+          workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName (activationTemplateUnitName name)}.XXXXXX)"
+          trap 'rm -rf "$workdir"' EXIT
+
+          ${mkTemplateOpScript "${activationTemplateUnitName name}-${name}" templateCfg}
+        '';
+      }
+    ) activationTemplates;
+
+  serviceFileOpScript = opId: secretCfg: ''
+    dest=${lib.escapeShellArg secretCfg.path}
+    mkdir -p "$(dirname "$dest")"
+    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
+
+    ${secretFetchCommand secretCfg} > "$tmp"
+    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
+    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    mv "$tmp" "$dest"
+  '';
+
+  serviceTemplateOpScript = opId: templateCfg:
+    let
+      secretPlaceholders = lib.attrNames templateCfg.substitutions;
+      literalPlaceholders = lib.attrNames templateCfg.literalSubstitutions;
+      fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
+        let
+          secretCfg = templateCfg.substitutions.${placeholder};
+        in ''
+          ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
+          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
+          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
+        ''
+      ) secretPlaceholders);
+      literalLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder: ''
+        printf '%s' ${lib.escapeShellArg templateCfg.literalSubstitutions.${placeholder}} > "$template_workdir/literal-${toString idx}"
+        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
+        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_FILE="$template_workdir/literal-${toString idx}"
+      '') literalPlaceholders);
+    in ''
+      dest=${lib.escapeShellArg templateCfg.destination}
+      template_workdir="$workdir/template-${sanitizeUnitName opId}"
+      mkdir -p "$template_workdir"
+
+      ${fetchLines}
+      ${literalLines}
+
+      export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length secretPlaceholders))}
+      export PROXNIX_TEMPLATE_LITERAL_COUNT=${lib.escapeShellArg (toString (builtins.length literalPlaceholders))}
+      export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
+      export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
+
+      python3 -c ${pythonRenderer}
+
+      mkdir -p "$(dirname "$dest")"
+      tmp="$template_workdir/output"
+      cat "$template_workdir/rendered" > "$tmp"
+      chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
+      chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+      mv "$tmp" "$dest"
+    '';
+
+  serviceSecretOps =
+    (lib.mapAttrsToList (name: secretCfg: {
+      kind = "file";
+      name = name;
+      service = secretCfg.service;
+      cfg = secretCfg;
+      cleanupPath = secretCfg.path;
+    }) serviceFiles)
+    ++
+    (lib.mapAttrsToList (name: templateCfg: {
+      kind = "template";
+      name = name;
+      service = templateCfg.service;
+      cfg = templateCfg;
+      cleanupPath = templateCfg.destination;
+    }) serviceTemplates);
+
+  serviceSecretOpsByService =
+    lib.filterAttrs (service: _: service != null)
+      (lib.groupBy (op: systemdServiceAttrName op.service) serviceSecretOps);
+
+  mkServiceSecretPreStart = service: ops:
+    let
+      scriptBody = lib.concatStringsSep "\n\n" (map
+        (op:
+          if op.kind == "file" then
+            serviceFileOpScript "${service}-${op.name}" op.cfg
+          else
+            serviceTemplateOpScript "${service}-${op.name}" op.cfg)
+        ops);
+    in ''
+      set -euo pipefail
+
+      workdir="$(mktemp -d /run/proxnix-service-secret-${sanitizeUnitName service}.XXXXXX)"
+      trap 'rm -rf "$workdir"' EXIT
+
+      ${scriptBody}
+    '';
+
+  mkServiceSecretPostStop = ops:
+    let
+      cleanupLines = lib.concatStringsSep "\n" (map (op: ''
+        rm -f ${lib.escapeShellArg op.cleanupPath}
+      '') ops);
+    in ''
+      set -euo pipefail
+      ${cleanupLines}
+    '';
+
+  serviceSecretServiceConfigs =
+    lib.mapAttrs' (service: ops:
+      lib.nameValuePair service {
+        preStart = lib.mkAfter (mkServiceSecretPreStart service ops);
+        postStop = lib.mkAfter (mkServiceSecretPostStop ops);
+        path = [ pkgs.coreutils pkgs.python3Minimal ];
+      }
+    ) serviceSecretOpsByService;
+
+  invalidManagedTemplateAssertions =
+    lib.flatten (lib.mapAttrsToList (name: templateCfg:
+      let
+        usesLegacyUnitKnobs =
+          templateCfg.unit != "proxnix-secret-template-${sanitizeUnitName name}"
+          || templateCfg.description != null
+          || templateCfg.after != []
+          || templateCfg.before != []
+          || templateCfg.wantedBy != []
+          || templateCfg.requiredBy != []
+          || templateCfg.partOf != []
+          || templateCfg.runtimeInputs != [];
+      in
+      lib.optionals (!templateCfg.createOnly) [
+        {
+          assertion = !usesLegacyUnitKnobs;
+          message = ''
+            proxnix._internal.secrets.templates.${name}: unit, description, after, before,
+            wantedBy, requiredBy, partOf, and runtimeInputs are only supported
+            for createOnly templates.
+          '';
+        }
+      ]
+    ) secretsCfg.templates);
+
+  invalidServiceFileAssertions =
+    lib.flatten (lib.mapAttrsToList (name: secretCfg:
+      lib.optionals (secretCfg.lifecycle == "service") [
+        {
+          assertion = secretCfg.service != null;
+          message = ''
+            proxnix._internal.secrets.files.${name}: service must be set when
+            lifecycle = "service".
+          '';
+        }
+        {
+          assertion =
+            lib.hasPrefix "/run/" secretCfg.path
+            || secretCfg.path == "/run"
+            || lib.hasPrefix "/var/run/" secretCfg.path
+            || secretCfg.path == "/var/run";
+          message = ''
+            proxnix._internal.secrets.files.${name}: service-lifetime secrets must live
+            under /run or /var/run so proxnix can clean them up safely.
+          '';
+        }
+        {
+          assertion = secretCfg.restartUnits == [];
+          message = ''
+            proxnix._internal.secrets.files.${name}: restartUnits is only supported for
+            activation-lifetime secrets.
+          '';
+        }
+        {
+          assertion = secretCfg.reloadUnits == [];
+          message = ''
+            proxnix._internal.secrets.files.${name}: reloadUnits is only supported for
+            activation-lifetime secrets.
+          '';
+        }
+      ]
+    ) secretsCfg.files);
+
+  invalidActivationFileAssertions =
+    lib.flatten (lib.mapAttrsToList (name: secretCfg:
+      lib.optionals (secretCfg.lifecycle == "activation") [
+        {
+          assertion =
+            !(lib.hasPrefix "/run/" secretCfg.path
+            || secretCfg.path == "/run"
+            || lib.hasPrefix "/var/run/" secretCfg.path
+            || secretCfg.path == "/var/run");
+          message = ''
+            proxnix._internal.secrets.files.${name}: activation-lifetime secrets must not
+            live under /run or /var/run because they need to survive container
+            restarts.
+          '';
+        }
+        {
+          assertion = secretCfg.service == null;
+          message = ''
+            proxnix._internal.secrets.files.${name}: service is only supported when
+            lifecycle = "service".
+          '';
+        }
+      ]
+    ) secretsCfg.files);
+
+  invalidServiceTemplateAssertions =
+    lib.flatten (lib.mapAttrsToList (name: templateCfg:
+      lib.optionals (templateCfg.lifecycle == "service") [
+        {
+          assertion = !templateCfg.createOnly;
+          message = ''
+            proxnix._internal.secrets.templates.${name}: createOnly templates cannot use
+            lifecycle = "service".
+          '';
+        }
+        {
+          assertion = templateCfg.service != null;
+          message = ''
+            proxnix._internal.secrets.templates.${name}: service must be set when
+            lifecycle = "service".
+          '';
+        }
+        {
+          assertion =
+            lib.hasPrefix "/run/" templateCfg.destination
+            || templateCfg.destination == "/run"
+            || lib.hasPrefix "/var/run/" templateCfg.destination
+            || templateCfg.destination == "/var/run";
+          message = ''
+            proxnix._internal.secrets.templates.${name}: service-lifetime templates must
+            live under /run or /var/run so proxnix can clean them up safely.
+          '';
+        }
+        {
+          assertion = templateCfg.restartUnits == [];
+          message = ''
+            proxnix._internal.secrets.templates.${name}: restartUnits is only supported
+            for activation-lifetime templates.
+          '';
+        }
+        {
+          assertion = templateCfg.reloadUnits == [];
+          message = ''
+            proxnix._internal.secrets.templates.${name}: reloadUnits is only supported
+            for activation-lifetime templates.
+          '';
+        }
+      ]
+    ) secretsCfg.templates);
+
+  invalidActivationTemplateAssertions =
+    lib.flatten (lib.mapAttrsToList (name: templateCfg:
+      lib.optionals (templateCfg.lifecycle == "activation" && !templateCfg.createOnly) [
+        {
+          assertion =
+            !(lib.hasPrefix "/run/" templateCfg.destination
+            || templateCfg.destination == "/run"
+            || lib.hasPrefix "/var/run/" templateCfg.destination
+            || templateCfg.destination == "/var/run");
+          message = ''
+            proxnix._internal.secrets.templates.${name}: activation-lifetime templates
+            must not live under /run or /var/run because they need to survive
+            container restarts.
+          '';
+        }
+        {
+          assertion = templateCfg.service == null;
+          message = ''
+            proxnix._internal.secrets.templates.${name}: service is only supported when
+            lifecycle = "service".
+          '';
+        }
+      ]
+    ) secretsCfg.templates);
+
+  invalidCreateOnlyTemplateAssertions =
+    lib.flatten (lib.mapAttrsToList (name: templateCfg:
+      lib.optionals templateCfg.createOnly [
+        {
+          assertion = templateCfg.restartUnits == [];
+          message = ''
+            proxnix._internal.secrets.templates.${name}: restartUnits is only supported
+            for managed templates, not createOnly seed templates.
+          '';
+        }
+        {
+          assertion = templateCfg.reloadUnits == [];
+          message = ''
+            proxnix._internal.secrets.templates.${name}: reloadUnits is only supported
+            for managed templates, not createOnly seed templates.
+          '';
+        }
+      ]
+    ) secretsCfg.templates);
+
+  pythonRenderer = lib.escapeShellArg (lib.concatStringsSep "\n" [
+    "import os"
+    "from pathlib import Path"
+    ""
+    "content = Path(os.environ[\"PROXNIX_TEMPLATE_SOURCE\"]).read_text()"
+    "for idx in range(int(os.environ[\"PROXNIX_TEMPLATE_SECRET_COUNT\"])):"
+    "    token = os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_TOKEN\"]"
+    "    value = Path(os.environ[f\"PROXNIX_TEMPLATE_SECRET_{idx}_FILE\"]).read_text().rstrip(\"\\r\\n\")"
+    "    content = content.replace(token, value)"
+    "for idx in range(int(os.environ.get(\"PROXNIX_TEMPLATE_LITERAL_COUNT\", \"0\"))):"
+    "    token = os.environ[f\"PROXNIX_TEMPLATE_LITERAL_{idx}_TOKEN\"]"
+    "    value = Path(os.environ[f\"PROXNIX_TEMPLATE_LITERAL_{idx}_FILE\"]).read_text()"
+    "    content = content.replace(token, value)"
+    "Path(os.environ[\"PROXNIX_TEMPLATE_OUTPUT\"]).write_text(content)"
+  ]);
+
+  mkFileOpScript = opId: secretCfg: ''
+    dest=${lib.escapeShellArg secretCfg.path}
+    mkdir -p "$(dirname "$dest")"
+    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
+
+    ${secretFetchCommand secretCfg} > "$tmp"
+    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
+    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    mv "$tmp" "$dest"
+  '';
+
+  mkOneshotOpScript = opId: secretCfg: ''
+    secret_tmp="$workdir/oneshot-${sanitizeUnitName opId}.tmp"
+
+    if ! ${secretFetchCommand secretCfg} > "$secret_tmp"; then
+      if ${if secretCfg.optional then "true" else "false"}; then
+        :
+      else
+        exit 1
+      fi
+    elif [ ! -s "$secret_tmp" ]; then
+      if ${if secretCfg.optional then "true" else "false"}; then
+        :
+      else
+        echo "proxnix secret ${lib.escapeShellArg secretCfg.secret} is empty" >&2
+        exit 1
+      fi
+    else
+      export PROXNIX_SECRET_FILE="$secret_tmp"
+      export SECRET_FILE="$secret_tmp"
+
+      ${secretCfg.script}
+    fi
+  '';
+
+  mkTemplateOpScript = opId: templateCfg:
+    let
+      secretPlaceholders = lib.attrNames templateCfg.substitutions;
+      literalPlaceholders = lib.attrNames templateCfg.literalSubstitutions;
+      fetchLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder:
+        let
+          secretCfg = templateCfg.substitutions.${placeholder};
+        in ''
+          ${secretFetchCommand secretCfg} > "$template_workdir/secret-${toString idx}"
+          export PROXNIX_TEMPLATE_SECRET_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
+          export PROXNIX_TEMPLATE_SECRET_${toString idx}_FILE="$template_workdir/secret-${toString idx}"
+        ''
+      ) secretPlaceholders);
+      literalLines = lib.concatStringsSep "\n" (lib.imap0 (idx: placeholder: ''
+        printf '%s' ${lib.escapeShellArg templateCfg.literalSubstitutions.${placeholder}} > "$template_workdir/literal-${toString idx}"
+        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_TOKEN=${lib.escapeShellArg placeholder}
+        export PROXNIX_TEMPLATE_LITERAL_${toString idx}_FILE="$template_workdir/literal-${toString idx}"
+      '') literalPlaceholders);
+    in ''
+      dest=${lib.escapeShellArg templateCfg.destination}
+      if ${if templateCfg.createOnly then "[ -e \"$dest\" ]" else "false"}; then
+        :
+      else
+        template_workdir="$workdir/template-${sanitizeUnitName opId}"
+        mkdir -p "$template_workdir"
+
+        ${fetchLines}
+        ${literalLines}
+
+        export PROXNIX_TEMPLATE_SECRET_COUNT=${lib.escapeShellArg (toString (builtins.length secretPlaceholders))}
+        export PROXNIX_TEMPLATE_LITERAL_COUNT=${lib.escapeShellArg (toString (builtins.length literalPlaceholders))}
+        export PROXNIX_TEMPLATE_SOURCE=${lib.escapeShellArg "${templateCfg.source}"}
+        export PROXNIX_TEMPLATE_OUTPUT="$template_workdir/rendered"
+
+        python3 -c ${pythonRenderer}
+
+        dest_dir="$(dirname "$dest")"
+        base_name="$(basename "$dest")"
+        mkdir -p "$dest_dir"
+        tmp="$template_workdir/.''${base_name}.tmp"
+        cat "$template_workdir/rendered" > "$tmp"
+        chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
+        chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+        mv "$tmp" "$dest"
+      fi
+    '';
+
+  mkSecretUnitService = unit: ops:
+    let
+      descriptions = builtins.filter (d: d != null) (map (op: op.cfg.description) ops);
+      kinds = map (op: op.kind) ops;
+      desc =
+        if descriptions != []
+        then lib.head descriptions
+        else if builtins.length ops == 1 && lib.elem "file" kinds
+        then "Materialize proxnix secret ${(lib.head ops).cfg.secret}"
+        else if builtins.length ops == 1 && lib.elem "template" kinds
+        then "Render proxnix secret template ${(lib.head ops).name}"
+        else if builtins.length ops == 1
+        then "Run proxnix secret oneshot ${(lib.head ops).name}"
+        else "Run proxnix secret materializer ${unit}";
+      allAfter = lib.unique ([ "local-fs.target" ] ++ lib.concatMap (op: op.cfg.after) ops);
+      allBefore = lib.unique (lib.concatMap (op: op.cfg.before) ops);
+      allWantedBy = lib.unique (lib.concatMap (op: op.cfg.wantedBy) ops);
+      allRequiredBy = lib.unique (lib.concatMap (op: op.cfg.requiredBy) ops);
+      allPartOf = lib.unique (lib.concatMap (op: op.cfg.partOf) ops);
+      allRuntimeInputs = lib.unique (lib.concatMap (op: op.cfg.runtimeInputs) ops);
+      hasMaterializedState = lib.any (kind: kind != "oneshot") kinds;
+      scriptBody = lib.concatStringsSep "\n\n" (map
+        (op:
+          if op.kind == "file" then
+            mkFileOpScript "${unit}-${op.name}" op.cfg
+          else if op.kind == "template" then
+            mkTemplateOpScript "${unit}-${op.name}" op.cfg
+          else
+            mkOneshotOpScript "${unit}-${op.name}" op.cfg)
+        ops);
+    in
+    lib.nameValuePair unit {
+      description = desc;
+      after = allAfter;
+      before = allBefore;
+      wantedBy = allWantedBy;
+      requiredBy = allRequiredBy;
+      partOf = allPartOf;
+      unitConfig.ConditionPathExists = "/var/lib/proxnix/runtime/bin/proxnix-secrets";
+      serviceConfig = {
+        Type = "oneshot";
+        UMask = "0077";
+        Environment = [ "HOME=/root" ];
+      } // lib.optionalAttrs hasMaterializedState {
+        RemainAfterExit = true;
+      };
+      path = [ pkgs.coreutils pkgs.python3Minimal ] ++ allRuntimeInputs;
+      script = ''
+        set -euo pipefail
+
+        workdir="$(mktemp -d /run/proxnix-secret-unit-${sanitizeUnitName unit}.XXXXXX)"
+        trap 'rm -rf "$workdir"' EXIT
+
+        ${scriptBody}
       '';
     };
+in {
 
-    templates = lib.mkOption {
-      type = lib.types.attrsOf templateSecretType;
-      default = {};
-      description = lib.mdDoc ''
-        Declarative template render units backed by proxnix-secrets.
-      '';
-    };
+  options.proxnix = lib.mkOption {
+    default = {};
+    description = lib.mdDoc ''
+      Public proxnix guest configuration model. Use `proxnix.secrets` for
+      secret sources and delivery, `proxnix.configs` for rendered config
+      artifacts, and `proxnix.common` for the shared guest baseline.
+    '';
+    type = lib.types.submodule {
+      options = {
+        common = lib.mkOption {
+          type = lib.types.submodule {
+            options = commonOptions;
+          };
+          default = {};
+          description = lib.mdDoc ''
+            Shared proxnix guest baseline.
+          '';
+        };
 
-    oneshot = lib.mkOption {
-      type = lib.types.attrsOf oneshotSecretType;
-      default = {};
-      description = lib.mdDoc ''
-        Declarative oneshot secret consumers backed by proxnix-secrets.
-      '';
+        secrets = lib.mkOption {
+          type = lib.types.attrsOf publicSecretType;
+          default = {};
+          description = lib.mdDoc ''
+            Public proxnix-managed secret declarations.
+          '';
+        };
+
+        configs = lib.mkOption {
+          type = lib.types.attrsOf publicConfigType;
+          default = {};
+          description = lib.mdDoc ''
+            Public proxnix-managed rendered config declarations.
+          '';
+        };
+
+        _internal = lib.mkOption {
+          default = {};
+          description = lib.mdDoc ''
+            Internal proxnix plumbing and compatibility hooks.
+          '';
+          type = lib.types.submodule {
+            options = {
+              secrets = lib.mkOption {
+                type = lib.types.submodule {
+                  options = lowLevelSecretsOptions;
+                };
+                default = {};
+                description = lib.mdDoc ''
+                  Internal low-level secret/template engine.
+                '';
+              };
+
+              configTemplateSources = lib.mkOption {
+                type = lib.types.attrsOf lib.types.path;
+                default = {};
+                description = lib.mdDoc ''
+                  Internal registry mapping logical config source names to
+                  template files.
+                '';
+              };
+            };
+          };
+        };
+      };
     };
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
+  config = lib.mkMerge [
 
     {
+      proxnix._internal.secrets.files = publicCompatFileSecrets;
+      proxnix._internal.secrets.templates = publicCompatTemplates;
+
+      assertions = publicModelAssertions;
+    }
+
+    (lib.mkIf cfg.enable {
       environment.systemPackages = cfg.packages ++ cfg.extraPackages;
 
       users.users.${cfg.adminUser} =
@@ -1053,10 +1676,10 @@ in {
         // lib.optionalAttrs (cfg.adminPasswordHash == null && cfg.adminPasswordHashSecretName == null) {
           hashedPassword = "!";
         };
-    }
+    })
 
-    (lib.mkIf (cfg.adminPasswordHash == null && cfg.adminPasswordHashSecretName != null) {
-      proxnix.secrets.oneshot.proxnix-common-admin-password = {
+    (lib.mkIf (cfg.enable && cfg.adminPasswordHash == null && cfg.adminPasswordHashSecretName != null) {
+      proxnix._internal.secrets.oneshot.proxnix-common-admin-password = {
         description = "Apply proxnix admin password hash";
         secret = cfg.adminPasswordHashSecretName;
         optional = true;
@@ -1074,7 +1697,7 @@ in {
       };
     })
 
-    {
+    (lib.mkIf cfg.enable {
       assertions =
         invalidManagedTemplateAssertions
         ++ invalidActivationFileAssertions
@@ -1087,14 +1710,16 @@ in {
         (lib.mapAttrs' mkSecretUnitService secretOpsByUnit)
         // activationFileServiceConfigs
         // activationTemplateServiceConfigs
-        // serviceSecretServiceConfigs;
-    }
+        // serviceSecretServiceConfigs
+        // publicRuntimeSecretUnitConfigs
+        // publicRuntimeSecretServiceConfigs;
+    })
 
-    (lib.mkIf cfg.enableTimesyncd {
+    (lib.mkIf (cfg.enable && cfg.enableTimesyncd) {
       services.timesyncd.enable = true;
     })
 
-    (lib.mkIf cfg.manageJournald {
+    (lib.mkIf (cfg.enable && cfg.manageJournald) {
       services.journald.extraConfig = ''
         SystemMaxUse=${cfg.journaldSystemMaxUse}
         RuntimeMaxUse=${cfg.journaldRuntimeMaxUse}
@@ -1102,10 +1727,10 @@ in {
       '';
     })
 
-    (lib.mkIf cfg.manageSwappiness {
+    (lib.mkIf (cfg.enable && cfg.manageSwappiness) {
       boot.kernel.sysctl."vm.swappiness" = cfg.vmSwappiness;
     })
 
-  ]);
+  ];
 
 }
