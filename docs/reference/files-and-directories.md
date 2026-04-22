@@ -132,8 +132,8 @@ specific to the shell-installer path.
 └── nixos.userns.conf                  auto-included for unprivileged
 
 /usr/share/lxc/hooks/
-├── nixos-proxnix-prestart             pre-start render hook
-├── nixos-proxnix-mount                mount-time sync hook
+├── nixos-proxnix-prestart             pre-start render hook; also supports direct `--vmid/--pve-conf` invocation
+├── nixos-proxnix-mount                mount-time sync hook; also supports direct `--vmid/--rootfs` invocation
 └── nixos-proxnix-poststop             post-stop cleanup hook
 
 /usr/local/lib/proxnix/

@@ -7,20 +7,63 @@
 # files live under copy/, and guest-writable runtime state remains local to the
 # guest rootfs. Secret material is always copied into the guest as root-owned
 # regular files rather than bind-mounted from host staging. This hook is the
-# only proxnix hook that writes into the guest filesystem.
+# only proxnix hook that writes into the guest filesystem. The same script can
+# also be invoked directly by local harnesses with --vmid/--rootfs.
 
 set -uo pipefail
 umask 022  # ensure files written into the container rootfs have sane default permissions
 
-VMID="${LXC_NAME:-}"
-ROOTFS="${LXC_ROOTFS_MOUNT:-}"
+VMID=""
+ROOTFS=""
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 
 log() { echo "[proxnix-mount][${VMID}] $*" >&2; }
 
+usage() {
+    cat <<'EOF'
+Usage:
+  nixos-proxnix-mount
+  nixos-proxnix-mount --vmid <vmid> --rootfs </path/to/rootfs>
+
+When invoked without arguments, this script behaves like the normal LXC mount
+hook and reads VMID/rootfs from LXC_NAME and LXC_ROOTFS_MOUNT.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --vmid)
+            [[ $# -ge 2 ]] || { echo "ERROR: --vmid requires a value" >&2; exit 1; }
+            VMID="$2"
+            shift 2
+            ;;
+        --rootfs)
+            [[ $# -ge 2 ]] || { echo "ERROR: --rootfs requires a value" >&2; exit 1; }
+            ROOTFS="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
 if [[ -z "$VMID" ]]; then
-    log "ERROR: LXC_NAME is not set."
+    VMID="${LXC_NAME:-}"
+fi
+if [[ -z "$ROOTFS" ]]; then
+    ROOTFS="${LXC_ROOTFS_MOUNT:-}"
+fi
+
+if [[ -z "$VMID" ]]; then
+    log "ERROR: VMID not set (pass --vmid or export LXC_NAME)."
     exit 1
 fi
 
@@ -263,7 +306,10 @@ mkdir -p \
 chmod 700 "${ROOTFS}/etc/secrets"
 chmod 700 "${PROXNIX_SECRET_DIR}"
 
-CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${PROXNIX_RUNTIME_CURRENT_HASH}" 2>/dev/null || true)"
+CURRENT_CONFIG_HASH=""
+if [[ -r "${PROXNIX_RUNTIME_CURRENT_HASH}" ]]; then
+    CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${PROXNIX_RUNTIME_CURRENT_HASH}")"
+fi
 copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix" "644"
 bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"
 remove_guest_path "${ROOTFS}/etc/nixos/managed"

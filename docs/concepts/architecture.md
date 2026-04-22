@@ -57,6 +57,11 @@ When `ostype=nixos`, Proxmox auto-includes the proxnix LXC config snippets. Thos
 - `nixos-proxnix-prestart`
 - `nixos-proxnix-mount`
 
+Local harnesses should invoke those same scripts directly rather than
+reimplementing their behavior. `nixos-proxnix-prestart` accepts
+`--vmid/--pve-conf`, and `nixos-proxnix-mount` accepts `--vmid/--rootfs`, so a
+test VM can drive the exact render/apply path without drifting from production.
+
 ### 2. Pre-start hook renders desired state
 
 The pre-start hook runs on the Proxmox host before the container rootfs is handed off.
