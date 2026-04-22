@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -9,7 +10,7 @@ from unittest.mock import patch
 from proxnix_workstation.config import WorkstationConfig, load_workstation_config
 from proxnix_workstation.exercise_cli import build_generated_config, render_config_file
 from proxnix_workstation.publish_cli import build_compiled_secret_store
-from proxnix_workstation.secret_provider import ExecSecretProvider, load_secret_provider
+from proxnix_workstation.secret_provider import ExecSecretProvider, NamedSecretProvider, load_secret_provider
 from proxnix_workstation.paths import SitePaths
 from proxnix_workstation.errors import ProxnixWorkstationError
 from proxnix_workstation.secret_provider_adapters import (
@@ -99,7 +100,7 @@ class ExecSecretProviderTests(unittest.TestCase):
         self.assertEqual(forwarded_env["PROXNIX_PASS_STORE_DIR"], "/tmp/pass-store")
         self.assertEqual(forwarded_env["VAULT_ADDR"], "https://vault.example.test")
 
-    def test_named_provider_alias_returns_internal_exec_adapter(self) -> None:
+    def test_named_provider_alias_returns_internal_named_adapter(self) -> None:
         config = _test_config()
         config = WorkstationConfig(
             config_file=config.config_file,
@@ -116,15 +117,23 @@ class ExecSecretProviderTests(unittest.TestCase):
 
         provider = load_secret_provider(config)
 
-        self.assertIsInstance(provider, ExecSecretProvider)
-        self.assertEqual(
-            provider.command[1:3],
-            ["-m", "proxnix_workstation.secret_provider_adapters"],
-        )
-        self.assertEqual(provider.command[3], "pass")
+        self.assertIsInstance(provider, NamedSecretProvider)
+        self.assertEqual(provider.describe(), "pass")
 
     def test_named_provider_aliases_include_passhole_pykeepass_bws_vault_op_and_infisical(self) -> None:
         base = _test_config()
+        expected_names = {
+            "passhole": "passhole",
+            "pykeepass": "pykeepass",
+            "bws": "bws",
+            "bitwarden-secrets": "bws",
+            "vault": "vault-kv",
+            "vault-kv": "vault-kv",
+            "op": "op",
+            "1password": "op",
+            "onepassword": "op",
+            "infisical": "infisical",
+        }
         for alias in (
             "passhole",
             "pykeepass",
@@ -150,9 +159,43 @@ class ExecSecretProviderTests(unittest.TestCase):
                 provider_environment=base.provider_environment,
             )
             provider = load_secret_provider(config)
-            self.assertIsInstance(provider, ExecSecretProvider)
-            self.assertEqual(provider.command[1:3], ["-m", "proxnix_workstation.secret_provider_adapters"])
-            self.assertEqual(provider.command[3], alias)
+            self.assertIsInstance(provider, NamedSecretProvider)
+            self.assertEqual(provider.describe(), expected_names[alias])
+
+    def test_named_provider_caches_scope_exports_and_gets(self) -> None:
+        provider = NamedSecretProvider("pass")
+        ref = type(
+            "Ref",
+            (),
+            {"scope": "shared", "vmid": None, "group": None, "cli_args": lambda self: ["--scope", "shared"]},
+        )()
+
+        with patch.object(provider.adapter, "export_scope", return_value={"alpha": "one"}) as export_mock:
+            self.assertEqual(provider.export_scope(ref), {"alpha": "one"})
+            self.assertEqual(provider.get(ref, "alpha"), "one")
+            self.assertEqual(provider.list_names(ref), ["alpha"])
+            self.assertTrue(provider.has_any(ref))
+
+        export_mock.assert_called_once()
+
+    def test_named_provider_applies_configured_environment(self) -> None:
+        provider = NamedSecretProvider(
+            "pass",
+            extra_env={"PROXNIX_SECRET_PATH_PREFIX": "team/proxnix"},
+        )
+
+        observed: dict[str, str | None] = {}
+
+        def fake_list(*, scope, vmid, group):
+            observed["prefix"] = os.environ.get("PROXNIX_SECRET_PATH_PREFIX")
+            return ["alpha"]
+
+        with patch.object(provider.adapter, "list", side_effect=fake_list) as list_mock:
+            provider.list_names(type("Ref", (), {"scope": "shared", "vmid": None, "group": None})())
+
+        self.assertEqual(list_mock.call_count, 1)
+        self.assertEqual(observed["prefix"], "team/proxnix")
+        self.assertNotIn("PROXNIX_SECRET_PATH_PREFIX", os.environ)
 
 
 class NamedAdapterTests(unittest.TestCase):
@@ -326,6 +369,22 @@ class NamedAdapterTests(unittest.TestCase):
         self.assertEqual([(entry.title, entry.password) for entry in app_group.entries], [("api_key", "new-secret")])
         self.assertEqual(fake_kp.deleted[0].title, "alpha")
         self.assertEqual(fake_kp.saved, 2)
+
+    def test_pykeepass_adapter_opens_database_once_per_instance(self) -> None:
+        adapter = PyKeePassAdapter()
+        fake_kp = self._FakePyKeePass()
+
+        with patch.object(adapter, "_pykeepass_class", return_value=lambda *args, **kwargs: fake_kp) as class_mock:
+            with patch.dict(
+                "os.environ",
+                {"PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx"},
+                clear=False,
+            ):
+                adapter.list(scope="shared", vmid=None, group=None)
+                adapter.get(scope="shared", vmid=None, group=None, name="alpha")
+                adapter.export_scope(scope="shared", vmid=None, group=None)
+
+        class_mock.assert_called_once()
 
     def test_keepassxc_cli_adapter_uses_database_and_unlock_options(self) -> None:
         adapter = KeePassXCCliAdapter()

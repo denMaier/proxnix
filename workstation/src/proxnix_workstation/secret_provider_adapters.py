@@ -63,6 +63,9 @@ def _env_path(name: str) -> str:
 class _BaseNamedAdapter:
     name = "unknown"
 
+    def __init__(self) -> None:
+        super().__init__()
+
     def capabilities(self) -> list[str]:
         return ["list", "get", "set", "remove", "export-scope"]
 
@@ -298,6 +301,10 @@ class PassholeAdapter(_BaseNamedAdapter):
 class PyKeePassAdapter(_BaseNamedAdapter):
     name = "pykeepass"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._database = None
+
     def _database_path(self) -> str:
         path = _env_path("PROXNIX_PYKEEPASS_DATABASE")
         if not path:
@@ -331,13 +338,16 @@ class PyKeePassAdapter(_BaseNamedAdapter):
         return pykeepass_class
 
     def _open_database(self):
+        if self._database is not None:
+            return self._database
         pykeepass_class = self._pykeepass_class()
         try:
-            return pykeepass_class(
+            self._database = pykeepass_class(
                 self._database_path(),
                 password=self._password(),
                 keyfile=self._keyfile_path(),
             )
+            return self._database
         except Exception as exc:
             raise AdapterError(f"failed to open pykeepass database: {exc}") from exc
 
@@ -501,6 +511,10 @@ class KeePassXCCliAdapter(_BaseNamedAdapter):
 class OnePasswordAdapter(_BaseNamedAdapter):
     name = "op"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._items_cache: dict[str, list[dict[str, object]]] = {}
+
     def _vault(self) -> str:
         vault = os.environ.get("PROXNIX_1PASSWORD_VAULT", "").strip()
         if not vault:
@@ -540,6 +554,9 @@ class OnePasswordAdapter(_BaseNamedAdapter):
         return None
 
     def _list_items(self, *, scope: str, vmid: str | None, group: str | None) -> list[dict[str, object]]:
+        cache_key = self._scope_tag(scope=scope, vmid=vmid, group=group)
+        if cache_key in self._items_cache:
+            return list(self._items_cache[cache_key])
         completed = self._run(
             [
                 "item",
@@ -558,7 +575,9 @@ class OnePasswordAdapter(_BaseNamedAdapter):
             return []
         payload = json.loads(completed.stdout or "[]")
         if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
+            items = [item for item in payload if isinstance(item, dict)]
+            self._items_cache[cache_key] = items
+            return list(items)
         return []
 
     def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
@@ -612,6 +631,7 @@ class OnePasswordAdapter(_BaseNamedAdapter):
                         *self._account_args(),
                     ]
                 )
+                self._items_cache.pop(scope_tag, None)
                 return
         self._run(
             [
@@ -629,8 +649,10 @@ class OnePasswordAdapter(_BaseNamedAdapter):
                 *self._account_args(),
             ]
         )
+        self._items_cache.pop(scope_tag, None)
 
     def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
+        scope_tag = self._scope_tag(scope=scope, vmid=vmid, group=group)
         for item in self._list_items(scope=scope, vmid=vmid, group=group):
             if item.get("title") == name and isinstance(item.get("id"), str):
                 self._run(
@@ -644,10 +666,16 @@ class OnePasswordAdapter(_BaseNamedAdapter):
                     ],
                     check=False,
                 )
+                self._items_cache.pop(scope_tag, None)
                 return
 
 class BitwardenSecretsAdapter(_BaseNamedAdapter):
     name = "bws"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._projects_cache: list[dict[str, object]] | None = None
+        self._secrets_cache: dict[str, list[dict[str, object]]] = {}
 
     def _run(self, args: list[str], *, input_text: str | None = None, check: bool = True):
         return run_command(["bws", *args], input_text=input_text, check=check)
@@ -656,12 +684,15 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
         return self.scope_path(scope=scope, vmid=vmid, group=group)
 
     def _projects(self) -> list[dict[str, object]]:
+        if self._projects_cache is not None:
+            return list(self._projects_cache)
         completed = self._run(["project", "list"], check=False)
         if completed.returncode != 0:
             return []
         payload = json.loads(completed.stdout or "[]")
         if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
+            self._projects_cache = [item for item in payload if isinstance(item, dict)]
+            return list(self._projects_cache)
         return []
 
     def _project_id(self, *, scope: str, vmid: str | None, group: str | None) -> str | None:
@@ -680,15 +711,20 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
         project_id = payload.get("id")
         if not isinstance(project_id, str) or not project_id:
             raise AdapterError("bws project create did not return a project id")
+        self._projects_cache = None
         return project_id
 
     def _list_secrets(self, *, project_id: str) -> list[dict[str, object]]:
+        if project_id in self._secrets_cache:
+            return list(self._secrets_cache[project_id])
         completed = self._run(["secret", "list", project_id], check=False)
         if completed.returncode != 0:
             return []
         payload = json.loads(completed.stdout or "[]")
         if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
+            items = [item for item in payload if isinstance(item, dict)]
+            self._secrets_cache[project_id] = items
+            return list(items)
         return []
 
     def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
@@ -728,8 +764,10 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
                         project_id,
                     ]
                 )
+                self._secrets_cache.pop(project_id, None)
                 return
         self._run(["secret", "create", name, value, project_id])
+        self._secrets_cache.pop(project_id, None)
 
     def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
         project_id = self._project_id(scope=scope, vmid=vmid, group=group)
@@ -738,6 +776,7 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
         for item in self._list_secrets(project_id=project_id):
             if item.get("key") == name and isinstance(item.get("id"), str):
                 self._run(["secret", "delete", item["id"]], check=False)
+                self._secrets_cache.pop(project_id, None)
                 return
 
     def export_scope(self, *, scope: str, vmid: str | None, group: str | None) -> dict[str, str]:
@@ -926,6 +965,10 @@ def _adapter_for_name(name: str) -> _BaseNamedAdapter:
     if name in {"vault", "vault-kv"}:
         return VaultKvAdapter()
     raise AdapterError(f"unsupported named secret provider adapter: {name}")
+
+
+def create_named_adapter(name: str) -> _BaseNamedAdapter:
+    return _adapter_for_name(name)
 
 
 def build_parser() -> argparse.ArgumentParser:

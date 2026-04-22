@@ -87,14 +87,14 @@ def cmd_ls_group(config: WorkstationConfig, group: str) -> int:
 def cmd_get(config: WorkstationConfig, vmid: str, name: str) -> int:
     site_paths = need_tools(config)
     provider = load_secret_provider(config, site_paths)
-    value = provider.get(container_scope(vmid), name)
-    if value is not None:
-        print(value)
+    container_data = provider.export_scope(container_scope(vmid))
+    if name in container_data:
+        print(container_data[name])
         return 0
 
     matched_group: str | None = None
     for group in read_container_secret_groups(site_paths, vmid):
-        if provider.get(group_scope(group), name) is not None:
+        if name in provider.export_scope(group_scope(group)):
             if matched_group is not None:
                 raise ProxnixWorkstationError(
                     f"secret {name} is ambiguous for vmid={vmid}: found in groups {matched_group} and {group}"
@@ -102,18 +102,13 @@ def cmd_get(config: WorkstationConfig, vmid: str, name: str) -> int:
             matched_group = group
 
     if matched_group is not None:
-        group_value = provider.get(group_scope(matched_group), name)
-        if group_value is None:
-            raise ProxnixWorkstationError(
-                f"group secret disappeared while resolving vmid={vmid} name={name}"
-            )
-        print(group_value)
+        print(provider.export_scope(group_scope(matched_group))[name])
         return 0
 
-    shared_value = provider.get(shared_scope(), name)
-    if shared_value is None:
+    shared_data = provider.export_scope(shared_scope())
+    if name not in shared_data:
         raise ProxnixWorkstationError(f"secret not found for vmid={vmid}: {name}")
-    print(shared_value)
+    print(shared_data[name])
     return 0
 
 
