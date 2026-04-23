@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "proxnix-workstation"
-version = "0.2.1"
+version = "0.2.2"
 description = "Workstation CLI and TUI tooling for proxnix relay-cache publishing and secrets management"
 readme = "README.md"
 license = "MIT"
