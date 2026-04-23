@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import argparse
 import importlib
 import json
@@ -444,7 +445,7 @@ class PyKeePassAdapter(_BaseNamedAdapter):
         return data
 
 class KeePassXCCliAdapter(_BaseNamedAdapter):
-    name = "keepassxc-cli"
+    name = "keepassxc"
 
     def capabilities(self) -> list[str]:
         return ["list", "get", "set", "remove", "export-scope"]
@@ -452,7 +453,7 @@ class KeePassXCCliAdapter(_BaseNamedAdapter):
     def _database_path(self) -> str:
         path = _env_path("PROXNIX_KEEPASSXC_DATABASE")
         if not path:
-            raise AdapterError("PROXNIX_KEEPASSXC_DATABASE is required for keepassxc-cli provider")
+            raise AdapterError("PROXNIX_KEEPASSXC_DATABASE is required for keepassxc provider")
         return path
 
     def _unlock_args(self) -> list[str]:
@@ -513,7 +514,7 @@ class KeePassXCCliAdapter(_BaseNamedAdapter):
         )
 
 class OnePasswordAdapter(_BaseNamedAdapter):
-    name = "op"
+    name = "onepassword-cli"
 
     def __init__(self) -> None:
         super().__init__()
@@ -673,8 +674,247 @@ class OnePasswordAdapter(_BaseNamedAdapter):
                 self._items_cache.pop(scope_tag, None)
                 return
 
+class OnePasswordSdkAdapter(_BaseNamedAdapter):
+    name = "onepassword"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._client = None
+        self._vault_id: str | None = None
+        self._items_cache: dict[str, list[object]] = {}
+
+    def _vault(self) -> str:
+        vault = os.environ.get("PROXNIX_1PASSWORD_VAULT", "").strip()
+        if not vault:
+            raise AdapterError("PROXNIX_1PASSWORD_VAULT is required for onepassword provider")
+        return vault
+
+    def _auth(self) -> str:
+        configured = os.environ.get("PROXNIX_1PASSWORD_SDK_AUTH", "").strip()
+        if configured:
+            return configured
+        token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip()
+        if token:
+            return token
+        raise AdapterError(
+            "PROXNIX_1PASSWORD_SDK_AUTH or OP_SERVICE_ACCOUNT_TOKEN is required for onepassword provider"
+        )
+
+    def _integration_name(self) -> str:
+        return os.environ.get("PROXNIX_1PASSWORD_SDK_INTEGRATION_NAME", "proxnix").strip() or "proxnix"
+
+    def _integration_version(self) -> str:
+        return os.environ.get("PROXNIX_1PASSWORD_SDK_INTEGRATION_VERSION", "dev").strip() or "dev"
+
+    def _run_async(self, coro):
+        return asyncio.run(coro)
+
+    def _client_module(self):
+        try:
+            return importlib.import_module("onepassword.client")
+        except ImportError as exc:
+            raise AdapterError("onepassword-sdk package is not installed") from exc
+
+    def _types_module(self):
+        try:
+            return importlib.import_module("onepassword.types")
+        except ImportError as exc:
+            raise AdapterError("onepassword-sdk package is not installed") from exc
+
+    def _sdk_call(self, action: str, coro):
+        try:
+            return self._run_async(coro)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise AdapterError(f"onepassword {action} failed: {exc}") from exc
+
+    def _open_client(self):
+        if self._client is not None:
+            return self._client
+        client_module = self._client_module()
+        client_class = getattr(client_module, "Client", None)
+        if client_class is None:
+            raise AdapterError("onepassword.client does not expose Client")
+        self._client = self._sdk_call(
+            "authenticate",
+            client_class.authenticate(
+                auth=self._auth(),
+                integration_name=self._integration_name(),
+                integration_version=self._integration_version(),
+            ),
+        )
+        return self._client
+
+    def _resolve_vault_id(self) -> str:
+        if self._vault_id is not None:
+            return self._vault_id
+        configured = self._vault()
+        client = self._open_client()
+        vaults = self._sdk_call("list vaults", client.vaults.list())
+        for vault in vaults:
+            vault_id = getattr(vault, "id", None)
+            if isinstance(vault_id, str) and vault_id == configured:
+                self._vault_id = vault_id
+                return vault_id
+        matches = [
+            getattr(vault, "id", None)
+            for vault in vaults
+            if getattr(vault, "title", None) == configured and isinstance(getattr(vault, "id", None), str)
+        ]
+        if len(matches) == 1:
+            self._vault_id = matches[0]
+            return matches[0]
+        if len(matches) > 1:
+            raise AdapterError(f"multiple 1Password SDK vaults matched {configured!r}")
+        raise AdapterError(f"1Password SDK vault not found: {configured}")
+
+    def _scope_tag(self, *, scope: str, vmid: str | None, group: str | None) -> str:
+        return self.scope_path(scope=scope, vmid=vmid, group=group)
+
+    def _item_tags(self, item: object) -> list[str]:
+        tags = getattr(item, "tags", None)
+        if not isinstance(tags, list):
+            return []
+        return [tag for tag in tags if isinstance(tag, str)]
+
+    def _item_id(self, item: object) -> str | None:
+        item_id = getattr(item, "id", None)
+        return item_id if isinstance(item_id, str) and item_id else None
+
+    def _list_items(self, *, scope: str, vmid: str | None, group: str | None) -> list[object]:
+        cache_key = self._scope_tag(scope=scope, vmid=vmid, group=group)
+        if cache_key in self._items_cache:
+            return list(self._items_cache[cache_key])
+        client = self._open_client()
+        items = self._sdk_call("list items", client.items.list(self._resolve_vault_id()))
+        filtered = [item for item in items if cache_key in self._item_tags(item)]
+        self._items_cache[cache_key] = list(filtered)
+        return list(filtered)
+
+    def _field_type_value(self, field: object) -> str:
+        field_type = getattr(field, "field_type", None)
+        if isinstance(field_type, str):
+            return field_type
+        value = getattr(field_type, "value", None)
+        return value if isinstance(value, str) else str(field_type)
+
+    def _password_field(self, item: object):
+        fields = getattr(item, "fields", None)
+        if not isinstance(fields, list):
+            return None
+        concealed_fields: list[object] = []
+        for field in fields:
+            field_id = getattr(field, "id", None)
+            title = getattr(field, "title", None)
+            if field_id == "password":
+                return field
+            if isinstance(title, str) and title.lower() == "password":
+                return field
+            if self._field_type_value(field) == "Concealed":
+                concealed_fields.append(field)
+        if len(concealed_fields) == 1:
+            return concealed_fields[0]
+        return None
+
+    def _password_value(self, item: object) -> str | None:
+        field = self._password_field(item)
+        if field is None:
+            return None
+        value = getattr(field, "value", None)
+        return value if isinstance(value, str) else None
+
+    def _make_password_field(self, value: str):
+        types_module = self._types_module()
+        return types_module.ItemField(
+            id="password",
+            title="password",
+            field_type=types_module.ItemFieldType.CONCEALED,
+            value=value,
+        )
+
+    def _fetch_item(self, item_id: str):
+        client = self._open_client()
+        return self._sdk_call("get item", client.items.get(self._resolve_vault_id(), item_id))
+
+    def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
+        names = [
+            item["title"] if isinstance(item, dict) else getattr(item, "title", None)
+            for item in self._list_items(scope=scope, vmid=vmid, group=group)
+        ]
+        return sorted({name for name in names if isinstance(name, str) and name})
+
+    def get(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> str | None:
+        for item in self._list_items(scope=scope, vmid=vmid, group=group):
+            if getattr(item, "title", None) != name:
+                continue
+            item_id = self._item_id(item)
+            if item_id is None:
+                continue
+            return self._password_value(self._fetch_item(item_id))
+        return None
+
+    def set(self, *, scope: str, vmid: str | None, group: str | None, name: str, value: str) -> None:
+        scope_tag = self._scope_tag(scope=scope, vmid=vmid, group=group)
+        client = self._open_client()
+        for item in self._list_items(scope=scope, vmid=vmid, group=group):
+            if getattr(item, "title", None) != name:
+                continue
+            item_id = self._item_id(item)
+            if item_id is None:
+                continue
+            full_item = self._fetch_item(item_id)
+            password_field = self._password_field(full_item)
+            if password_field is None:
+                fields = list(getattr(full_item, "fields", []))
+                fields.append(self._make_password_field(value))
+                full_item.fields = fields
+            else:
+                password_field.value = value
+            full_item.title = name
+            full_item.tags = [scope_tag]
+            self._sdk_call("update item", client.items.put(full_item))
+            self._items_cache.pop(scope_tag, None)
+            return
+
+        types_module = self._types_module()
+        params = types_module.ItemCreateParams(
+            category=types_module.ItemCategory.PASSWORD,
+            vault_id=self._resolve_vault_id(),
+            title=name,
+            tags=[scope_tag],
+            fields=[self._make_password_field(value)],
+        )
+        self._sdk_call("create item", client.items.create(params))
+        self._items_cache.pop(scope_tag, None)
+
+    def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
+        scope_tag = self._scope_tag(scope=scope, vmid=vmid, group=group)
+        client = self._open_client()
+        for item in self._list_items(scope=scope, vmid=vmid, group=group):
+            if getattr(item, "title", None) != name:
+                continue
+            item_id = self._item_id(item)
+            if item_id is None:
+                continue
+            self._sdk_call("delete item", client.items.delete(self._resolve_vault_id(), item_id))
+            self._items_cache.pop(scope_tag, None)
+            return
+
+    def export_scope(self, *, scope: str, vmid: str | None, group: str | None) -> dict[str, str]:
+        data: dict[str, str] = {}
+        for item in self._list_items(scope=scope, vmid=vmid, group=group):
+            title = getattr(item, "title", None)
+            item_id = self._item_id(item)
+            if not isinstance(title, str) or item_id is None:
+                continue
+            value = self._password_value(self._fetch_item(item_id))
+            if value is not None:
+                data[title] = value
+        return data
+
 class BitwardenSecretsAdapter(_BaseNamedAdapter):
-    name = "bws"
+    name = "bitwarden-cli"
 
     def __init__(self) -> None:
         super().__init__()
@@ -795,158 +1035,277 @@ class BitwardenSecretsAdapter(_BaseNamedAdapter):
                 data[key] = value
         return data
 
-class InfisicalAdapter(_BaseNamedAdapter):
-    name = "infisical"
+class BitwardenSdkAdapter(_BaseNamedAdapter):
+    name = "bitwarden"
 
-    def project_id(self) -> str:
-        project_id = os.environ.get("PROXNIX_INFISICAL_PROJECT_ID", "").strip()
-        if not project_id:
-            raise AdapterError("PROXNIX_INFISICAL_PROJECT_ID is required for Infisical provider")
-        return project_id
+    def __init__(self) -> None:
+        super().__init__()
+        self._client = None
+        self._projects_cache: list[object] | None = None
+        self._secrets_cache: dict[str, list[object]] = {}
 
-    def environment(self) -> str:
-        return os.environ.get("PROXNIX_INFISICAL_ENV", "dev").strip() or "dev"
+    def _sdk_module(self):
+        try:
+            return importlib.import_module("bitwarden_sdk")
+        except ImportError as exc:
+            raise AdapterError("bitwarden-sdk package is not installed") from exc
 
-    def secret_type(self) -> str:
-        return os.environ.get("PROXNIX_INFISICAL_TYPE", "shared").strip() or "shared"
-
-    def path_prefix(self) -> str:
-        return "/" + self.root_prefix().strip("/")
-
-    def scope_path(self, *, scope: str, vmid: str | None, group: str | None) -> str:
-        return "/" + _scope_prefix(scope, vmid=vmid, group=group, root=self.path_prefix().strip("/"))
-
-    def _base_args(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
-        return [
-            "--projectId",
-            self.project_id(),
-            "--env",
-            self.environment(),
-            "--path",
-            self.scope_path(scope=scope, vmid=vmid, group=group),
-        ]
-
-    def _run(self, args: list[str], *, input_text: str | None = None, check: bool = True):
-        return run_command(["infisical", *args], input_text=input_text, check=check)
-
-    def export_scope(self, *, scope: str, vmid: str | None, group: str | None) -> dict[str, str]:
-        completed = self._run(
-            ["export", "--format=json", *self._base_args(scope=scope, vmid=vmid, group=group)],
-            check=False,
+    def _organization_id(self) -> str:
+        organization_id = (
+            os.environ.get("PROXNIX_BITWARDEN_ORGANIZATION_ID", "").strip()
+            or os.environ.get("ORGANIZATION_ID", "").strip()
         )
-        if completed.returncode != 0:
-            return {}
-        payload = json.loads(completed.stdout or "{}")
-        if not isinstance(payload, dict):
-            raise AdapterError("infisical export did not return a JSON object")
-        return {str(key): value for key, value in payload.items() if isinstance(value, str)}
+        if not organization_id:
+            raise AdapterError(
+                "PROXNIX_BITWARDEN_ORGANIZATION_ID or ORGANIZATION_ID is required for bitwarden provider"
+            )
+        return organization_id
 
-    def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
-        return sorted(self.export_scope(scope=scope, vmid=vmid, group=group))
-
-    def get(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> str | None:
-        completed = self._run(
-            [
-                "secrets",
-                "get",
-                name,
-                "--plain",
-                "--silent",
-                *self._base_args(scope=scope, vmid=vmid, group=group),
-            ],
-            check=False,
+    def _access_token(self) -> str:
+        access_token = (
+            os.environ.get("PROXNIX_BITWARDEN_ACCESS_TOKEN", "").strip()
+            or os.environ.get("ACCESS_TOKEN", "").strip()
         )
-        if completed.returncode != 0:
-            return None
-        return completed.stdout.rstrip("\n")
+        if not access_token:
+            raise AdapterError(
+                "PROXNIX_BITWARDEN_ACCESS_TOKEN or ACCESS_TOKEN is required for bitwarden provider"
+            )
+        return access_token
 
-    def set(self, *, scope: str, vmid: str | None, group: str | None, name: str, value: str) -> None:
-        self._run(
-            [
-                "secrets",
-                "set",
-                f"{name}={value}",
-                "--type",
-                self.secret_type(),
-                *self._base_args(scope=scope, vmid=vmid, group=group),
-            ]
+    def _state_file(self) -> str | None:
+        proxnix_state = _env_path("PROXNIX_BITWARDEN_STATE_FILE")
+        if proxnix_state:
+            return proxnix_state
+        legacy_state = _env_path("STATE_FILE")
+        return legacy_state or None
+
+    def _api_url(self) -> str | None:
+        value = os.environ.get("PROXNIX_BITWARDEN_API_URL", "").strip() or os.environ.get("API_URL", "").strip()
+        return value or None
+
+    def _identity_url(self) -> str | None:
+        value = (
+            os.environ.get("PROXNIX_BITWARDEN_IDENTITY_URL", "").strip()
+            or os.environ.get("IDENTITY_URL", "").strip()
         )
+        return value or None
 
-    def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
-        self._run(
-            [
-                "secrets",
-                "delete",
-                name,
-                *self._base_args(scope=scope, vmid=vmid, group=group),
-            ],
-            check=False,
-        )
+    def _user_agent(self) -> str:
+        return os.environ.get("PROXNIX_BITWARDEN_USER_AGENT", "proxnix").strip() or "proxnix"
 
-class VaultKvAdapter(_BaseNamedAdapter):
-    name = "vault-kv"
+    def _open_client(self):
+        if self._client is not None:
+            return self._client
+        module = self._sdk_module()
+        client_class = getattr(module, "BitwardenClient", None)
+        if client_class is None:
+            raise AdapterError("bitwarden_sdk does not expose BitwardenClient")
+        settings = None
+        if self._api_url() or self._identity_url() or self._user_agent():
+            settings_factory = getattr(module, "client_settings_from_dict", None)
+            device_type = getattr(module, "DeviceType", None)
+            if settings_factory is None or device_type is None or not hasattr(device_type, "SDK"):
+                raise AdapterError(
+                    "bitwarden_sdk must expose client_settings_from_dict and DeviceType.SDK"
+                )
+            settings_payload = {
+                "deviceType": device_type.SDK,
+                "userAgent": self._user_agent(),
+            }
+            if self._api_url():
+                settings_payload["apiUrl"] = self._api_url()
+            if self._identity_url():
+                settings_payload["identityUrl"] = self._identity_url()
+            settings = settings_factory(settings_payload)
+        try:
+            self._client = client_class(settings)
+            self._client.auth().login_access_token(self._access_token(), self._state_file())
+            return self._client
+        except Exception as exc:
+            raise AdapterError(f"failed to authenticate bitwarden client: {exc}") from exc
 
-    def mount(self) -> str:
-        return os.environ.get("PROXNIX_VAULT_MOUNT", "secret").strip() or "secret"
+    def _response_single(self, response):
+        data = getattr(response, "data", None)
+        return getattr(data, "data", data)
 
-    def _run(self, args: list[str], *, input_text: str | None = None, check: bool = True):
-        return run_command(["vault", *args], input_text=input_text, check=check)
+    def _response_items(self, response) -> list[object]:
+        payload = self._response_single(response)
+        return payload if isinstance(payload, list) else []
 
-    def _list_payload_keys(self, payload: object) -> list[str]:
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, str)]
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if isinstance(data, list):
-                return [item for item in data if isinstance(item, str)]
-            if isinstance(data, dict):
-                keys = data.get("keys")
-                if isinstance(keys, list):
-                    return [item for item in keys if isinstance(item, str)]
+    def _project_name(self, *, scope: str, vmid: str | None, group: str | None) -> str:
+        return self.scope_path(scope=scope, vmid=vmid, group=group)
+
+    def _project_id_value(self, item: object) -> str | None:
+        project_id = getattr(item, "id", None)
+        return project_id if isinstance(project_id, str) and project_id else None
+
+    def _project_name_value(self, item: object) -> str | None:
+        name = getattr(item, "name", None)
+        return name if isinstance(name, str) and name else None
+
+    def _secret_id_value(self, item: object) -> str | None:
+        secret_id = getattr(item, "id", None)
+        return secret_id if isinstance(secret_id, str) and secret_id else None
+
+    def _secret_key_value(self, item: object) -> str | None:
+        key = getattr(item, "key", None)
+        return key if isinstance(key, str) and key else None
+
+    def _secret_value(self, item: object) -> str | None:
+        value = getattr(item, "value", None)
+        return value if isinstance(value, str) else None
+
+    def _secret_project_ids(self, item: object) -> list[str]:
+        project_ids = getattr(item, "project_ids", None)
+        if isinstance(project_ids, list):
+            return [project_id for project_id in project_ids if isinstance(project_id, str) and project_id]
+        project_id = getattr(item, "project_id", None)
+        if isinstance(project_id, str) and project_id:
+            return [project_id]
+        projects = getattr(item, "projects", None)
+        if isinstance(projects, list):
+            result: list[str] = []
+            for project in projects:
+                nested_id = getattr(project, "id", None)
+                if isinstance(nested_id, str) and nested_id:
+                    result.append(nested_id)
+            return result
         return []
 
-    def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
-        target = self.scope_path(scope=scope, vmid=vmid, group=group) + "/"
-        completed = self._run(
-            ["kv", "list", "-format=json", f"-mount={self.mount()}", target],
-            check=False,
-        )
-        if completed.returncode != 0:
+    def _projects(self) -> list[object]:
+        if self._projects_cache is not None:
+            return list(self._projects_cache)
+        client = self._open_client()
+        try:
+            response = client.projects().list(self._organization_id())
+        except Exception as exc:
+            raise AdapterError(f"bitwarden project list failed: {exc}") from exc
+        self._projects_cache = self._response_items(response)
+        return list(self._projects_cache)
+
+    def _project_id(self, *, scope: str, vmid: str | None, group: str | None) -> str | None:
+        expected = self._project_name(scope=scope, vmid=vmid, group=group)
+        for item in self._projects():
+            if self._project_name_value(item) == expected:
+                return self._project_id_value(item)
+        return None
+
+    def _ensure_project_id(self, *, scope: str, vmid: str | None, group: str | None) -> str:
+        project_id = self._project_id(scope=scope, vmid=vmid, group=group)
+        if project_id is not None:
+            return project_id
+        client = self._open_client()
+        try:
+            response = client.projects().create(
+                self._organization_id(),
+                self._project_name(scope=scope, vmid=vmid, group=group),
+            )
+        except Exception as exc:
+            raise AdapterError(f"bitwarden project create failed: {exc}") from exc
+        project = self._response_single(response)
+        project_id = self._project_id_value(project)
+        if project_id is None:
+            raise AdapterError("bitwarden project create did not return a project id")
+        self._projects_cache = None
+        return project_id
+
+    def _list_secrets(self, *, project_id: str) -> list[object]:
+        if project_id in self._secrets_cache:
+            return list(self._secrets_cache[project_id])
+        client = self._open_client()
+        try:
+            identifiers = self._response_items(client.secrets().list(self._organization_id()))
+        except Exception as exc:
+            raise AdapterError(f"bitwarden secret list failed: {exc}") from exc
+        ids = [secret_id for item in identifiers if (secret_id := self._secret_id_value(item)) is not None]
+        if not ids:
+            self._secrets_cache[project_id] = []
             return []
-        payload = json.loads(completed.stdout or "[]")
-        names = [name.rstrip("/") for name in self._list_payload_keys(payload)]
-        return sorted(set(filter(None, names)))
+        try:
+            full_items = self._response_items(client.secrets().get_by_ids(ids))
+        except Exception as exc:
+            raise AdapterError(f"bitwarden secret bulk fetch failed: {exc}") from exc
+        filtered = [item for item in full_items if project_id in self._secret_project_ids(item)]
+        self._secrets_cache[project_id] = filtered
+        return list(filtered)
+
+    def list(self, *, scope: str, vmid: str | None, group: str | None) -> list[str]:
+        project_id = self._project_id(scope=scope, vmid=vmid, group=group)
+        if project_id is None:
+            return []
+        return sorted(
+            {
+                key
+                for item in self._list_secrets(project_id=project_id)
+                if (key := self._secret_key_value(item)) is not None
+            }
+        )
 
     def get(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> str | None:
-        target = self.secret_path(scope=scope, vmid=vmid, group=group, name=name)
-        completed = self._run(
-            ["kv", "get", "-field=value", f"-mount={self.mount()}", target],
-            check=False,
-        )
-        if completed.returncode != 0:
+        project_id = self._project_id(scope=scope, vmid=vmid, group=group)
+        if project_id is None:
             return None
-        return completed.stdout
+        for item in self._list_secrets(project_id=project_id):
+            if self._secret_key_value(item) == name:
+                return self._secret_value(item)
+        return None
 
     def set(self, *, scope: str, vmid: str | None, group: str | None, name: str, value: str) -> None:
-        target = self.secret_path(scope=scope, vmid=vmid, group=group, name=name)
-        self._run(
-            ["kv", "put", f"-mount={self.mount()}", target, "value=-"],
-            input_text=value,
-        )
+        project_id = self._ensure_project_id(scope=scope, vmid=vmid, group=group)
+        client = self._open_client()
+        for item in self._list_secrets(project_id=project_id):
+            secret_id = self._secret_id_value(item)
+            if self._secret_key_value(item) == name and secret_id is not None:
+                try:
+                    client.secrets().update(
+                        self._organization_id(),
+                        secret_id,
+                        name,
+                        value,
+                        None,
+                        [project_id],
+                    )
+                except Exception as exc:
+                    raise AdapterError(f"bitwarden secret update failed: {exc}") from exc
+                self._secrets_cache.pop(project_id, None)
+                return
+        try:
+            client.secrets().create(
+                self._organization_id(),
+                name,
+                value,
+                None,
+                [project_id],
+            )
+        except Exception as exc:
+            raise AdapterError(f"bitwarden secret create failed: {exc}") from exc
+        self._secrets_cache.pop(project_id, None)
 
     def remove(self, *, scope: str, vmid: str | None, group: str | None, name: str) -> None:
-        target = self.secret_path(scope=scope, vmid=vmid, group=group, name=name)
-        self._run(
-            ["kv", "metadata", "delete", f"-mount={self.mount()}", target],
-            check=False,
-        )
+        project_id = self._project_id(scope=scope, vmid=vmid, group=group)
+        if project_id is None:
+            return
+        client = self._open_client()
+        for item in self._list_secrets(project_id=project_id):
+            secret_id = self._secret_id_value(item)
+            if self._secret_key_value(item) == name and secret_id is not None:
+                try:
+                    client.secrets().delete([secret_id])
+                except Exception as exc:
+                    raise AdapterError(f"bitwarden secret delete failed: {exc}") from exc
+                self._secrets_cache.pop(project_id, None)
+                return
 
     def export_scope(self, *, scope: str, vmid: str | None, group: str | None) -> dict[str, str]:
+        project_id = self._project_id(scope=scope, vmid=vmid, group=group)
+        if project_id is None:
+            return {}
         data: dict[str, str] = {}
-        for name in self.list(scope=scope, vmid=vmid, group=group):
-            value = self.get(scope=scope, vmid=vmid, group=group, name=name)
-            if value is not None:
-                data[name] = value
+        for item in self._list_secrets(project_id=project_id):
+            key = self._secret_key_value(item)
+            value = self._secret_value(item)
+            if key is not None and value is not None:
+                data[key] = value
         return data
 
 def _adapter_for_name(name: str) -> _BaseNamedAdapter:
@@ -958,16 +1317,16 @@ def _adapter_for_name(name: str) -> _BaseNamedAdapter:
         return PassholeAdapter()
     if name == "pykeepass":
         return PyKeePassAdapter()
-    if name in {"keepassxc", "keepassxc-cli"}:
+    if name == "keepassxc":
         return KeePassXCCliAdapter()
-    if name in {"op", "1password", "onepassword"}:
+    if name == "onepassword":
+        return OnePasswordSdkAdapter()
+    if name == "onepassword-cli":
         return OnePasswordAdapter()
-    if name in {"bws", "bitwarden-secrets"}:
+    if name == "bitwarden-cli":
         return BitwardenSecretsAdapter()
-    if name == "infisical":
-        return InfisicalAdapter()
-    if name in {"vault", "vault-kv"}:
-        return VaultKvAdapter()
+    if name == "bitwarden":
+        return BitwardenSdkAdapter()
     raise AdapterError(f"unsupported named secret provider adapter: {name}")
 
 

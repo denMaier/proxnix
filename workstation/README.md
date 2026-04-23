@@ -112,11 +112,11 @@ Built-in provider names:
 - `gopass`
 - `passhole`
 - `pykeepass`
-- `keepassxc-cli` and `keepassxc`
-- `op`, `1password`, `onepassword`
-- `bws`, `bitwarden-secrets`
-- `vault`, `vault-kv`
-- `infisical`
+- `onepassword`
+- `onepassword-cli`
+- `bitwarden`
+- `bitwarden-cli`
+- `keepassxc`
 - `exec`
 
 Example:
@@ -138,9 +138,34 @@ PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY='ssh-ed25519 AAAA...'
 PROXNIX_PYKEEPASS_AGENT_SOCKET='~/Library/Containers/.../agent.sock'
 ```
 
+Or:
+
+```bash
+# ~/.config/proxnix/config
+PROXNIX_SECRET_PROVIDER='onepassword'
+PROXNIX_1PASSWORD_VAULT='Engineering'
+OP_SERVICE_ACCOUNT_TOKEN='ops_...'
+```
+
+Or:
+
+```bash
+# ~/.config/proxnix/config
+PROXNIX_SECRET_PROVIDER='bitwarden'
+PROXNIX_BITWARDEN_ORGANIZATION_ID='00000000-0000-0000-0000-000000000000'
+PROXNIX_BITWARDEN_ACCESS_TOKEN='0.secret_access_token'
+```
+
 Those same provider variables can also be written directly into
 `~/.config/proxnix/config`. That is the preferred place for stable proxnix
 provider settings.
+
+For providers that have both SDK and CLI implementations, proxnix uses one
+canonical provider name for the SDK and the same name plus `-cli` for the CLI
+variant:
+
+- `onepassword` and `onepassword-cli`
+- `bitwarden` and `bitwarden-cli`
 
 For `pykeepass`, the recommended setup is a static keyfile on disk plus an
 optional password derived from an SSH agent signature. You can print the exact
@@ -209,9 +234,12 @@ python3 -m twine upload dist/*
 - The package intentionally keeps `sops`, `ssh`, and `rsync` as external
   system tools.
 - Some optional secret providers also require their own external tools or
-  Python packages. For example, `keepassxc-cli`, `op`, `bws`, `vault`, and
-  `infisical` expect their respective CLIs to be installed, while
-  `pykeepass` expects the `pykeepass` Python package to be available.
+  Python packages. For example, `keepassxc`, `onepassword-cli`,
+  and `bitwarden-cli` expect their respective CLIs to be installed, while
+  `pykeepass` expects the `pykeepass` Python package to be available and
+  SDK-backed providers expect their Python packages plus SDK authentication:
+  `onepassword` expects `onepassword-sdk`,
+  and `bitwarden` expects `bitwarden-sdk`.
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.

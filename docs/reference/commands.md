@@ -388,11 +388,11 @@ Built-in provider names:
 - `gopass`
 - `passhole`
 - `pykeepass`
-- `keepassxc-cli` / `keepassxc`
-- `op` / `1password` / `onepassword`
-- `bws` / `bitwarden-secrets`
-- `vault` / `vault-kv`
-- `infisical`
+- `onepassword`
+- `onepassword-cli`
+- `keepassxc`
+- `bitwarden`
+- `bitwarden-cli`
 - `exec`
 
 ### `proxnix-publish`

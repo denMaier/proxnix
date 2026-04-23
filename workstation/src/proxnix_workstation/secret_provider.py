@@ -334,15 +334,10 @@ def load_secret_provider(
         "passhole",
         "pykeepass",
         "keepassxc",
-        "keepassxc-cli",
-        "bws",
-        "bitwarden-secrets",
-        "vault",
-        "vault-kv",
-        "op",
-        "1password",
         "onepassword",
-        "infisical",
+        "onepassword-cli",
+        "bitwarden",
+        "bitwarden-cli",
     }:
         return NamedSecretProvider(provider_name, extra_env=config.provider_environment_map())
     raise ConfigError(f"unsupported secret provider: {provider_name}")

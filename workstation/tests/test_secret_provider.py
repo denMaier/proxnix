@@ -20,14 +20,14 @@ from proxnix_workstation.paths import SitePaths
 from proxnix_workstation.errors import ProxnixWorkstationError
 from proxnix_workstation.secret_provider_adapters import (
     BitwardenSecretsAdapter,
+    BitwardenSdkAdapter,
     GoPassAdapter,
-    InfisicalAdapter,
     KeePassXCCliAdapter,
     OnePasswordAdapter,
+    OnePasswordSdkAdapter,
     PassAdapter,
     PassholeAdapter,
     PyKeePassAdapter,
-    VaultKvAdapter,
 )
 
 
@@ -125,31 +125,25 @@ class ExecSecretProviderTests(unittest.TestCase):
         self.assertIsInstance(provider, NamedSecretProvider)
         self.assertEqual(provider.describe(), "pass")
 
-    def test_named_provider_aliases_include_passhole_pykeepass_bws_vault_op_and_infisical(self) -> None:
+    def test_named_provider_aliases_include_passhole_pykeepass_keepassxc_onepassword_and_bitwarden(self) -> None:
         base = _test_config()
         expected_names = {
             "passhole": "passhole",
             "pykeepass": "pykeepass",
-            "bws": "bws",
-            "bitwarden-secrets": "bws",
-            "vault": "vault-kv",
-            "vault-kv": "vault-kv",
-            "op": "op",
-            "1password": "op",
-            "onepassword": "op",
-            "infisical": "infisical",
+            "keepassxc": "keepassxc",
+            "onepassword": "onepassword",
+            "onepassword-cli": "onepassword-cli",
+            "bitwarden": "bitwarden",
+            "bitwarden-cli": "bitwarden-cli",
         }
         for alias in (
             "passhole",
             "pykeepass",
-            "bws",
-            "bitwarden-secrets",
-            "vault",
-            "vault-kv",
-            "op",
-            "1password",
+            "keepassxc",
             "onepassword",
-            "infisical",
+            "onepassword-cli",
+            "bitwarden",
+            "bitwarden-cli",
         ):
             config = WorkstationConfig(
                 config_file=base.config_file,
@@ -247,6 +241,203 @@ class NamedAdapterTests(unittest.TestCase):
                 group = queue.pop(0)
                 yield group
                 queue.extend(group.subgroups)
+
+    class _FakeOnePasswordVault:
+        def __init__(self, vault_id: str, title: str) -> None:
+            self.id = vault_id
+            self.title = title
+
+    class _FakeOnePasswordOverview:
+        def __init__(self, item_id: str, title: str, vault_id: str, tags: list[str]) -> None:
+            self.id = item_id
+            self.title = title
+            self.vault_id = vault_id
+            self.tags = tags
+
+    class _FakeOnePasswordField:
+        def __init__(self, field_id: str, title: str, field_type: str, value: str) -> None:
+            self.id = field_id
+            self.title = title
+            self.field_type = field_type
+            self.value = value
+
+    class _FakeOnePasswordItem:
+        def __init__(self, item_id: str, title: str, vault_id: str, tags: list[str], fields: list[object]) -> None:
+            self.id = item_id
+            self.title = title
+            self.vault_id = vault_id
+            self.tags = tags
+            self.fields = fields
+
+    class _FakeOnePasswordTypes:
+        class ItemCategory:
+            PASSWORD = "Password"
+
+        class ItemFieldType:
+            CONCEALED = "Concealed"
+
+        class ItemField:
+            def __init__(self, *, id: str, title: str, field_type: str, value: str) -> None:
+                self.id = id
+                self.title = title
+                self.field_type = field_type
+                self.value = value
+
+        class ItemCreateParams:
+            def __init__(self, **kwargs) -> None:
+                self.category = kwargs["category"]
+                self.vault_id = kwargs["vault_id"]
+                self.title = kwargs["title"]
+                self.tags = kwargs.get("tags")
+                self.fields = kwargs.get("fields")
+
+    class _FakeOnePasswordVaultsApi:
+        def __init__(self, vaults: list[object]) -> None:
+            self._vaults = vaults
+
+        async def list(self) -> list[object]:
+            return list(self._vaults)
+
+    class _FakeOnePasswordItemsApi:
+        def __init__(self, items: dict[str, object]) -> None:
+            self._items = items
+            self.created: list[object] = []
+            self.updated: list[object] = []
+            self.deleted: list[tuple[str, str]] = []
+
+        async def list(self, vault_id: str) -> list[object]:
+            return [
+                NamedAdapterTests._FakeOnePasswordOverview(
+                    item_id=item.id,
+                    title=item.title,
+                    vault_id=item.vault_id,
+                    tags=list(item.tags),
+                )
+                for item in self._items.values()
+                if item.vault_id == vault_id
+            ]
+
+        async def get(self, vault_id: str, item_id: str):
+            return self._items[item_id]
+
+        async def create(self, params):
+            self.created.append(params)
+            return params
+
+        async def put(self, item):
+            self.updated.append(item)
+            self._items[item.id] = item
+            return item
+
+        async def delete(self, vault_id: str, item_id: str) -> None:
+            self.deleted.append((vault_id, item_id))
+            self._items.pop(item_id, None)
+
+    class _FakeOnePasswordClient:
+        def __init__(self, *, vaults: list[object], items: dict[str, object]) -> None:
+            self.vaults = NamedAdapterTests._FakeOnePasswordVaultsApi(vaults)
+            self.items = NamedAdapterTests._FakeOnePasswordItemsApi(items)
+
+    class _FakeBitwardenProject:
+        def __init__(self, project_id: str, name: str) -> None:
+            self.id = project_id
+            self.name = name
+
+    class _FakeBitwardenSecretIdentifier:
+        def __init__(self, secret_id: str, key: str) -> None:
+            self.id = secret_id
+            self.key = key
+
+    class _FakeBitwardenSecret:
+        def __init__(self, secret_id: str, key: str, value: str, project_ids: list[str]) -> None:
+            self.id = secret_id
+            self.key = key
+            self.value = value
+            self.project_ids = project_ids
+
+    class _FakeBitwardenResponse:
+        def __init__(self, payload) -> None:
+            self.data = payload
+
+    class _FakeBitwardenProjectsApi:
+        def __init__(self, projects: dict[str, object]) -> None:
+            self._projects = projects
+            self.created: list[tuple[str, str]] = []
+
+        def list(self, organization_id: str):
+            return NamedAdapterTests._FakeBitwardenResponse(list(self._projects.values()))
+
+        def create(self, organization_id: str, name: str):
+            project_id = f"project-{len(self._projects) + 1}"
+            project = NamedAdapterTests._FakeBitwardenProject(project_id, name)
+            self._projects[project_id] = project
+            self.created.append((organization_id, name))
+            return NamedAdapterTests._FakeBitwardenResponse(project)
+
+    class _FakeBitwardenSecretsApi:
+        def __init__(self, secrets: dict[str, object]) -> None:
+            self._secrets = secrets
+            self.created: list[tuple[str, str, str, str | None, list[str] | None]] = []
+            self.updated: list[tuple[str, str, str, str, str | None, list[str] | None]] = []
+            self.deleted: list[list[str]] = []
+
+        def list(self, organization_id: str):
+            payload = [
+                NamedAdapterTests._FakeBitwardenSecretIdentifier(secret.id, secret.key)
+                for secret in self._secrets.values()
+            ]
+            return NamedAdapterTests._FakeBitwardenResponse(payload)
+
+        def get_by_ids(self, ids: list[str]):
+            payload = [self._secrets[secret_id] for secret_id in ids if secret_id in self._secrets]
+            return NamedAdapterTests._FakeBitwardenResponse(payload)
+
+        def create(
+            self,
+            organization_id: str,
+            key: str,
+            value: str,
+            note: str | None,
+            project_ids: list[str] | None = None,
+        ):
+            secret_id = f"secret-{len(self._secrets) + 1}"
+            secret = NamedAdapterTests._FakeBitwardenSecret(secret_id, key, value, list(project_ids or []))
+            self._secrets[secret_id] = secret
+            self.created.append((organization_id, key, value, note, project_ids))
+            return NamedAdapterTests._FakeBitwardenResponse(secret)
+
+        def update(
+            self,
+            organization_id: str,
+            secret_id: str,
+            key: str,
+            value: str,
+            note: str | None,
+            project_ids: list[str] | None = None,
+        ):
+            secret = self._secrets[secret_id]
+            secret.key = key
+            secret.value = value
+            secret.project_ids = list(project_ids or [])
+            self.updated.append((organization_id, secret_id, key, value, note, project_ids))
+            return NamedAdapterTests._FakeBitwardenResponse(secret)
+
+        def delete(self, ids: list[str]):
+            self.deleted.append(list(ids))
+            for secret_id in ids:
+                self._secrets.pop(secret_id, None)
+            return NamedAdapterTests._FakeBitwardenResponse(None)
+
+    class _FakeBitwardenClient:
+        def __init__(self, *, projects: dict[str, object], secrets: dict[str, object]) -> None:
+            self._projects_api = NamedAdapterTests._FakeBitwardenProjectsApi(projects)
+            self._secrets_api = NamedAdapterTests._FakeBitwardenSecretsApi(secrets)
+
+        def projects(self):
+            return self._projects_api
+
+        def secrets(self):
+            return self._secrets_api
 
     def test_pass_adapter_uses_expected_scope_paths_and_commands(self) -> None:
         adapter = PassAdapter()
@@ -507,46 +698,47 @@ class NamedAdapterTests(unittest.TestCase):
 
         self.assertEqual(data, {"alpha": "one", "beta": "two"})
 
-    def test_vault_kv_adapter_uses_mount_and_metadata_delete(self) -> None:
-        adapter = VaultKvAdapter()
-        calls: list[list[str]] = []
-        env = {"PROXNIX_VAULT_MOUNT": "kv"}
-        responses = [
-            CompletedProcess(args=["vault"], returncode=0, stdout='["alpha","beta"]\n', stderr=""),
-            CompletedProcess(args=["vault"], returncode=0, stdout="secret-value", stderr=""),
-            CompletedProcess(args=["vault"], returncode=0, stdout="", stderr=""),
-            CompletedProcess(args=["vault"], returncode=0, stdout="", stderr=""),
-        ]
+    def test_bitwarden_sdk_adapter_uses_projects_as_scopes(self) -> None:
+        adapter = BitwardenSdkAdapter()
+        fake_client = self._FakeBitwardenClient(
+            projects={
+                "proj-1": self._FakeBitwardenProject("proj-1", "proxnix/shared"),
+                "proj-2": self._FakeBitwardenProject("proj-2", "proxnix/groups/app"),
+            },
+            secrets={
+                "secret-1": self._FakeBitwardenSecret("secret-1", "alpha", "one", ["proj-1"]),
+                "secret-2": self._FakeBitwardenSecret("secret-2", "beta", "two", ["proj-2"]),
+            },
+        )
 
-        def fake_run_command(args, **kwargs):
-            calls.append(list(args))
-            return responses.pop(0)
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXNIX_BITWARDEN_ORGANIZATION_ID": "org-123",
+                "PROXNIX_BITWARDEN_ACCESS_TOKEN": "secret-access-token",
+            },
+            clear=False,
+        ):
+            with patch.object(adapter, "_open_client", return_value=fake_client):
+                names = adapter.list(scope="shared", vmid=None, group=None)
+                value = adapter.get(scope="shared", vmid=None, group=None, name="alpha")
+                data = adapter.export_scope(scope="shared", vmid=None, group=None)
+                adapter.set(scope="group", vmid=None, group="app", name="beta", value="updated-two")
+                adapter.set(scope="container", vmid="120", group=None, name="gamma", value="three")
+                adapter.remove(scope="shared", vmid=None, group=None, name="alpha")
 
-        with patch.dict("os.environ", env, clear=False):
-            with patch("proxnix_workstation.secret_provider_adapters.run_command", side_effect=fake_run_command):
-                names = adapter.list(scope="group", vmid=None, group="storage")
-                value = adapter.get(scope="group", vmid=None, group="storage", name="alpha")
-                adapter.set(scope="group", vmid=None, group="storage", name="alpha", value="new-value")
-                adapter.remove(scope="group", vmid=None, group="storage", name="alpha")
-
-        self.assertEqual(names, ["alpha", "beta"])
-        self.assertEqual(value, "secret-value")
+        self.assertEqual(names, ["alpha"])
+        self.assertEqual(value, "one")
+        self.assertEqual(data, {"alpha": "one"})
         self.assertEqual(
-            calls[0],
-            ["vault", "kv", "list", "-format=json", "-mount=kv", "proxnix/groups/storage/"],
+            fake_client.secrets().updated,
+            [("org-123", "secret-2", "beta", "updated-two", None, ["proj-2"])],
         )
         self.assertEqual(
-            calls[1],
-            ["vault", "kv", "get", "-field=value", "-mount=kv", "proxnix/groups/storage/alpha"],
+            fake_client.secrets().created,
+            [("org-123", "gamma", "three", None, ["project-3"])],
         )
-        self.assertEqual(
-            calls[2],
-            ["vault", "kv", "put", "-mount=kv", "proxnix/groups/storage/alpha", "value=-"],
-        )
-        self.assertEqual(
-            calls[3],
-            ["vault", "kv", "metadata", "delete", "-mount=kv", "proxnix/groups/storage/alpha"],
-        )
+        self.assertEqual(fake_client.secrets().deleted, [["secret-1"]])
 
     def test_onepassword_adapter_uses_tag_scoped_items(self) -> None:
         adapter = OnePasswordAdapter()
@@ -638,97 +830,48 @@ class NamedAdapterTests(unittest.TestCase):
             ],
         )
 
-    def test_infisical_adapter_uses_export_and_crud_commands(self) -> None:
-        adapter = InfisicalAdapter()
-        env = {
-            "PROXNIX_INFISICAL_PROJECT_ID": "proj-123",
-            "PROXNIX_INFISICAL_ENV": "prod",
-            "PROXNIX_INFISICAL_TYPE": "shared",
-        }
-        calls: list[list[str]] = []
-        responses = [
-            CompletedProcess(args=["infisical"], returncode=0, stdout='{"alpha":"one","beta":"two"}\n', stderr=""),
-            CompletedProcess(args=["infisical"], returncode=0, stdout="secret-value\n", stderr=""),
-            CompletedProcess(args=["infisical"], returncode=0, stdout="", stderr=""),
-            CompletedProcess(args=["infisical"], returncode=0, stdout="", stderr=""),
-        ]
+    def test_onepassword_sdk_adapter_uses_tag_scoped_items(self) -> None:
+        adapter = OnePasswordSdkAdapter()
+        fake_client = self._FakeOnePasswordClient(
+            vaults=[self._FakeOnePasswordVault("vault-1", "Engineering")],
+            items={
+                "item-1": self._FakeOnePasswordItem(
+                    "item-1",
+                    "db_password",
+                    "vault-1",
+                    ["proxnix/shared"],
+                    [self._FakeOnePasswordField("password", "password", "Concealed", "secret-value")],
+                ),
+            },
+        )
 
-        def fake_run_command(args, **kwargs):
-            calls.append(list(args))
-            return responses.pop(0)
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXNIX_1PASSWORD_VAULT": "Engineering",
+                "OP_SERVICE_ACCOUNT_TOKEN": "op-service-account-token",
+            },
+            clear=False,
+        ):
+            with patch.object(adapter, "_open_client", return_value=fake_client):
+                with patch.object(adapter, "_types_module", return_value=self._FakeOnePasswordTypes):
+                    names = adapter.list(scope="shared", vmid=None, group=None)
+                    value = adapter.get(scope="shared", vmid=None, group=None, name="db_password")
+                    data = adapter.export_scope(scope="shared", vmid=None, group=None)
+                    adapter.set(scope="container", vmid="120", group=None, name="api_key", value="new-secret")
+                    adapter.remove(scope="shared", vmid=None, group=None, name="db_password")
 
-        with patch.dict("os.environ", env, clear=False):
-            with patch("proxnix_workstation.secret_provider_adapters.run_command", side_effect=fake_run_command):
-                names = adapter.list(scope="group", vmid=None, group="storage")
-                value = adapter.get(scope="group", vmid=None, group="storage", name="alpha")
-                adapter.set(scope="group", vmid=None, group="storage", name="alpha", value="new-value")
-                adapter.remove(scope="group", vmid=None, group="storage", name="alpha")
-
-        self.assertEqual(names, ["alpha", "beta"])
+        self.assertEqual(names, ["db_password"])
         self.assertEqual(value, "secret-value")
-        self.assertEqual(
-            calls[0],
-            [
-                "infisical",
-                "export",
-                "--format=json",
-                "--projectId",
-                "proj-123",
-                "--env",
-                "prod",
-                "--path",
-                "/proxnix/groups/storage",
-            ],
-        )
-        self.assertEqual(
-            calls[1],
-            [
-                "infisical",
-                "secrets",
-                "get",
-                "alpha",
-                "--plain",
-                "--silent",
-                "--projectId",
-                "proj-123",
-                "--env",
-                "prod",
-                "--path",
-                "/proxnix/groups/storage",
-            ],
-        )
-        self.assertEqual(
-            calls[2],
-            [
-                "infisical",
-                "secrets",
-                "set",
-                "alpha=new-value",
-                "--type",
-                "shared",
-                "--projectId",
-                "proj-123",
-                "--env",
-                "prod",
-                "--path",
-                "/proxnix/groups/storage",
-            ],
-        )
-        self.assertEqual(
-            calls[3],
-            [
-                "infisical",
-                "secrets",
-                "delete",
-                "alpha",
-                "--projectId",
-                "proj-123",
-                "--env",
-                "prod",
-                "--path",
-                "/proxnix/groups/storage",
-            ],
-        )
+        self.assertEqual(data, {"db_password": "secret-value"})
+        self.assertEqual(len(fake_client.items.created), 1)
+        created = fake_client.items.created[0]
+        self.assertEqual(created.category, "Password")
+        self.assertEqual(created.vault_id, "vault-1")
+        self.assertEqual(created.title, "api_key")
+        self.assertEqual(created.tags, ["proxnix/containers/120"])
+        self.assertEqual(created.fields[0].value, "new-secret")
+        self.assertEqual(fake_client.items.deleted, [("vault-1", "item-1")])
 
 
 class ConfigProviderEnvironmentTests(unittest.TestCase):

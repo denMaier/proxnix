@@ -80,11 +80,11 @@ Built-in named providers:
 | `gopass` | Uses `gopass` path hierarchy |
 | `passhole` | Uses `ph` against a KeePass database |
 | `pykeepass` | Uses the Python `pykeepass` library directly |
-| `keepassxc-cli` / `keepassxc` | Uses `keepassxc-cli` |
-| `op` / `1password` / `onepassword` | Uses the 1Password CLI |
-| `bws` / `bitwarden-secrets` | Uses Bitwarden Secrets Manager |
-| `vault` / `vault-kv` | Uses Vault KV |
-| `infisical` | Uses the Infisical CLI |
+| `onepassword` | Uses the 1Password Python SDK directly |
+| `onepassword-cli` | Uses the 1Password CLI |
+| `keepassxc` | Uses `keepassxc-cli` |
+| `bitwarden` | Uses the Bitwarden Python SDK |
+| `bitwarden-cli` | Uses Bitwarden Secrets Manager CLI |
 | `exec` | Arbitrary helper implementing the proxnix JSON contract |
 
 All built-in providers map proxnix scopes onto the same logical hierarchy:
@@ -102,12 +102,16 @@ Provider-specific configuration:
 | `gopass` | `PROXNIX_GOPASS_STORE_DIR` optional |
 | `passhole` | `PROXNIX_PASSHOLE_DATABASE` or `PROXNIX_PASSHOLE_CONFIG`; optional `PROXNIX_PASSHOLE_KEYFILE`, `PROXNIX_PASSHOLE_PASSWORD`, `PROXNIX_PASSHOLE_PASSWORD_FILE`, `PROXNIX_PASSHOLE_NO_PASSWORD`, `PROXNIX_PASSHOLE_NO_CACHE`, `PROXNIX_PASSHOLE_CACHE_TIMEOUT` |
 | `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD`, `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`, `PROXNIX_PYKEEPASS_AGENT_CONTEXT`, `PROXNIX_PYKEEPASS_AGENT_SOCKET` |
-| `keepassxc-cli` | `PROXNIX_KEEPASSXC_DATABASE`; optional `PROXNIX_KEEPASSXC_PASSWORD_FILE`, `PROXNIX_KEEPASSXC_KEY_FILE`, `PROXNIX_KEEPASSXC_NO_PASSWORD` |
-| `op` | `PROXNIX_1PASSWORD_VAULT`; optional `PROXNIX_1PASSWORD_ACCOUNT` |
-| `bws` | normal `bws` auth and environment |
-| `vault-kv` | optional `PROXNIX_VAULT_MOUNT` |
-| `infisical` | `PROXNIX_INFISICAL_PROJECT_ID`; optional `PROXNIX_INFISICAL_ENV`, `PROXNIX_INFISICAL_TYPE` |
+| `onepassword` | `PROXNIX_1PASSWORD_VAULT`; `PROXNIX_1PASSWORD_SDK_AUTH` or `OP_SERVICE_ACCOUNT_TOKEN`; optional `PROXNIX_1PASSWORD_SDK_INTEGRATION_NAME`, `PROXNIX_1PASSWORD_SDK_INTEGRATION_VERSION` |
+| `onepassword-cli` | `PROXNIX_1PASSWORD_VAULT`; optional `PROXNIX_1PASSWORD_ACCOUNT` |
+| `keepassxc` | `PROXNIX_KEEPASSXC_DATABASE`; optional `PROXNIX_KEEPASSXC_PASSWORD_FILE`, `PROXNIX_KEEPASSXC_KEY_FILE`, `PROXNIX_KEEPASSXC_NO_PASSWORD` |
+| `bitwarden` | `PROXNIX_BITWARDEN_ORGANIZATION_ID` or `ORGANIZATION_ID`; `PROXNIX_BITWARDEN_ACCESS_TOKEN` or `ACCESS_TOKEN`; optional `PROXNIX_BITWARDEN_STATE_FILE` or `STATE_FILE`, `PROXNIX_BITWARDEN_API_URL` or `API_URL`, `PROXNIX_BITWARDEN_IDENTITY_URL` or `IDENTITY_URL`, `PROXNIX_BITWARDEN_USER_AGENT` |
+| `bitwarden-cli` | normal `bws` auth and environment |
 | all named providers | optional `PROXNIX_SECRET_PATH_PREFIX` to replace `proxnix` |
+
+For providers that expose both SDK and CLI implementations, proxnix uses one
+canonical provider name for the SDK-backed adapter and the same name with
+`-cli` for the CLI adapter.
 
 `pykeepass` can derive the KeePass database password from an SSH agent-backed
 `ssh-ed25519` key. In that mode:
