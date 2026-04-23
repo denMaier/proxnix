@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import os
+from contextlib import contextmanager
 from pathlib import Path
 
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
+from .keepass_agent import derive_pykeepass_agent_password
 from .paths import SitePaths
 from .provider_keys import initialize_container_identity, initialize_host_relay_identity
 from .runtime import ensure_commands
@@ -25,6 +28,22 @@ from .secret_provider import (
 )
 from .site import read_container_secret_groups, valid_secret_group_name
 from .sops_ops import read_secret_value
+
+
+@contextmanager
+def _provider_environment(provider_env: dict[str, str]):
+    original: dict[str, str | None] = {}
+    for key, value in provider_env.items():
+        original[key] = os.environ.get(key)
+        os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def need_tools(config: WorkstationConfig) -> SitePaths:
@@ -247,6 +266,24 @@ def cmd_init_container(config: WorkstationConfig, vmid: str) -> int:
     return 0
 
 
+def cmd_print_keepass_password(config: WorkstationConfig) -> int:
+    provider_env = config.provider_environment_map()
+    if config.secret_provider != "pykeepass":
+        raise ProxnixWorkstationError(
+            "print-keepass-password is only supported when PROXNIX_SECRET_PROVIDER=pykeepass"
+        )
+    database_path = provider_env.get("PROXNIX_PYKEEPASS_DATABASE", "").strip()
+    if not database_path:
+        raise ProxnixWorkstationError("PROXNIX_PYKEEPASS_DATABASE is not configured")
+    public_key = provider_env.get("PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY", "").strip()
+    if not public_key:
+        raise ProxnixWorkstationError("PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY is not configured")
+    with _provider_environment(provider_env):
+        password = derive_pykeepass_agent_password(database_path, public_key)
+    print(password)
+    return 0
+
+
 def build_parser(*, prog: str = "proxnix-secrets") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--config", type=Path, help="Path to the proxnix workstation config file")
@@ -295,6 +332,7 @@ def build_parser(*, prog: str = "proxnix-secrets") -> argparse.ArgumentParser:
     initc = sub.add_parser("init-container")
     initc.add_argument("vmid")
     sub.add_parser("init-shared")
+    sub.add_parser("print-keepass-password")
     return parser
 
 
@@ -341,6 +379,8 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-secrets") -> int
                 return cmd_init_container(config, args.vmid)
             case "init-shared":
                 return cmd_init_shared(config)
+            case "print-keepass-password":
+                return cmd_print_keepass_password(config)
             case _:
                 parser.error(f"unsupported command: {args.command}")
     except (ConfigError, PlanningError, ProxnixWorkstationError) as exc:

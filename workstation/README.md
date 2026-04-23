@@ -130,14 +130,44 @@ export PROXNIX_PASSHOLE_PASSWORD_FILE=~/.config/proxnix/passhole-password
 Or:
 
 ```bash
-export PROXNIX_SECRET_PROVIDER=pykeepass
-export PROXNIX_PYKEEPASS_DATABASE=~/.local/share/keepass/proxnix.kdbx
-export PROXNIX_PYKEEPASS_PASSWORD_FILE=~/.config/proxnix/keepass-password
+# ~/.config/proxnix/config
+PROXNIX_SECRET_PROVIDER='pykeepass'
+PROXNIX_PYKEEPASS_DATABASE='~/.local/share/keepass/proxnix.kdbx'
+PROXNIX_PYKEEPASS_KEYFILE='~/.config/proxnix/proxnix.keyx'
+PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY='ssh-ed25519 AAAA...'
+PROXNIX_PYKEEPASS_AGENT_SOCKET='~/Library/Containers/.../agent.sock'
 ```
 
 Those same provider variables can also be written directly into
 `~/.config/proxnix/config`. That is the preferred place for stable proxnix
 provider settings.
+
+For `pykeepass`, the recommended setup is a static keyfile on disk plus an
+optional password derived from an SSH agent signature. You can print the exact
+derived password that proxnix will use with:
+
+```bash
+proxnix-secrets print-keepass-password
+```
+
+This is intended as a bootstrap/recovery path so you can also save the password
+in a separate personal vault and open the proxnix database directly in
+KeePassXC or Strongbox.
+
+For `pykeepass`, the password source is chosen in this order:
+
+1. `PROXNIX_PYKEEPASS_NO_PASSWORD=1`
+2. `PROXNIX_PYKEEPASS_PASSWORD`
+3. `PROXNIX_PYKEEPASS_PASSWORD_FILE`
+4. `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`
+5. no password
+
+Those password modes are mutually exclusive in practice. `PROXNIX_PYKEEPASS_KEYFILE`
+is separate and can be combined with any of them.
+
+If your SSH agent is not exposed through the standard `SSH_AUTH_SOCK`, set
+`PROXNIX_PYKEEPASS_AGENT_SOCKET` in the proxnix config file so proxnix can
+talk to the right socket explicitly.
 
 ## Examples
 

@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from proxnix_workstation.config import WorkstationConfig, load_workstation_config
 from proxnix_workstation.exercise_cli import build_generated_config, render_config_file
+from proxnix_workstation.keepass_agent import (
+    available_pykeepass_agent_public_keys,
+    derive_pykeepass_agent_password,
+)
 from proxnix_workstation.publish_cli import build_compiled_secret_store
+from proxnix_workstation.secrets_cli import cmd_print_keepass_password
 from proxnix_workstation.secret_provider import ExecSecretProvider, NamedSecretProvider, load_secret_provider
 from proxnix_workstation.paths import SitePaths
 from proxnix_workstation.errors import ProxnixWorkstationError
@@ -369,6 +374,24 @@ class NamedAdapterTests(unittest.TestCase):
         self.assertEqual([(entry.title, entry.password) for entry in app_group.entries], [("api_key", "new-secret")])
         self.assertEqual(fake_kp.deleted[0].title, "alpha")
         self.assertEqual(fake_kp.saved, 2)
+
+    def test_pykeepass_adapter_uses_agent_derived_password_when_configured(self) -> None:
+        adapter = PyKeePassAdapter()
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
+                "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+            },
+            clear=False,
+        ):
+            with patch(
+                "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
+                return_value="derived-password",
+            ) as derive_mock:
+                self.assertEqual(adapter._password(), "derived-password")
+
+        derive_mock.assert_called_once_with("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAagentkey")
 
     def test_pykeepass_adapter_opens_database_once_per_instance(self) -> None:
         adapter = PyKeePassAdapter()
@@ -833,6 +856,125 @@ class PublishSecretProviderTests(unittest.TestCase):
                 build_compiled_secret_store(config, site_paths, provider, "120", Path(temp_dir) / "out")
 
         self.assertIn("grouped secret dup is ambiguous", str(ctx.exception))
+
+
+class KeePassAgentTests(unittest.TestCase):
+    def test_available_pykeepass_agent_public_keys_uses_explicit_agent_socket(self) -> None:
+        response = CompletedProcess(
+            args=["ssh-add"],
+            returncode=0,
+            stdout="ssh-ed25519 AAAAfirst comment-one\n",
+            stderr="",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"PROXNIX_PYKEEPASS_AGENT_SOCKET": "/tmp/proxnix-agent.sock"},
+            clear=True,
+        ):
+            with patch("proxnix_workstation.keepass_agent.run_command", return_value=response) as run_mock:
+                keys = available_pykeepass_agent_public_keys()
+
+        self.assertEqual(keys, ["ssh-ed25519 AAAAfirst"])
+        self.assertEqual(
+            run_mock.call_args.kwargs["env"]["SSH_AUTH_SOCK"],
+            "/tmp/proxnix-agent.sock",
+        )
+
+    def test_available_pykeepass_agent_public_keys_filters_to_ed25519(self) -> None:
+        response = CompletedProcess(
+            args=["ssh-add"],
+            returncode=0,
+            stdout=(
+                "ssh-ed25519 AAAAfirst comment-one\n"
+                "ssh-rsa AAAArsa comment-two\n"
+                "ssh-ed25519 AAAAsecond comment-three\n"
+            ),
+            stderr="",
+        )
+
+        with patch.dict("os.environ", {"SSH_AUTH_SOCK": "/tmp/agent.sock"}, clear=False):
+            with patch("proxnix_workstation.keepass_agent.run_command", return_value=response):
+                keys = available_pykeepass_agent_public_keys()
+
+        self.assertEqual(keys, ["ssh-ed25519 AAAAfirst", "ssh-ed25519 AAAAsecond"])
+
+    def test_derive_pykeepass_agent_password_uses_agent_signature(self) -> None:
+        responses = [
+            CompletedProcess(
+                args=["ssh-add"],
+                returncode=0,
+                stdout="ssh-ed25519 AAAAfirst comment-one\n",
+                stderr="",
+            ),
+            CompletedProcess(
+                args=["ssh-keygen"],
+                returncode=0,
+                stdout="-----BEGIN SSH SIGNATURE-----\nsignature-bytes\n-----END SSH SIGNATURE-----\n",
+                stderr="",
+            ),
+        ]
+
+        with patch.dict("os.environ", {"SSH_AUTH_SOCK": "/tmp/agent.sock"}, clear=False):
+            with patch("proxnix_workstation.keepass_agent.ensure_commands"):
+                with patch("proxnix_workstation.keepass_agent.run_command", side_effect=responses) as run_mock:
+                    first = derive_pykeepass_agent_password("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAfirst")
+
+        with patch.dict("os.environ", {"SSH_AUTH_SOCK": "/tmp/agent.sock"}, clear=False):
+            with patch("proxnix_workstation.keepass_agent.ensure_commands"):
+                with patch(
+                    "proxnix_workstation.keepass_agent.run_command",
+                    side_effect=[
+                        CompletedProcess(
+                            args=["ssh-add"],
+                            returncode=0,
+                            stdout="ssh-ed25519 AAAAfirst another-comment\n",
+                            stderr="",
+                        ),
+                        CompletedProcess(
+                            args=["ssh-keygen"],
+                            returncode=0,
+                            stdout="-----BEGIN SSH SIGNATURE-----\nsignature-bytes\n-----END SSH SIGNATURE-----\n",
+                            stderr="",
+                        ),
+                    ],
+                ):
+                    second = derive_pykeepass_agent_password("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAfirst")
+
+        self.assertEqual(first, second)
+        self.assertEqual(run_mock.call_args_list[1].args[0][:5], ["ssh-keygen", "-Y", "sign", "-n", "proxnix-keepass-unlock@proxnix"])
+
+    def test_print_keepass_password_uses_configured_pykeepass_agent_key(self) -> None:
+        config = WorkstationConfig(
+            config_file=Path("/tmp/source-config"),
+            site_dir=Path("/tmp/source-site"),
+            hosts=("root@node1",),
+            ssh_identity=None,
+            remote_dir=PurePosixPath("/var/lib/proxnix"),
+            remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
+            remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
+            secret_provider="pykeepass",
+            secret_provider_command=None,
+            provider_environment=(
+                ("PROXNIX_PYKEEPASS_AGENT_SOCKET", "/tmp/strongbox-agent.sock"),
+                ("PROXNIX_PYKEEPASS_DATABASE", "/tmp/proxnix.kdbx"),
+                ("PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY", "ssh-ed25519 AAAAfirst"),
+            ),
+        )
+
+        with patch("builtins.print") as print_mock:
+            with patch(
+                "proxnix_workstation.secrets_cli.derive_pykeepass_agent_password",
+                side_effect=lambda database, key: (
+                    self.assertEqual(os.environ["PROXNIX_PYKEEPASS_AGENT_SOCKET"], "/tmp/strongbox-agent.sock")
+                    or "derived-password"
+                ),
+            ) as derive_mock:
+                result = cmd_print_keepass_password(config)
+
+        self.assertEqual(result, 0)
+        derive_mock.assert_called_once_with("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAfirst")
+        print_mock.assert_called_once_with("derived-password")
 
 
 if __name__ == "__main__":

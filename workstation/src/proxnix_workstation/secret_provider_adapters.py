@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .errors import ProxnixWorkstationError
+from .keepass_agent import derive_pykeepass_agent_password
 from .runtime import command_env, run_command
 
 
@@ -324,7 +325,10 @@ class PyKeePassAdapter(_BaseNamedAdapter):
             return password
         password_file = _env_path("PROXNIX_PYKEEPASS_PASSWORD_FILE")
         if not password_file:
-            return None
+            agent_public_key = os.environ.get("PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY", "").strip()
+            if not agent_public_key:
+                return None
+            return derive_pykeepass_agent_password(self._database_path(), agent_public_key)
         return Path(password_file).expanduser().read_text(encoding="utf-8").rstrip("\n")
 
     def _pykeepass_class(self):

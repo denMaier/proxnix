@@ -67,6 +67,10 @@ PROXNIX_PASSHOLE_PASSWORD_FILE='~/.config/proxnix/passhole-password'
 Provider-specific values read from that file are forwarded to the configured
 provider automatically.
 
+That includes `PROXNIX_PYKEEPASS_AGENT_SOCKET`, so if your SSH agent is exposed
+via a nonstandard socket path you can configure it directly in the proxnix
+config file instead of exporting it in the shell.
+
 Built-in named providers:
 
 | Provider | Notes |
@@ -97,13 +101,38 @@ Provider-specific configuration:
 | `pass` | `PROXNIX_PASS_STORE_DIR` optional |
 | `gopass` | `PROXNIX_GOPASS_STORE_DIR` optional |
 | `passhole` | `PROXNIX_PASSHOLE_DATABASE` or `PROXNIX_PASSHOLE_CONFIG`; optional `PROXNIX_PASSHOLE_KEYFILE`, `PROXNIX_PASSHOLE_PASSWORD`, `PROXNIX_PASSHOLE_PASSWORD_FILE`, `PROXNIX_PASSHOLE_NO_PASSWORD`, `PROXNIX_PASSHOLE_NO_CACHE`, `PROXNIX_PASSHOLE_CACHE_TIMEOUT` |
-| `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD` |
+| `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD`, `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`, `PROXNIX_PYKEEPASS_AGENT_CONTEXT`, `PROXNIX_PYKEEPASS_AGENT_SOCKET` |
 | `keepassxc-cli` | `PROXNIX_KEEPASSXC_DATABASE`; optional `PROXNIX_KEEPASSXC_PASSWORD_FILE`, `PROXNIX_KEEPASSXC_KEY_FILE`, `PROXNIX_KEEPASSXC_NO_PASSWORD` |
 | `op` | `PROXNIX_1PASSWORD_VAULT`; optional `PROXNIX_1PASSWORD_ACCOUNT` |
 | `bws` | normal `bws` auth and environment |
 | `vault-kv` | optional `PROXNIX_VAULT_MOUNT` |
 | `infisical` | `PROXNIX_INFISICAL_PROJECT_ID`; optional `PROXNIX_INFISICAL_ENV`, `PROXNIX_INFISICAL_TYPE` |
 | all named providers | optional `PROXNIX_SECRET_PATH_PREFIX` to replace `proxnix` |
+
+`pykeepass` can derive the KeePass database password from an SSH agent-backed
+`ssh-ed25519` key. In that mode:
+
+- keep a static `PROXNIX_PYKEEPASS_KEYFILE` on disk
+- set `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY` to the public key exposed by the agent
+- optionally set `PROXNIX_PYKEEPASS_AGENT_CONTEXT` if you want a stable context string other than the database filename
+- set `PROXNIX_PYKEEPASS_AGENT_SOCKET` if the agent is not reachable via `SSH_AUTH_SOCK`
+
+To print the exact derived password proxnix will use for bootstrap or recovery:
+
+```bash
+proxnix-secrets print-keepass-password
+```
+
+For `pykeepass`, the password source is selected in this order:
+
+1. `PROXNIX_PYKEEPASS_NO_PASSWORD=1`
+2. `PROXNIX_PYKEEPASS_PASSWORD`
+3. `PROXNIX_PYKEEPASS_PASSWORD_FILE`
+4. `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`
+5. no password
+
+These password modes are mutually exclusive in practice. `PROXNIX_PYKEEPASS_KEYFILE`
+is orthogonal and can be combined with any one of them.
 
 ## Quick recipe
 
