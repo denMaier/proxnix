@@ -1,0 +1,17 @@
+{
+  "name": "proxnix-manager-electrobun",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "electrobun build --env=dev && electrobun run --env=dev",
+    "build": "electrobun build --env=stable",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electrobun": "1.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
