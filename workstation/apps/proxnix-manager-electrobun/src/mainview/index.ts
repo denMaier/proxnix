@@ -566,6 +566,12 @@ function escapeHtml(value: unknown): string {
     .replaceAll('"', "&quot;");
 }
 
+function compactPath(path: string): string {
+  return path
+    .replace(/^\/Users\/[^/]+(?=\/)/, "~")
+    .replace(/^\/home\/[^/]+(?=\/)/, "~");
+}
+
 function icon(name: IconName): string {
   const paths: Record<IconName, string> = {
     back: '<path d="M19 12H5" /><path d="m12 5-7 7 7 7" />',
@@ -781,25 +787,22 @@ function renderSidebar(snapshot: AppSnapshot): string {
         </div>
       </section>
 
-      <section class="nav-section">
+      <section class="nav-section nav-section-containers">
         <div class="nav-heading">
           <span>Containers</span>
         </div>
         <div class="nav-list nav-list-groups">${containerButtons}</div>
       </section>
 
-      <section class="nav-section">
-        <div class="nav-heading">
-          <span>App</span>
-        </div>
+      <section class="nav-section nav-section-settings">
         <div class="nav-list">
           ${renderNavItem("gear", "Settings", "settings", state.selection, "")}
         </div>
       </section>
 
       <div class="sidebar-footer">
-        <div class="sidebar-footer-copy">
-          ${escapeHtml(snapshot.config.secretProvider)}
+        <div class="sidebar-footer-copy" title="${escapeHtml(snapshot.configPath)}">
+          Config: <code>${escapeHtml(compactPath(snapshot.configPath))}</code>
         </div>
       </div>
     </aside>
@@ -1992,6 +1995,12 @@ function renderMain(snapshot: AppSnapshot): string {
 }
 
 function renderStatusbar(snapshot: AppSnapshot): string {
+  const isSecretsPage = state.selection === "secrets" || state.selection.startsWith("secrets:");
+  const leftLabel = isSecretsPage
+    ? `Secrets: <code>${escapeHtml(snapshot.config.secretProvider)}</code>`
+    : snapshot.config.siteDir
+      ? `Site: <code>${escapeHtml(compactPath(snapshot.config.siteDir))}</code>`
+      : "Site: Not configured";
   const activityLabel =
     state.saving
       ? "Saving config"
@@ -2016,7 +2025,7 @@ function renderStatusbar(snapshot: AppSnapshot): string {
   return `
     <footer class="statusbar">
       <div class="statusbar-meta">
-        <span>Config: <code>${escapeHtml(snapshot.configPath)}</code></span>
+        <span>${leftLabel}</span>
       </div>
       <div class="statusbar-meta statusbar-activity-slot">
         ${
