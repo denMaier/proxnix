@@ -10,7 +10,8 @@
       "Bash(grep -En \"^[[:space:]]*#\\\\s*[a-zA-Z_].*\\\\\\(|^[[:space:]]*#\\\\s*[a-zA-Z_].*=\" /Users/denis/Projects/proxnix/proxnix-* /Users/denis/Projects/proxnix/*.sh)",
       "Bash(cat /Users/denis/Projects/proxnix/containers/twingate/quadlets/*.container)",
       "Bash(swift build:*)",
-      "Bash(python -m pytest workstation/tests/ -x -q)"
+      "Bash(python -m pytest workstation/tests/ -x -q)",
+      "Bash(git -C /Users/denis/Projects/proxnix status --short)"
     ]
   }
 }
