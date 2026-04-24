@@ -100,8 +100,8 @@ Provider-specific configuration:
 | `embedded-sops` | none beyond normal proxnix config |
 | `pass` | `PROXNIX_PASS_STORE_DIR` optional |
 | `gopass` | `PROXNIX_GOPASS_STORE_DIR` optional |
-| `passhole` | `PROXNIX_PASSHOLE_DATABASE` or `PROXNIX_PASSHOLE_CONFIG`; optional `PROXNIX_PASSHOLE_KEYFILE`, `PROXNIX_PASSHOLE_PASSWORD`, `PROXNIX_PASSHOLE_PASSWORD_FILE`, `PROXNIX_PASSHOLE_NO_PASSWORD`, `PROXNIX_PASSHOLE_NO_CACHE`, `PROXNIX_PASSHOLE_CACHE_TIMEOUT` |
-| `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD`, `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`, `PROXNIX_PYKEEPASS_AGENT_CONTEXT`, `PROXNIX_PYKEEPASS_AGENT_SOCKET` |
+| `passhole` | `PROXNIX_PASSHOLE_DATABASE` or `PROXNIX_PASSHOLE_CONFIG`; optional `PROXNIX_PASSHOLE_KEYFILE`, `PROXNIX_PASSHOLE_PASSWORD`, `PROXNIX_PASSHOLE_PASSWORD_FILE`, `PROXNIX_PASSHOLE_NO_PASSWORD`, `PROXNIX_PASSHOLE_NO_CACHE`, `PROXNIX_PASSHOLE_CACHE_TIMEOUT` (defaults to `600` seconds) |
+| `pykeepass` | `PROXNIX_PYKEEPASS_DATABASE`; optional `PROXNIX_PYKEEPASS_KEYFILE`, `PROXNIX_PYKEEPASS_PASSWORD`, `PROXNIX_PYKEEPASS_PASSWORD_FILE`, `PROXNIX_PYKEEPASS_NO_PASSWORD`, `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY`, `PROXNIX_PYKEEPASS_AGENT_CONTEXT`, `PROXNIX_PYKEEPASS_AGENT_SOCKET`, `PROXNIX_PYKEEPASS_NO_CACHE`, `PROXNIX_PYKEEPASS_CACHE_TIMEOUT` (agent-derived passwords default to `600` seconds) |
 | `onepassword` | `PROXNIX_1PASSWORD_VAULT`; `PROXNIX_1PASSWORD_SDK_AUTH` or `OP_SERVICE_ACCOUNT_TOKEN`; optional `PROXNIX_1PASSWORD_SDK_INTEGRATION_NAME`, `PROXNIX_1PASSWORD_SDK_INTEGRATION_VERSION` |
 | `onepassword-cli` | `PROXNIX_1PASSWORD_VAULT`; optional `PROXNIX_1PASSWORD_ACCOUNT` |
 | `keepassxc` | `PROXNIX_KEEPASSXC_DATABASE`; optional `PROXNIX_KEEPASSXC_PASSWORD_FILE`, `PROXNIX_KEEPASSXC_KEY_FILE`, `PROXNIX_KEEPASSXC_NO_PASSWORD` |
@@ -120,6 +120,10 @@ canonical provider name for the SDK-backed adapter and the same name with
 - set `PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY` to the public key exposed by the agent
 - optionally set `PROXNIX_PYKEEPASS_AGENT_CONTEXT` if you want a stable context string other than the database filename
 - set `PROXNIX_PYKEEPASS_AGENT_SOCKET` if the agent is not reachable via `SSH_AUTH_SOCK`
+
+Agent-derived pykeepass passwords are cached locally for 10 minutes by default
+to avoid repeated SSH agent signing prompts. Override with
+`PROXNIX_PYKEEPASS_CACHE_TIMEOUT` or disable with `PROXNIX_PYKEEPASS_NO_CACHE=1`.
 
 To print the exact derived password proxnix will use for bootstrap or recovery:
 
@@ -460,8 +464,23 @@ Use:
 ```bash
 proxnix-secrets rotate <vmid>
 proxnix-secrets rotate-shared
+proxnix-secrets rotate-group <group>
 ```
 
 That re-encrypts the authoring stores to the currently configured recipients.
 After rotating or changing any secret, run `proxnix-publish` again and restart
 the affected containers.
+
+## Initializing stores
+
+```bash
+proxnix-secrets init-host-relay
+proxnix-secrets init-container <vmid>
+proxnix-secrets init-shared
+```
+
+`init-host-relay` creates the shared relay key that Proxmox hosts use to decrypt
+guest identities during staging. `init-container` creates a per-container
+identity. `init-shared` creates the shared secret store. `set` creates guest
+identities automatically when needed, so explicit init is only required for the
+host relay key and for pre-seeding empty stores.
