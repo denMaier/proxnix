@@ -127,6 +127,10 @@ export PROXNIX_PASSHOLE_DATABASE=~/.local/share/passhole/proxnix.kdbx
 export PROXNIX_PASSHOLE_PASSWORD_FILE=~/.config/proxnix/passhole-password
 ```
 
+For `passhole`, proxnix asks `ph` to keep the database password cached for
+10 minutes by default. Override with `PROXNIX_PASSHOLE_CACHE_TIMEOUT` or disable
+with `PROXNIX_PASSHOLE_NO_CACHE=1`.
+
 Or:
 
 ```bash
@@ -194,6 +198,11 @@ If your SSH agent is not exposed through the standard `SSH_AUTH_SOCK`, set
 `PROXNIX_PYKEEPASS_AGENT_SOCKET` in the proxnix config file so proxnix can
 talk to the right socket explicitly.
 
+Agent-derived pykeepass passwords are cached locally for 10 minutes by default
+so repeated GUI operations do not keep asking the SSH agent to sign. Override
+with `PROXNIX_PYKEEPASS_CACHE_TIMEOUT` or disable with
+`PROXNIX_PYKEEPASS_NO_CACHE=1`.
+
 ## Examples
 
 ```bash
@@ -220,7 +229,7 @@ workstation/dist/
 
 ## Publish
 
-Tagged releases publish the package from Forgejo Actions.
+Tagged releases publish the package from GitHub Actions.
 
 For a local manual publish to PyPI:
 
@@ -243,5 +252,5 @@ python3 -m twine upload dist/*
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.
-- `ProxnixManager` is intended to ship separately from a Homebrew tap; see
-  `../docs/operations/proxnix-manager.md`.
+- `ProxnixManager` is the Electrobun GUI and ships separately from a Homebrew
+  tap; see `../docs/operations/proxnix-manager.md`.

@@ -29,7 +29,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/ho
 The helper script installer:
 
 - resolves the matching `.deb` for the host architecture
-- downloads it from the Codeberg package registry
+- downloads it from the GitHub package registry
 - verifies the checksum when latest-release metadata is available
 - installs it with `apt`
 
