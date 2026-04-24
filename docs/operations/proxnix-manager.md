@@ -106,7 +106,9 @@ Advanced imports can be added with `PROXNIX_MANAGER_PYTHONPATH`, either in the
 shared proxnix config or in the Manager process environment. This is scoped to
 the Manager bridge and its workstation CLI subprocesses. Use it for local or
 third-party provider modules that are not bundled with the app; do not use it
-as the normal way to find `proxnix_workstation` or `pykeepass`.
+as the normal way to find `proxnix_workstation` or `pykeepass`. A
+`site-packages` path is the direct form; venv `bin` directories and venv Python
+executables are accepted and expanded to the matching `site-packages` directory.
 
 For local development, prepare the repo-local environment before running the
 app:

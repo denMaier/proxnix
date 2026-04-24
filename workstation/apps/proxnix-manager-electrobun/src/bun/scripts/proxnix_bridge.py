@@ -124,8 +124,35 @@ def _manager_pythonpath_entries() -> list[str]:
     for raw_entry in raw_value.split(os.pathsep):
         entry = _expand_home_string(raw_entry.strip(), home)
         if entry:
-            entries.append(entry)
+            entries.extend(_pythonpath_entry_candidates(Path(entry)))
     return entries
+
+
+def _pythonpath_entry_candidates(path: Path) -> list[str]:
+    candidates = [path]
+
+    if path.name in {"python", "python3"} or path.name.startswith("python3."):
+        candidates.extend(_venv_site_packages_from_bin(path.parent))
+    elif path.name == "bin":
+        candidates.extend(_venv_site_packages_from_bin(path))
+
+    return [str(candidate) for candidate in candidates]
+
+
+def _venv_site_packages_from_bin(bin_dir: Path) -> list[Path]:
+    venv_dir = bin_dir.parent
+    patterns = [
+        venv_dir / "lib" / "python*" / "site-packages",
+        venv_dir / "Lib" / "site-packages",
+    ]
+
+    paths: list[Path] = []
+    for pattern in patterns:
+        for match in glob.glob(str(pattern)):
+            match_path = Path(match)
+            if match_path.is_dir():
+                paths.append(match_path)
+    return sorted(set(paths))
 
 
 def _ensure_pythonpath_bootstrap() -> None:

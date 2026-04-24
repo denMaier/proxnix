@@ -1374,7 +1374,7 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
             )
           : ""}
         ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix command wrappers.", undefined, true)}
-        ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Advanced: extra Python import paths for the Manager bridge, separated like PYTHONPATH.", undefined, true)}
+        ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Advanced: extra import paths for the Manager bridge. Site-packages paths are preferred; venv bin paths are expanded automatically.", undefined, true)}
       </div>
     </section>
   `;

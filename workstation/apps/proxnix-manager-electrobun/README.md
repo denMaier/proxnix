@@ -110,4 +110,5 @@ including `pykeepass`, under the app resources directory.
 Set `PROXNIX_MANAGER_PYTHONPATH` in the app settings or process environment to
 add extra import paths for Manager-only Python integrations. The value uses the
 platform `PYTHONPATH` separator and is applied to the bridge plus CLI
-subprocesses launched by the bridge.
+subprocesses launched by the bridge. Prefer `site-packages` paths; venv `bin`
+paths and venv Python executables are expanded automatically.
