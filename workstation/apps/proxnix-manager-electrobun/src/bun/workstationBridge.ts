@@ -59,6 +59,11 @@ function resolvePythonCommand(): string[] {
     return [moduleRelative];
   }
 
+  const nearestVenvPython = findNearestVenvPython();
+  if (nearestVenvPython) {
+    return [nearestVenvPython];
+  }
+
   const preferredPaths = [
     "/opt/homebrew/opt/python@3.12/bin/python3.12",
     "/usr/local/opt/python@3.12/bin/python3.12",
@@ -87,6 +92,31 @@ function resolvePythonCommand(): string[] {
   throw new Error(
     "Python 3 was not found on PATH. Set PROXNIX_MANAGER_PYTHON to override the interpreter path.",
   );
+}
+
+function findNearestVenvPython(): string | null {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const starts = [moduleDir, process.cwd(), dirname(process.argv0)];
+  const seen = new Set<string>();
+
+  for (const start of starts) {
+    let current = resolve(start);
+    while (!seen.has(current)) {
+      seen.add(current);
+      const candidate = resolve(current, ".venv", "bin", "python");
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+
+      const parent = dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+
+  return null;
 }
 
 function bundledResourceCandidates(): string[] {
