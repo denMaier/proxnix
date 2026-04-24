@@ -588,6 +588,10 @@ def _write_container_secret_groups(path: Path, groups: list[str]) -> None:
 
 def create_secret_group(payload: object) -> dict[str, object]:
     group = _secret_group_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "group", "create", group])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     if config["secretProvider"] == "embedded-sops":
@@ -645,6 +649,10 @@ def _container_has_source_secrets(ctx: tuple[object, object, object], vmid: str)
 
 def create_container_bundle(payload: object) -> dict[str, object]:
     vmid = _vmid_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "container", "create", vmid])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     public_dir = site_dir / "containers" / vmid
@@ -669,6 +677,10 @@ def create_container_bundle(payload: object) -> dict[str, object]:
 
 def delete_container_bundle(payload: object) -> dict[str, object]:
     vmid = _vmid_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "container", "delete", vmid])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     ctx = _load_container_identity_context()
@@ -695,6 +707,10 @@ def delete_container_bundle(payload: object) -> dict[str, object]:
 
 def delete_secret_group(payload: object) -> dict[str, object]:
     group = _secret_group_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "group", "delete", group])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     store = site_dir / "private" / "groups" / group / "secrets.sops.yaml"
@@ -723,6 +739,10 @@ def delete_secret_group(payload: object) -> dict[str, object]:
 def attach_secret_group(payload: object) -> dict[str, object]:
     group = _secret_group_from_payload(payload)
     vmid = _vmid_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "group", "attach", vmid, group])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     groups_file = _container_secret_groups_file(site_dir, vmid)
@@ -736,6 +756,10 @@ def attach_secret_group(payload: object) -> dict[str, object]:
 def detach_secret_group(payload: object) -> dict[str, object]:
     group = _secret_group_from_payload(payload)
     vmid = _vmid_from_payload(payload)
+    cli_result = _cli_site_snapshot(["site", "group", "detach", vmid, group])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     groups_file = _container_secret_groups_file(site_dir, vmid)
@@ -1003,6 +1027,10 @@ def snapshot() -> dict[str, object]:
 
 
 def create_site_nix(_payload: object) -> dict[str, object]:
+    cli_result = _cli_site_snapshot(["site", "create-site-nix"])
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = _site_dir_from_config(config)
     site_nix = site_dir / "site.nix"
@@ -1429,6 +1457,13 @@ def _cli_init_container_identity(payload: object) -> dict[str, object] | None:
         "exitCode": int(data.get("exitCode", exit_code) or exit_code),
         "error": str(data.get("error", "")).strip(),
     }
+
+
+def _cli_site_snapshot(args: list[str]) -> dict[str, object] | None:
+    data, _error, exit_code = _json_cli_data(args, timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS)
+    if data is None or exit_code != 0:
+        return None
+    return data
 
 
 def run_publish(payload: object) -> dict[str, object]:

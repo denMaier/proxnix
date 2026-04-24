@@ -6,9 +6,12 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from proxnix_workstation.cli import main as cli_main
-from proxnix_workstation.manager_api import build_config_state, build_status, save_config, set_config_value
+from proxnix_workstation.manager_api import attach_secret_group, build_config_state, build_status
+from proxnix_workstation.manager_api import create_container_bundle, create_secret_group, create_site_nix
+from proxnix_workstation.manager_api import delete_container_bundle, detach_secret_group, save_config, set_config_value
 
 
 class ManagerApiTests(unittest.TestCase):
@@ -153,6 +156,89 @@ class ManagerApiTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["data"]["config"]["siteDir"], "/tmp/site")
             self.assertTrue(build_config_state(config)["exists"])
+
+    def test_site_group_mutations_update_secret_group_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            site = root / "site"
+            (site / "containers" / "120").mkdir(parents=True)
+            config = root / "config"
+            config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
+
+            create_secret_group(config, "db")
+            attach_secret_group(config, "120", "db")
+            self.assertEqual((site / "containers" / "120" / "secret-groups.list").read_text(encoding="utf-8"), "db\n")
+
+            detach_secret_group(config, "120", "db")
+            self.assertFalse((site / "containers" / "120" / "secret-groups.list").exists())
+
+    def test_create_site_nix_writes_scaffold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            site = root / "site"
+            site.mkdir()
+            config = root / "config"
+            config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
+
+            status = create_site_nix(config)
+
+            self.assertTrue((site / "site.nix").is_file())
+            self.assertTrue(status["siteNixExists"])
+
+    def test_container_create_rolls_back_when_identity_creation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            site = root / "site"
+            site.mkdir()
+            config = root / "config"
+            config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
+
+            with patch("proxnix_workstation.manager_api.load_secret_provider", return_value=object()), patch(
+                "proxnix_workstation.manager_api.initialize_container_identity",
+                side_effect=RuntimeError("identity failed"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    create_container_bundle(config, "120")
+
+            self.assertFalse((site / "containers" / "120").exists())
+
+    def test_container_delete_removes_scaffold_when_no_local_secrets(self) -> None:
+        class FakeProvider:
+            def list_names(self, _ref):
+                return []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            site = root / "site"
+            (site / "containers" / "120").mkdir(parents=True)
+            config = root / "config"
+            config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
+
+            with patch("proxnix_workstation.manager_api.load_secret_provider", return_value=FakeProvider()), patch(
+                "proxnix_workstation.manager_api.have_container_private_key",
+                return_value=False,
+            ):
+                status = delete_container_bundle(config, "120")
+
+            self.assertFalse((site / "containers" / "120").exists())
+            self.assertEqual(status["containers"], [])
+
+    def test_site_group_attach_cli_returns_status_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            site = root / "site"
+            (site / "containers" / "120").mkdir(parents=True)
+            config = root / "config"
+            config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cli_main(["--config", str(config), "site", "group", "attach", "120", "db"])
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["data"]["attachedSecretGroups"], ["db"])
 
 
 if __name__ == "__main__":

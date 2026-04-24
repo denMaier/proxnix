@@ -9,6 +9,8 @@ from .config import load_workstation_config
 from .errors import ProxnixWorkstationError
 from .json_api import ok, print_json
 from .manager_api import build_config_state, build_status, save_config, set_config_value
+from .manager_api import attach_secret_group, create_container_bundle, create_secret_group, create_site_nix
+from .manager_api import delete_container_bundle, delete_secret_group, detach_secret_group
 from .planning import PlanRunner
 from .publish_tree import build_desired_config_tree
 from .resources import MirrorTree
@@ -38,7 +40,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=["status", "config", "sync", "diff", "publish", "doctor", "validation", "secrets", "tui", "ui", "exercise"],
+        choices=[
+            "status",
+            "config",
+            "site",
+            "sync",
+            "diff",
+            "publish",
+            "doctor",
+            "validation",
+            "secrets",
+            "tui",
+            "ui",
+            "exercise",
+        ],
         help="Command group to run",
     )
     parser.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -170,6 +185,69 @@ def _build_status_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_site_json(fn) -> int:
+    try:
+        print_json(ok(fn()))
+        return 0
+    except ValueError as exc:
+        raise ProxnixWorkstationError(str(exc)) from exc
+
+
+def _build_site_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="proxnix site", description="Mutate local proxnix site state")
+    sub = parser.add_subparsers(dest="site_command", required=True)
+
+    site_nix = sub.add_parser("create-site-nix")
+    site_nix.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+
+    container = sub.add_parser("container")
+    container_sub = container.add_subparsers(dest="container_command", required=True)
+    container_create = container_sub.add_parser("create")
+    container_create.add_argument("vmid")
+    container_create.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+    container_delete = container_sub.add_parser("delete")
+    container_delete.add_argument("vmid")
+    container_delete.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+
+    group = sub.add_parser("group")
+    group_sub = group.add_subparsers(dest="group_command", required=True)
+    group_create = group_sub.add_parser("create")
+    group_create.add_argument("group")
+    group_create.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+    group_delete = group_sub.add_parser("delete")
+    group_delete.add_argument("group")
+    group_delete.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+    group_attach = group_sub.add_parser("attach")
+    group_attach.add_argument("vmid")
+    group_attach.add_argument("group")
+    group_attach.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+    group_detach = group_sub.add_parser("detach")
+    group_detach.add_argument("vmid")
+    group_detach.add_argument("group")
+    group_detach.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+    return parser
+
+
+def _run_site(args: argparse.Namespace) -> int:
+    if args.site_command == "create-site-nix":
+        return _run_site_json(lambda: create_site_nix(args.config))
+    if args.site_command == "container":
+        if args.container_command == "create":
+            return _run_site_json(lambda: create_container_bundle(args.config, args.vmid))
+        if args.container_command == "delete":
+            return _run_site_json(lambda: delete_container_bundle(args.config, args.vmid))
+    if args.site_command == "group":
+        if args.group_command == "create":
+            return _run_site_json(lambda: create_secret_group(args.config, args.group))
+        if args.group_command == "delete":
+            return _run_site_json(lambda: delete_secret_group(args.config, args.group))
+        if args.group_command == "attach":
+            return _run_site_json(lambda: attach_secret_group(args.config, args.vmid, args.group))
+        if args.group_command == "detach":
+            return _run_site_json(lambda: detach_secret_group(args.config, args.vmid, args.group))
+    raise ProxnixWorkstationError("unsupported site command")
+
+
 def _run_plan_config_tree(args: argparse.Namespace) -> int:
     config = load_workstation_config(args.config)
     with tempfile.TemporaryDirectory(prefix="proxnix-config-tree.") as temp_dir:
@@ -228,6 +306,11 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_set_config(config_args)
             if config_args.config_command == "plan-tree":
                 return _run_plan_config_tree(config_args)
+
+        if args.command == "site":
+            site_args = _build_site_parser().parse_args(_strip_remainder_prefix(args.args))
+            site_args.config = args.config
+            return _run_site(site_args)
 
         if args.command in {"sync", "diff", "publish"}:
             from .publish_cli import main as publish_main
