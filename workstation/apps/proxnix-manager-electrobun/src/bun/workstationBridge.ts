@@ -186,6 +186,67 @@ function invalidateAllCache(): void {
   invalidateSecretsCache();
 }
 
+function commandOutput(stdout: string, stderr: string): string {
+  return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+}
+
+function gitEnv(): Record<string, string> {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => value !== undefined),
+  ) as Record<string, string>;
+  env.HOME = env.HOME || process.env.HOME || "";
+  return env;
+}
+
+function gitSiteDir(): string {
+  const snapshot = loadSnapshot();
+  const siteDir = snapshot.config.siteDir.trim();
+  if (!siteDir) {
+    throw new Error("Set site directory first.");
+  }
+  if (!existsSync(siteDir)) {
+    throw new Error(`Site directory not found: ${siteDir}`);
+  }
+  return siteDir;
+}
+
+function runGit(siteDir: string, args: string[], timeoutMs = 120_000): { output: string; exitCode: number } {
+  try {
+    const result = Bun.spawnSync(["git", "-C", siteDir, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: gitEnv(),
+      timeout: timeoutMs,
+    });
+    return {
+      output: commandOutput(
+        result.stdout.toString("utf8"),
+        result.stderr.toString("utf8"),
+      ),
+      exitCode: result.exitCode ?? 1,
+    };
+  } catch (error) {
+    return { output: String(error), exitCode: 1 };
+  }
+}
+
+function commandResult(output: string, exitCode: number, fallbackSuccess = ""): CommandResult {
+  const cleaned = output.trim() || (exitCode === 0 ? fallbackSuccess : "");
+  return {
+    output: cleaned,
+    exitCode,
+    error: exitCode === 0 ? "" : cleaned,
+  };
+}
+
+function ensureGitRepo(siteDir: string): CommandResult | null {
+  const result = runGit(siteDir, ["rev-parse", "--is-inside-work-tree"], 30_000);
+  if (result.exitCode !== 0) {
+    return { output: "", exitCode: 1, error: "Site directory is not a git repository." };
+  }
+  return null;
+}
+
 export function loadSnapshot(options?: { force?: boolean }): AppSnapshot {
   if (!options?.force && cache.snapshot) {
     return cache.snapshot;
@@ -339,19 +400,147 @@ export function runPublish(options: { dryRun?: boolean; configOnly?: boolean; vm
 }
 
 export function gitStatus(): GitStatusResult {
-  return runBridge<GitStatusResult>("git-status");
+  const empty: GitStatusResult = {
+    isRepo: false,
+    branch: "",
+    clean: true,
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    files: [],
+    log: [],
+    ahead: 0,
+    behind: 0,
+    hasRemote: false,
+    upstream: "",
+    error: "",
+  };
+
+  let siteDir: string;
+  try {
+    siteDir = gitSiteDir();
+  } catch (error) {
+    return { ...empty, error: String(error instanceof Error ? error.message : error) };
+  }
+
+  const repoCheck = runGit(siteDir, ["rev-parse", "--is-inside-work-tree"], 30_000);
+  if (repoCheck.exitCode !== 0) {
+    return { ...empty, error: "Site directory is not a git repository." };
+  }
+
+  const branch = runGit(siteDir, ["branch", "--show-current"], 30_000).output;
+  const status = runGit(siteDir, ["status", "--porcelain=v1", "-u"], 30_000).output;
+  const log = runGit(siteDir, ["log", "--oneline", "-15"], 30_000).output;
+  const upstream = runGit(siteDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 30_000);
+
+  const files: { status: string; path: string }[] = [];
+  const staged: { status: string; path: string }[] = [];
+  const unstaged: { status: string; path: string }[] = [];
+  const untracked: { status: string; path: string }[] = [];
+  for (const line of status.split(/\r?\n/)) {
+    if (line.length < 3) continue;
+    const indexFlag = line[0] ?? " ";
+    const worktreeFlag = line[1] ?? " ";
+    const path = line.slice(3);
+    const fileStatus = line.slice(0, 2).trim() || "?";
+    files.push({ status: fileStatus, path });
+    if (indexFlag === "?") {
+      untracked.push({ status: "?", path });
+    } else {
+      if (indexFlag !== " ") staged.push({ status: indexFlag, path });
+      if (worktreeFlag !== " ") unstaged.push({ status: worktreeFlag, path });
+    }
+  }
+
+  const logEntries = log
+    .split(/\r?\n/)
+    .map((line) => {
+      const [hash, ...messageParts] = line.split(" ");
+      return hash && messageParts.length > 0 ? { hash, message: messageParts.join(" ") } : null;
+    })
+    .filter((entry): entry is { hash: string; message: string } => entry !== null);
+
+  let ahead = 0;
+  let behind = 0;
+  const hasRemote = upstream.exitCode === 0 && upstream.output.length > 0;
+  if (hasRemote) {
+    const counts = runGit(siteDir, ["rev-list", "--left-right", "--count", `HEAD...${upstream.output}`], 30_000);
+    if (counts.exitCode === 0) {
+      const [aheadRaw, behindRaw] = counts.output.split(/\s+/);
+      ahead = Number.parseInt(aheadRaw ?? "0", 10) || 0;
+      behind = Number.parseInt(behindRaw ?? "0", 10) || 0;
+    }
+  }
+
+  return {
+    isRepo: true,
+    branch,
+    clean: files.length === 0,
+    staged,
+    unstaged,
+    untracked,
+    files,
+    log: logEntries,
+    ahead,
+    behind,
+    hasRemote,
+    upstream: hasRemote ? upstream.output : "",
+    error: "",
+  };
 }
 
 export function gitAdd(options: { all?: boolean; file?: string }): CommandResult {
-  return runBridge<CommandResult>("git-add", options);
+  let siteDir: string;
+  try {
+    siteDir = gitSiteDir();
+  } catch (error) {
+    return { output: "", exitCode: 1, error: String(error instanceof Error ? error.message : error) };
+  }
+  const repoError = ensureGitRepo(siteDir);
+  if (repoError) return repoError;
+
+  if (options.all) {
+    const result = runGit(siteDir, ["add", "-A"]);
+    return commandResult(result.output, result.exitCode, "All changes staged.");
+  }
+  const file = options.file?.trim();
+  if (!file) {
+    return { output: "", exitCode: 1, error: "Choose a file to add." };
+  }
+  const result = runGit(siteDir, ["add", "--", file]);
+  return commandResult(result.output, result.exitCode, `Staged ${file}.`);
 }
 
 export function gitCommit(message: string): CommandResult {
-  return runBridge<CommandResult>("git-commit", { message });
+  let siteDir: string;
+  try {
+    siteDir = gitSiteDir();
+  } catch (error) {
+    return { output: "", exitCode: 1, error: String(error instanceof Error ? error.message : error) };
+  }
+  const repoError = ensureGitRepo(siteDir);
+  if (repoError) return repoError;
+
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return { output: "", exitCode: 1, error: "Commit message cannot be empty." };
+  }
+  const result = runGit(siteDir, ["commit", "-m", trimmed]);
+  return commandResult(result.output, result.exitCode);
 }
 
 export function gitPush(): CommandResult {
-  return runBridge<CommandResult>("git-push");
+  let siteDir: string;
+  try {
+    siteDir = gitSiteDir();
+  } catch (error) {
+    return { output: "", exitCode: 1, error: String(error instanceof Error ? error.message : error) };
+  }
+  const repoError = ensureGitRepo(siteDir);
+  if (repoError) return repoError;
+
+  const result = runGit(siteDir, ["push"], 180_000);
+  return commandResult(result.output, result.exitCode, "Pushed successfully.");
 }
 
 export function openInEditor(path: string): { opened: boolean; editor?: string; error?: string } {
