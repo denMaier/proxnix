@@ -42,8 +42,7 @@ const cache: {
 };
 
 function resolvePythonCommand(): string[] {
-  const configValues = managerConfigValues();
-  const explicit = (process.env.PROXNIX_MANAGER_PYTHON ?? configValues.PROXNIX_MANAGER_PYTHON ?? "").trim();
+  const explicit = process.env.PROXNIX_MANAGER_PYTHON?.trim();
   if (explicit) {
     return explicit.split(/\s+/).filter(Boolean);
   }
@@ -58,11 +57,6 @@ function resolvePythonCommand(): string[] {
   const moduleRelative = fileURLToPath(new URL("../../../../.venv/bin/python", import.meta.url));
   if (existsSync(moduleRelative)) {
     return [moduleRelative];
-  }
-
-  const nearestVenvPython = findNearestVenvPython();
-  if (nearestVenvPython) {
-    return [nearestVenvPython];
   }
 
   const preferredPaths = [
@@ -93,73 +87,6 @@ function resolvePythonCommand(): string[] {
   throw new Error(
     "Python 3 was not found on PATH. Set PROXNIX_MANAGER_PYTHON to override the interpreter path.",
   );
-}
-
-function findNearestVenvPython(): string | null {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const scriptsDir = managerConfigValues().PROXNIX_SCRIPTS_DIR?.trim();
-  const starts = [
-    moduleDir,
-    dirname(bridgeScriptPath()),
-    ...(scriptsDir ? [scriptsDir] : []),
-    process.cwd(),
-    dirname(process.argv0),
-  ];
-  const seen = new Set<string>();
-
-  for (const start of starts) {
-    let current = resolve(start);
-    while (!seen.has(current)) {
-      seen.add(current);
-      const candidate = resolve(current, ".venv", "bin", "python");
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-
-      const parent = dirname(current);
-      if (parent === current) {
-        break;
-      }
-      current = parent;
-    }
-  }
-
-  return null;
-}
-
-function managerConfigValues(): Record<string, string> {
-  const configPath = resolve(
-    process.env.XDG_CONFIG_HOME?.trim() || resolve(process.env.HOME || "", ".config"),
-    "proxnix",
-    "config",
-  );
-  if (!existsSync(configPath)) {
-    return {};
-  }
-
-  const values: Record<string, string> = {};
-  for (const rawLine of readFileSync(configPath, "utf8").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!match) {
-      continue;
-    }
-    values[match[1]] = unquoteConfigValue(match[2].trim());
-  }
-  return values;
-}
-
-function unquoteConfigValue(value: string): string {
-  if (
-    (value.startsWith("'") && value.endsWith("'")) ||
-    (value.startsWith('"') && value.endsWith('"'))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function bundledResourceCandidates(): string[] {
