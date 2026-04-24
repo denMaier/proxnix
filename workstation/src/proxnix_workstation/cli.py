@@ -23,7 +23,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  proxnix status --json\n"
             "  proxnix config show\n"
-            "  proxnix publish --dry-run\n"
+            "  proxnix diff --json\n"
+            "  proxnix sync --json\n"
             "  proxnix doctor --site-only\n"
             "  proxnix secrets ls 120\n"
             "  proxnix tui\n"
@@ -37,7 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=["status", "config", "publish", "doctor", "validation", "secrets", "tui", "ui", "exercise"],
+        choices=["status", "config", "sync", "diff", "publish", "doctor", "validation", "secrets", "tui", "ui", "exercise"],
         help="Command group to run",
     )
     parser.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -228,10 +229,17 @@ def main(argv: list[str] | None = None) -> int:
             if config_args.config_command == "plan-tree":
                 return _run_plan_config_tree(config_args)
 
-        if args.command == "publish":
+        if args.command in {"sync", "diff", "publish"}:
             from .publish_cli import main as publish_main
 
-            return _forward(publish_main, args.args, config=args.config, accepts_config=True, prog="proxnix publish")
+            publish_args = args.args
+            prog = "proxnix publish"
+            if args.command == "sync":
+                prog = "proxnix sync"
+            elif args.command == "diff":
+                prog = "proxnix diff"
+                publish_args = ["--dry-run", "--report-changes", *args.args]
+            return _forward(publish_main, publish_args, config=args.config, accepts_config=True, prog=prog)
         if args.command in {"doctor", "validation"}:
             from .doctor_cli import main as doctor_main
 

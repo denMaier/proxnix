@@ -17,6 +17,7 @@ from proxnix_workstation.publish_cli import (
     PublishOptions,
     PublishSource,
     do_rsync,
+    host_report_data,
     materialize_head_site,
     should_report_change,
     write_publish_revision,
@@ -206,6 +207,21 @@ class PublishCliTests(unittest.TestCase):
         config = _test_config()
 
         self.assertTrue(should_report_change(config, PurePosixPath("/var/lib/proxnix/publish-revision.json")))
+
+    def test_host_report_data_summarizes_changes(self) -> None:
+        report = [
+            ("create", PurePosixPath("/var/lib/proxnix/containers/100/config.nix")),
+            ("update", PurePosixPath("/var/lib/proxnix/site.nix")),
+            ("delete", PurePosixPath("/var/lib/proxnix/containers/101/old.nix")),
+        ]
+
+        data = host_report_data("root@node1", report)
+
+        self.assertTrue(data["changed"])
+        self.assertEqual(data["creates"], 1)
+        self.assertEqual(data["updates"], 1)
+        self.assertEqual(data["deletes"], 1)
+        self.assertEqual(data["changes"][0]["action"], "create")
 
     def test_do_rsync_preserves_trailing_slash_for_directory_contents(self) -> None:
         session = _FakeSession()
