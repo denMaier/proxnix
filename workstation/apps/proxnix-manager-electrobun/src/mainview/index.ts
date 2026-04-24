@@ -8,19 +8,26 @@ import type {
   GitStatusResult,
   ProxnixConfig,
   ProxnixManagerRPC,
+  SecretScopeStatus,
   SecretsProviderStatus,
   SidebarMetadata,
 } from "../shared/types";
 
 type ViewSelection =
+  | "welcome"
   | "settings"
   | "publish"
   | "secrets"
+  | "secrets:groups"
+  | "secrets:containers"
+  | `secrets:group:${string}`
+  | `secrets:container:${string}`
   | "doctor"
   | "git"
   | `container:${string}`;
 
 type IconName =
+  | "back"
   | "box"
   | "branch"
   | "chevron"
@@ -28,6 +35,7 @@ type IconName =
   | "folder"
   | "gear"
   | "health"
+  | "home"
   | "key"
   | "lock"
   | "open"
@@ -49,7 +57,11 @@ const SECRET_PROVIDER_OPTIONS = [
   "exec",
 ];
 
+const INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
+const SECRET_STATUS_FRESH_MS = 15_000;
+
 const proxnixRpc = Electroview.defineRPC<ProxnixManagerRPC>({
+  maxRequestTime: INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS,
   handlers: {
     requests: {},
     messages: {},
@@ -94,15 +106,25 @@ const state: {
   secretsProviderLoading: boolean;
   secretsProviderError: string | null;
   secretsProviderLoadedKey: string | null;
+  secretsProviderLoadedAt: number;
   secretsProviderLoadingKey: string | null;
   secretsProviderLoadPromise: Promise<void> | null;
+  secretScopeStatus: SecretScopeStatus | null;
+  secretScopeLoading: boolean;
+  secretScopeLoadedKey: string | null;
+  secretScopeLoadedAt: number;
+  secretScopeError: string | null;
+  secretScopeRunning: boolean;
+  secretScopeResult: CommandResult | null;
+  secretDraftName: string;
+  secretDraftValue: string;
 } = {
   snapshot: null,
   draft: null,
   containerMetadataDraft: null,
   expandedGroups: new Set<string>(),
   expandedGroupsInitialized: false,
-  selection: "settings",
+  selection: "welcome",
   loading: true,
   saving: false,
   metadataSaving: false,
@@ -124,8 +146,18 @@ const state: {
   secretsProviderLoading: false,
   secretsProviderError: null,
   secretsProviderLoadedKey: null,
+  secretsProviderLoadedAt: 0,
   secretsProviderLoadingKey: null,
   secretsProviderLoadPromise: null,
+  secretScopeStatus: null,
+  secretScopeLoading: false,
+  secretScopeLoadedKey: null,
+  secretScopeLoadedAt: 0,
+  secretScopeError: null,
+  secretScopeRunning: false,
+  secretScopeResult: null,
+  secretDraftName: "",
+  secretDraftValue: "",
 };
 
 function sleep(ms: number): Promise<void> {
@@ -304,6 +336,10 @@ function sidebarTitleFor(snapshot: AppSnapshot, container: ContainerSummary): st
   return metadata.displayName || container.vmid;
 }
 
+function effectiveContainerHasIdentity(container: ContainerSummary): boolean {
+  return state.secretsProviderStatus?.containerIdentities[container.vmid] ?? container.hasIdentity;
+}
+
 function currentContainerSidebarMetadata(snapshot: AppSnapshot, vmid: string): SidebarMetadata {
   return cloneSidebarMetadata(sidebarMetadataFor(snapshot, vmid));
 }
@@ -329,36 +365,126 @@ function clearSecretsProviderStatus(): void {
   state.secretsProviderStatus = null;
   state.secretsProviderError = null;
   state.secretsProviderLoadedKey = null;
+  state.secretsProviderLoadedAt = 0;
   state.secretsProviderLoadingKey = null;
   state.secretsProviderLoadPromise = null;
   state.secretsProviderLoading = false;
 }
 
-function ensureSecretsProviderStatus(): Promise<void> | null {
+function isFreshTimestamp(loadedAt: number): boolean {
+  return loadedAt > 0 && Date.now() - loadedAt < SECRET_STATUS_FRESH_MS;
+}
+
+function secretScopeFromSelection(): { scopeType: "shared" | "group" | "container"; scopeId: string } | null {
+  if (state.selection === "secrets:group:shared") {
+    return { scopeType: "shared", scopeId: "shared" };
+  }
+  if (state.selection.startsWith("secrets:group:")) {
+    return { scopeType: "group", scopeId: state.selection.slice("secrets:group:".length) };
+  }
+  if (state.selection.startsWith("secrets:container:")) {
+    return { scopeType: "container", scopeId: state.selection.slice("secrets:container:".length) };
+  }
+  return null;
+}
+
+function isSecretsIndexSelection(): boolean {
+  return state.selection === "secrets" ||
+    state.selection === "secrets:groups" ||
+    state.selection === "secrets:containers";
+}
+
+function secretScopeCacheKey(): string | null {
+  const scope = secretScopeFromSelection();
+  if (!scope || !state.snapshot) {
+    return null;
+  }
+  return JSON.stringify({
+    siteDir: state.snapshot.config.siteDir,
+    provider: state.snapshot.config.secretProvider,
+    providerCommand: state.snapshot.config.secretProviderCommand,
+    scope,
+  });
+}
+
+function clearSecretScopeStatus(): void {
+  state.secretScopeStatus = null;
+  state.secretScopeLoadedKey = null;
+  state.secretScopeLoadedAt = 0;
+  state.secretScopeError = null;
+  state.secretScopeResult = null;
+  state.secretScopeLoading = false;
+}
+
+async function ensureSecretScopeStatus(force = false): Promise<void> {
+  const scope = secretScopeFromSelection();
+  const key = secretScopeCacheKey();
+  if (!scope || !key) {
+    clearSecretScopeStatus();
+    return;
+  }
+  const hasCachedStatus = state.secretScopeLoadedKey === key && state.secretScopeStatus;
+  if (!force && hasCachedStatus && isFreshTimestamp(state.secretScopeLoadedAt)) {
+    return;
+  }
+
+  const backgroundRefresh = !force && Boolean(hasCachedStatus);
+  state.secretScopeLoading = !backgroundRefresh;
+  state.secretScopeError = null;
+  if (!backgroundRefresh) {
+    render();
+  }
+  try {
+    state.secretScopeStatus = await proxnixRpc.request.loadSecretScopeStatus({
+      scopeType: scope.scopeType,
+      scopeId: scope.scopeType === "shared" ? undefined : scope.scopeId,
+      force: force || backgroundRefresh,
+    });
+    state.secretScopeLoadedKey = key;
+    state.secretScopeLoadedAt = Date.now();
+  } catch (error) {
+    state.secretScopeError = error instanceof Error ? error.message : String(error);
+    if (!hasCachedStatus) {
+      state.secretScopeStatus = null;
+    }
+  } finally {
+    state.secretScopeLoading = false;
+    render();
+  }
+}
+
+function ensureSecretsProviderStatus(force = false): Promise<void> | null {
   const snapshot = state.snapshot;
   if (!snapshot || snapshot.config.siteDir.length === 0) {
     return null;
   }
 
   const key = secretsProviderCacheKey(snapshot);
-  if (state.secretsProviderLoadedKey === key && state.secretsProviderStatus) {
+  const hasCachedStatus = state.secretsProviderLoadedKey === key && state.secretsProviderStatus;
+  if (!force && hasCachedStatus && isFreshTimestamp(state.secretsProviderLoadedAt)) {
     return null;
   }
-  if (state.secretsProviderLoadPromise && state.secretsProviderLoadingKey === key) {
+  if (!force && state.secretsProviderLoadPromise && state.secretsProviderLoadingKey === key) {
     return state.secretsProviderLoadPromise;
   }
 
-  state.secretsProviderLoading = true;
+  const backgroundRefresh = !force && Boolean(hasCachedStatus);
+  state.secretsProviderLoading = !backgroundRefresh;
   state.secretsProviderLoadingKey = key;
   state.secretsProviderError = null;
-  render();
+  if (!backgroundRefresh) {
+    render();
+  }
 
   state.secretsProviderLoadPromise = (async () => {
     try {
-      const status = normalizeSecretsProviderStatus(await proxnixRpc.request.loadSecretsProviderStatus());
+      const status = normalizeSecretsProviderStatus(
+        await proxnixRpc.request.loadSecretsProviderStatus({ force: force || backgroundRefresh }),
+      );
       if (state.snapshot && secretsProviderCacheKey(state.snapshot) === key) {
         state.secretsProviderStatus = status;
         state.secretsProviderLoadedKey = key;
+        state.secretsProviderLoadedAt = Date.now();
       }
     } catch (error) {
       if (state.snapshot && secretsProviderCacheKey(state.snapshot) === key) {
@@ -386,14 +512,21 @@ function setSelection(next: ViewSelection): void {
   if (next === "git" && !state.gitResult && !state.gitLoading) {
     void handleRefreshGit();
   }
-  if (next === "secrets") {
+  if (next === "secrets" || next.startsWith("secrets:")) {
     void ensureSecretsProviderStatus();
+  }
+  if (next.startsWith("secrets:")) {
+    void ensureSecretScopeStatus();
+  } else {
+    clearSecretScopeStatus();
   }
 }
 
 function ensureSelection(snapshot: AppSnapshot): void {
   if (snapshot.config.siteDir.length === 0) {
-    state.selection = "settings";
+    if (state.selection !== "settings") {
+      state.selection = "welcome";
+    }
     state.containerMetadataDraft = null;
     return;
   }
@@ -407,8 +540,13 @@ function ensureSelection(snapshot: AppSnapshot): void {
 
   if (
     state.selection === "settings" ||
+    state.selection === "welcome" ||
     state.selection === "publish" ||
     state.selection === "secrets" ||
+    state.selection === "secrets:groups" ||
+    state.selection === "secrets:containers" ||
+    state.selection.startsWith("secrets:group:") ||
+    state.selection.startsWith("secrets:container:") ||
     state.selection === "doctor" ||
     state.selection === "git"
   ) {
@@ -416,9 +554,8 @@ function ensureSelection(snapshot: AppSnapshot): void {
     return;
   }
 
-  state.selection =
-    snapshot.containers.length > 0 ? (`container:${snapshot.containers[0]!.vmid}` as ViewSelection) : "settings";
-  syncContainerMetadataDraft(snapshot);
+  state.selection = "welcome";
+  state.containerMetadataDraft = null;
 }
 
 function escapeHtml(value: unknown): string {
@@ -431,6 +568,7 @@ function escapeHtml(value: unknown): string {
 
 function icon(name: IconName): string {
   const paths: Record<IconName, string> = {
+    back: '<path d="M19 12H5" /><path d="m12 5-7 7 7 7" />',
     box: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z" /><path d="M3 7.5V16.5L12 21L21 16.5V7.5" /><path d="M12 12v9" />',
     branch:
       '<circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M8.5 6H15.5" /><path d="M18 8.5V15.5" /><path d="M8.5 6V10.5C8.5 12.71 10.29 14.5 12.5 14.5H18" />',
@@ -443,6 +581,8 @@ function icon(name: IconName): string {
       '<circle cx="12" cy="12" r="3.5" /><path d="M12 2.8v2.3M12 18.9v2.3M4.3 7.1l2 1.2M17.7 14.7l2 1.2M2.8 12h2.3M18.9 12h2.3M4.3 16.9l2-1.2M17.7 9.3l2-1.2" />',
     health:
       '<path d="M12 5v14M5 12h14" /><circle cx="12" cy="12" r="9" />',
+    home:
+      '<path d="M3 11.5 12 4l9 7.5" /><path d="M5.5 10.5V20h13v-9.5" /><path d="M9.5 20v-5h5v5" />',
     key:
       '<circle cx="8" cy="12" r="4" /><path d="M12 12h9" /><path d="M17 12v3" /><path d="M20 12v2" />',
     lock:
@@ -465,7 +605,10 @@ function renderNavItem(
   current: ViewSelection,
   extra: string,
 ): string {
-  const active = current === selection ? " active" : "";
+  const active =
+    current === selection || (selection === "secrets" && current.startsWith("secrets:"))
+      ? " active"
+      : "";
   return `
     <button class="nav-item${active}" data-nav="${selection}">
       ${icon(iconName)}
@@ -555,7 +698,7 @@ function syncExpandedGroups(snapshot: AppSnapshot): void {
   const nextIds = new Set(nextGroups.map((group) => group.id));
 
   if (!state.expandedGroupsInitialized) {
-    state.expandedGroups = nextIds;
+    state.expandedGroups = new Set<string>();
     state.expandedGroupsInitialized = true;
     return;
   }
@@ -563,12 +706,6 @@ function syncExpandedGroups(snapshot: AppSnapshot): void {
   for (const id of [...state.expandedGroups]) {
     if (!nextIds.has(id)) {
       state.expandedGroups.delete(id);
-    }
-  }
-
-  for (const id of nextIds) {
-    if (!state.expandedGroups.has(id)) {
-      state.expandedGroups.add(id);
     }
   }
 }
@@ -584,12 +721,10 @@ function renderSidebar(snapshot: AppSnapshot): string {
               .map((container) => {
                 const selection = `container:${container.vmid}` as ViewSelection;
                 const active = state.selection === selection ? " active" : "";
-                const statusClass = container.secretGroups.length > 0 || container.hasIdentity ? "ok" : "info";
                 const detail = sidebarContainerDetail(snapshot, container);
 
                 return `
-                  <button class="nav-item${active}" data-nav="${selection}" title="${escapeHtml(`VMID ${container.vmid}`)}">
-                    <span class="tiny-dot ${statusClass}" aria-hidden="true"></span>
+                  <button class="nav-item container-nav-item${active}" data-nav="${selection}" title="${escapeHtml(`VMID ${container.vmid}`)}">
                     <span class="nav-copy">
                       <span class="nav-item-title">${escapeHtml(sidebarTitleFor(snapshot, container))}</span>
                       ${
@@ -638,10 +773,11 @@ function renderSidebar(snapshot: AppSnapshot): string {
           ${warningCount}
         </div>
         <div class="nav-list">
+          ${renderNavItem("home", "Welcome", "welcome", state.selection, "")}
           ${renderNavItem("branch", "Git", "git", state.selection, "")}
-          ${renderNavItem("health", "Doctor", "doctor", state.selection, "")}
           ${renderNavItem("publish", "Publish", "publish", state.selection, "")}
           ${renderNavItem("lock", "Secrets", "secrets", state.selection, "")}
+          ${renderNavItem("health", "Doctor", "doctor", state.selection, "")}
         </div>
       </section>
 
@@ -700,15 +836,28 @@ function renderWarnings(snapshot: AppSnapshot): string {
 function renderToolbar(snapshot: AppSnapshot): string {
   const currentContainer = selectedContainer();
   const dirty = isDirty();
+  const secretScope = secretScopeFromSelection();
 
   const title =
     (currentContainer && state.snapshot ? sidebarTitleFor(state.snapshot, currentContainer) : null) ??
-    (state.selection === "settings"
+    (state.selection === "welcome"
+      ? "Welcome"
+      : state.selection === "settings"
       ? "Settings"
       : state.selection === "publish"
         ? "Publish"
         : state.selection === "secrets"
           ? "Secrets"
+          : state.selection === "secrets:groups"
+            ? "Secret Groups"
+            : state.selection === "secrets:containers"
+              ? "Container Secrets"
+            : secretScope?.scopeType === "shared"
+              ? "Shared Secrets"
+              : secretScope?.scopeType === "group"
+                ? `Group: ${secretScope.scopeId}`
+                : secretScope?.scopeType === "container"
+                  ? `Container Secrets: ${secretScope.scopeId}`
           : state.selection === "doctor"
             ? "Doctor"
             : state.selection === "git"
@@ -716,15 +865,20 @@ function renderToolbar(snapshot: AppSnapshot): string {
               : "Proxnix Manager");
 
   const subtitleMap: Record<string, string> = {
+    welcome: "Start from the main workstation tasks.",
     settings: "Paths, SSH targets, and secret backend used across all proxnix tools.",
     publish: "Sync config, secrets, and identities to your Proxmox hosts.",
-    secrets: "Secret groups and which containers use them.",
+    secrets: "Manage shared and named secret groups.",
+    "secrets:groups": "Shared is always available; named groups can be attached to containers.",
+    "secrets:containers": "Manage each container's local secret scope and identity.",
     doctor: "Check your site for misconfigurations and missing files.",
     git: "Current branch, uncommitted changes, and recent history.",
   };
 
   const subtitle = currentContainer
     ? "Config files, secret groups, and identity for this container."
+    : secretScope
+      ? "Manage secret names and write values through proxnix-secrets without revealing stored values."
     : subtitleMap[state.selection] ?? "";
 
   const canOpenSite = snapshot.config.siteDir.length > 0;
@@ -810,6 +964,89 @@ function renderOnboarding(snapshot: AppSnapshot): string {
         </div>
       </section>
       ${renderSettingsForm(snapshot)}
+    </div>
+  `;
+}
+
+function renderWelcomePage(snapshot: AppSnapshot): string {
+  const hasSite = snapshot.config.siteDir.length > 0 && snapshot.siteDirExists;
+  const containerCount = snapshot.containers.length;
+  const groupCount = new Set(["shared", ...snapshot.definedSecretGroups, ...snapshot.attachedSecretGroups]).size;
+
+  return `
+    <div class="page-stack">
+      <section class="welcome-band">
+        <div class="welcome-copy">
+          <div class="welcome-text">
+            ${hasSite
+              ? `Using ${snapshot.config.siteDir}.`
+              : "Choose a proxnix site directory to begin."}
+          </div>
+        </div>
+        <div class="welcome-actions">
+          ${hasSite
+            ? `
+              <button class="primary-button" data-nav="secrets">
+                ${icon("lock")}
+                <span>Manage Secrets</span>
+              </button>
+              <button class="secondary-button" data-nav="publish">
+                ${icon("publish")}
+                <span>Publish</span>
+              </button>
+            `
+            : `
+              <button class="primary-button" data-action="choose-site">
+                ${icon("folder")}
+                <span>Choose Site Directory</span>
+              </button>
+              <button class="secondary-button" data-nav="settings">
+                ${icon("gear")}
+                <span>Settings</span>
+              </button>
+            `}
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="welcome-stat-grid">
+          <button class="welcome-stat" data-nav="secrets:containers" ${hasSite ? "" : "disabled"}>
+            <span class="welcome-stat-value">${containerCount}</span>
+            <span class="welcome-stat-label">Containers</span>
+          </button>
+          <button class="welcome-stat" data-nav="secrets" ${hasSite ? "" : "disabled"}>
+            <span class="welcome-stat-value">${groupCount}</span>
+            <span class="welcome-stat-label">Secret groups</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("spark")}<span>Start</span></div>
+            <div class="section-copy">Common workstation tasks for this site.</div>
+          </div>
+        </div>
+        <div class="welcome-link-list">
+          <button class="welcome-link" data-nav="secrets" ${hasSite ? "" : "disabled"}>
+            <span>${icon("lock")}</span>
+            <span>Manage shared, group, and container secrets</span>
+          </button>
+          <button class="welcome-link" data-nav="doctor" ${hasSite ? "" : "disabled"}>
+            <span>${icon("health")}</span>
+            <span>Run site checks</span>
+          </button>
+          <button class="welcome-link" data-nav="git" ${hasSite ? "" : "disabled"}>
+            <span>${icon("branch")}</span>
+            <span>Review repository changes</span>
+          </button>
+          <button class="welcome-link" data-nav="settings">
+            <span>${icon("gear")}</span>
+            <span>Adjust workstation settings</span>
+          </button>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -987,6 +1224,17 @@ function syncSidebarMetadataIndicators(): void {
   }
 }
 
+function syncSecretDraftIndicators(): void {
+  const setButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="set-secret"]');
+  const canSet =
+    !state.secretScopeRunning &&
+    state.secretDraftName.trim().length > 0 &&
+    state.secretDraftValue.length > 0;
+  for (const button of setButtons) {
+    button.disabled = !canSet;
+  }
+}
+
 function renderSidebarMetadataForm(container: ContainerSummary, snapshot: AppSnapshot): string {
   const metadata = state.containerMetadataDraft ?? currentContainerSidebarMetadata(snapshot, container.vmid);
   const dirty = sidebarMetadataDirty(container, snapshot);
@@ -1053,7 +1301,7 @@ function renderContainerPage(container: ContainerSummary): string {
         <div class="controls-start">
           ${pill(container.hasConfig ? "Config found" : "No config dir", container.hasConfig ? "good" : "warn", "box")}
           ${pill(`${container.secretGroups.length} secret group${container.secretGroups.length === 1 ? "" : "s"}`, container.secretGroups.length > 0 ? "magenta" : "info", "lock")}
-          ${pill(container.hasIdentity ? "Identity present" : "No identity", container.hasIdentity ? "good" : "warn", "key")}
+          ${pill(effectiveContainerHasIdentity(container) ? "Identity present" : "No identity", effectiveContainerHasIdentity(container) ? "good" : "warn", "key")}
           ${labels}
         </div>
         <div class="controls-end">
@@ -1417,150 +1665,278 @@ function renderGitPage(snapshot: AppSnapshot): string {
   `;
 }
 
-function renderSecretsPage(snapshot: AppSnapshot): string {
+function renderSecretsModeTabs(active: "groups" | "containers"): string {
+  return `
+    <div class="segmented-tabs" role="tablist" aria-label="Secret views">
+      <button class="segmented-tab${active === "groups" ? " active" : ""}" data-nav="secrets">
+        ${icon("folder")}
+        <span>Groups</span>
+      </button>
+      <button class="segmented-tab${active === "containers" ? " active" : ""}" data-nav="secrets:containers">
+        ${icon("box")}
+        <span>Containers</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderSecretsProviderBanner(): string {
   const providerStatus = state.secretsProviderStatus;
-  const providerDefinedGroups = providerStatus?.definedSecretGroups ?? [];
-  const defined = new Set([...snapshot.definedSecretGroups, ...providerDefinedGroups]);
-  const attached = new Set(snapshot.attachedSecretGroups);
-  const allGroups = [...new Set([...defined, ...attached])].sort();
-
-  const groupContainers = new Map<string, ContainerSummary[]>();
-  for (const container of snapshot.containers) {
-    for (const group of container.secretGroups) {
-      const list = groupContainers.get(group) ?? [];
-      list.push(container);
-      groupContainers.set(group, list);
-    }
-  }
-
-  const groupCards =
-    allGroups.length > 0
-      ? allGroups
-          .map((group) => {
-            const isDefined = defined.has(group);
-            const containers = groupContainers.get(group) ?? [];
-            const statusPill = isDefined
-              ? pill("Configured", "good", "spark")
-              : pill("Referenced only", "warn", "health");
-            const containerTags =
-              containers.length > 0
-                ? `<div class="group-container-tags">
-                    ${containers
-                      .map((container) => {
-                        const title = sidebarTitleFor(snapshot, container);
-                        return `<span class="group-container-tag">${escapeHtml(title)}</span>`;
-                      })
-                      .join("")}
-                  </div>`
-                : `<div class="group-card-meta">Not used by any container.</div>`;
-
-            return `
-              <div class="group-card">
-                <div class="group-card-title"><code>${escapeHtml(group)}</code></div>
-                <div class="pill-row">${statusPill}</div>
-                ${containerTags}
-              </div>
-            `;
-          })
-          .join("")
-      : "";
-
-  const orphanedAttached = [...attached].filter((g) => !defined.has(g));
-  const unusedDefined = [...defined].filter((g) => !attached.has(g));
   const providerWarnings = [
     ...(state.secretsProviderError ? [state.secretsProviderError] : []),
     ...(providerStatus?.warnings ?? []),
   ];
-  const providerStatusHtml = state.secretsProviderLoading
+  return state.secretsProviderLoading
     ? `<div class="running-band">${icon("refresh")}<span>Loading provider-backed secret status...</span></div>`
     : providerWarnings.length > 0
       ? `<div class="error-band">${providerWarnings.map((warning) => escapeHtml(warning)).join("<br />")}</div>`
       : providerStatus
         ? `<div class="running-band">${icon("spark")}<span>Provider status loaded from <code>${escapeHtml(providerStatus.provider)}</code>.</span></div>`
         : "";
+}
+
+function renderSecretsPage(snapshot: AppSnapshot): string {
+  return renderSecretGroupsPage(snapshot);
+}
+
+function renderSecretGroupsPage(snapshot: AppSnapshot): string {
+  const providerStatus = state.secretsProviderStatus;
+  const providerDefinedGroups = providerStatus?.definedSecretGroups ?? [];
+  const defined = new Set([...snapshot.definedSecretGroups, ...providerDefinedGroups]);
+  const attached = new Set(snapshot.attachedSecretGroups);
+  const namedGroups = [...new Set([...defined, ...attached])]
+    .filter((group) => group !== "shared")
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "accent" }));
+
+  const groupCards = namedGroups
+    .map((group) => {
+      const isDefined = defined.has(group);
+      const containers = snapshot.containers.filter((container) => container.secretGroups.includes(group));
+      const containerLabel =
+        containers.length > 0
+          ? `${containers.length} container${containers.length === 1 ? "" : "s"}`
+          : "No containers";
+      return `
+        <button class="secret-group-card" data-nav="secrets:group:${escapeHtml(group)}">
+          <span class="secret-group-card-title"><code>${escapeHtml(group)}</code></span>
+          <span class="secret-group-card-meta">${escapeHtml(containerLabel)}</span>
+          <span class="secret-group-card-status ${isDefined ? "configured" : "referenced"}">
+            ${escapeHtml(isDefined ? "Configured" : "Referenced")}
+          </span>
+        </button>
+      `;
+    })
+    .join("");
 
   return `
     <div class="page-stack">
       <section class="page-controls">
         <div class="controls-start">
-          ${pill(`${defined.size} defined`, "magenta", "lock")}
-          ${pill(`${snapshot.attachedSecretGroups.length} in use`, "good", "key")}
-          ${orphanedAttached.length > 0 ? pill(`${orphanedAttached.length} missing`, "warn", "health") : ""}
-          ${unusedDefined.length > 0 ? pill(`${unusedDefined.length} unused`, "info", "box") : ""}
+          ${renderSecretsModeTabs("groups")}
+        </div>
+        <div class="controls-end">
+          ${pill(`${namedGroups.length} named group${namedGroups.length === 1 ? "" : "s"}`, "magenta", "folder")}
         </div>
       </section>
 
-      ${providerStatusHtml}
+      ${renderSecretsProviderBanner()}
 
-      ${
-        allGroups.length > 0
-          ? `
-            <section class="page-band">
-              <div class="section-header">
-                <div>
-                  <div class="section-title">${icon("lock")}<span>All Groups</span></div>
-                  <div class="section-copy">
-                    Groups referenced by containers and their configuration status.
-                  </div>
-                </div>
-              </div>
-              <div class="group-grid">${groupCards}</div>
-            </section>
-          `
-          : `
-            <section class="page-band">
-              <div class="empty-state">
-                No secret groups yet. Add group names to a container's
-                <code>secret-groups.list</code> to get started.
-              </div>
-            </section>
-          `
-      }
+      <section class="page-band">
+        <button class="shared-secret-scope" data-nav="secrets:group:shared">
+          <span class="shared-secret-icon">${icon("lock")}</span>
+          <span class="shared-secret-copy">
+            <span class="shared-secret-title">Shared</span>
+            <span class="shared-secret-meta">Always configured and visible to every container automatically.</span>
+          </span>
+          <span class="shared-secret-action">Open</span>
+        </button>
+      </section>
 
       <section class="page-band">
         <div class="section-header">
           <div>
-            <div class="section-title">${icon("box")}<span>Per Container</span></div>
+            <div class="section-title">${icon("folder")}<span>Named Groups</span></div>
             <div class="section-copy">
-              Group membership and identity status for each container.
+              Select a group to list, set, remove, or rotate its secret store.
             </div>
           </div>
         </div>
-        <div class="list">
-          ${
-            snapshot.containers.length > 0
-              ? snapshot.containers
-                  .map((container) => {
-                    const title = sidebarTitleFor(snapshot, container);
-                    const groups = container.secretGroups;
-                    const hasProviderIdentity = providerStatus?.containerIdentities[container.vmid];
-                    const hasIdentity = hasProviderIdentity ?? container.hasIdentity;
-                    return `
-                      <div class="list-item">
-                        <div class="list-item-copy">
-                          <div class="list-item-title">${escapeHtml(title)}</div>
-                          <div class="list-item-meta">
-                            ${groups.length > 0 ? `Groups: ${groups.map((g) => escapeHtml(g)).join(", ")}` : "No groups attached"}
-                            ${hasIdentity ? " &bull; Identity present" : ""}
-                          </div>
-                        </div>
-                        <div class="nav-meta">
-                          ${hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
-                          ${groups.length > 0 ? `<span class="nav-badge" title="${escapeHtml(groups.join(", "))}">${groups.length}</span>` : ""}
-                        </div>
-                      </div>
-                    `;
-                  })
-                  .join("")
-              : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No containers found.</div></div></div>`
-          }
+        ${
+          namedGroups.length > 0
+            ? `<div class="secret-group-card-grid">${groupCards}</div>`
+            : `<div class="empty-state">No named groups yet. Add group names to a container's <code>secret-groups.list</code>.</div>`
+        }
+      </section>
+    </div>
+  `;
+}
+
+function renderSecretContainersPage(snapshot: AppSnapshot): string {
+  const providerStatus = state.secretsProviderStatus;
+  const containerRows =
+    snapshot.containers.length > 0
+      ? snapshot.containers
+          .map((container) => {
+            const title = sidebarTitleFor(snapshot, container);
+            const groups = container.secretGroups;
+            const hasIdentity = effectiveContainerHasIdentity(container);
+            const groupLabel = groups.length > 0 ? `Groups: ${groups.join(", ")}` : "No named groups";
+            return `
+              <div class="list-item">
+                <div class="list-item-copy">
+                  <div class="list-item-title">${escapeHtml(title)}</div>
+                  <div class="list-item-meta">
+                    ${escapeHtml(groupLabel)}
+                    ${hasIdentity ? " &bull; Identity present" : ""}
+                  </div>
+                </div>
+                <div class="nav-meta">
+                  ${hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
+                  ${groups.length > 0 ? `<span class="nav-badge" title="${escapeHtml(groups.join(", "))}">${groups.length}</span>` : ""}
+                  <button class="secondary-button compact-button" data-nav="secrets:container:${escapeHtml(container.vmid)}">Manage</button>
+                </div>
+              </div>
+            `;
+          })
+          .join("")
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No containers found.</div></div></div>`;
+
+  return `
+    <div class="page-stack">
+      <section class="page-controls">
+        <div class="controls-start">
+          ${renderSecretsModeTabs("containers")}
         </div>
+      </section>
+
+      ${renderSecretsProviderBanner()}
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("box")}<span>Containers</span></div>
+            <div class="section-copy">Open a container to manage local secrets and its age identity.</div>
+          </div>
+        </div>
+        <div class="list">${containerRows}</div>
+      </section>
+    </div>
+  `;
+}
+
+function renderSecretScopePage(snapshot: AppSnapshot): string {
+  const scope = secretScopeFromSelection();
+  if (!scope) {
+    return renderSecretsPage(snapshot);
+  }
+
+  const status = state.secretScopeStatus;
+  const warnings = [
+    ...(state.secretScopeError ? [state.secretScopeError] : []),
+    ...(status?.warnings ?? []),
+  ];
+  const entries = status?.entries ?? [];
+  const isContainer = scope.scopeType === "container";
+  const container = isContainer
+    ? snapshot.containers.find((candidate) => candidate.vmid === scope.scopeId)
+    : null;
+  const hasIdentity = container ? effectiveContainerHasIdentity(container) : false;
+  const backSelection = isContainer ? "secrets:containers" : "secrets";
+
+  const listHtml = state.secretScopeLoading
+    ? `<div class="running-band">${icon("refresh")}<span>Loading secrets...</span></div>`
+    : entries.length > 0
+      ? entries
+          .map((entry) => `
+            <div class="list-item">
+              <div class="list-item-copy">
+                <div class="list-item-title"><code>${escapeHtml(entry.name)}</code></div>
+                <div class="list-item-meta">${escapeHtml(entry.source)}</div>
+              </div>
+              <button
+                class="secondary-button compact-button"
+                data-action="remove-secret"
+                data-secret-name="${escapeHtml(entry.name)}"
+                ${isContainer && entry.source !== "container" ? "disabled" : ""}
+              >
+                Remove
+              </button>
+            </div>
+          `)
+          .join("")
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secret names found.</div></div></div>`;
+
+  return `
+    <div class="page-stack">
+      <section class="page-controls">
+        <div class="controls-start">
+          <button class="secondary-button" data-nav="${backSelection}">
+            ${icon("back")}
+            <span>Back</span>
+          </button>
+          ${isContainer ? pill(hasIdentity ? "Identity present" : "No identity", hasIdentity ? "good" : "warn", "key") : ""}
+        </div>
+        <div class="controls-end">
+          <button class="secondary-button" data-action="refresh-secret-scope" ${state.secretScopeLoading || state.secretScopeRunning ? "disabled" : ""}>
+            ${icon("refresh")}
+            <span>Refresh</span>
+          </button>
+          ${isContainer ? `<button class="secondary-button" data-action="init-container-identity" ${state.secretScopeRunning ? "disabled" : ""}>${icon("key")}<span>Init Identity</span></button>` : ""}
+          <button class="secondary-button" data-action="rotate-secret-scope" ${state.secretScopeRunning || !(status?.canRotate ?? usesEmbeddedSops(snapshot.config.secretProvider)) ? "disabled" : ""}>
+            ${icon("refresh")}
+            <span>Rotate</span>
+          </button>
+        </div>
+      </section>
+
+      ${warnings.length > 0 ? `<div class="error-band">${warnings.map((warning) => escapeHtml(warning)).join("<br />")}</div>` : ""}
+      ${state.secretScopeResult ? `<div class="${state.secretScopeResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.secretScopeResult.output || state.secretScopeResult.error || "")}</div>` : ""}
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("lock")}<span>Write Secret</span></div>
+            <div class="section-copy">Values are sent to proxnix-secrets and are not shown after saving.</div>
+          </div>
+          <div class="section-actions">
+            <button class="primary-button" data-action="set-secret" ${state.secretScopeRunning || !state.secretDraftName.trim() || !state.secretDraftValue ? "disabled" : ""}>
+              ${icon("publish")}
+              <span>Set</span>
+            </button>
+          </div>
+        </div>
+        <div class="form-grid">
+          ${renderSettingsField("Name", "secretDraftName", state.secretDraftName, "Secret key in this scope.", undefined, false, false, "data-option")}
+          <label class="field">
+            <div class="field-label-row">
+              <span class="field-label">Value</span>
+            </div>
+            <div class="field-control">
+              <input type="password" data-secret-value="secretDraftValue" value="${escapeHtml(state.secretDraftValue)}" spellcheck="false" />
+            </div>
+            <div class="field-hint">New value to write.</div>
+          </label>
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("key")}<span>Secret Names</span></div>
+            <div class="section-copy">Container views include inherited shared and group entries with their source.</div>
+          </div>
+        </div>
+        <div class="list">${listHtml}</div>
       </section>
     </div>
   `;
 }
 
 function renderMain(snapshot: AppSnapshot): string {
+  if (state.selection === "welcome") {
+    return renderWelcomePage(snapshot);
+  }
+
   if (snapshot.config.siteDir.length === 0) {
     return renderOnboarding(snapshot);
   }
@@ -1596,6 +1972,18 @@ function renderMain(snapshot: AppSnapshot): string {
     return renderSecretsPage(snapshot);
   }
 
+  if (state.selection === "secrets:groups") {
+    return renderSecretGroupsPage(snapshot);
+  }
+
+  if (state.selection === "secrets:containers") {
+    return renderSecretContainersPage(snapshot);
+  }
+
+  if (state.selection.startsWith("secrets:group:") || state.selection.startsWith("secrets:container:")) {
+    return renderSecretScopePage(snapshot);
+  }
+
   if (state.selection === "doctor") {
     return renderDoctorPage(snapshot);
   }
@@ -1608,8 +1996,6 @@ function renderStatusbar(snapshot: AppSnapshot): string {
     <footer class="statusbar">
       <div class="statusbar-meta">
         <span>Config: <code>${escapeHtml(snapshot.configPath)}</code></span>
-        <span>Secrets: <code>${escapeHtml(snapshot.config.secretProvider)}</code></span>
-        <span>Groups: <code>${snapshot.definedSecretGroups.length}</code> configured / <code>${snapshot.attachedSecretGroups.length}</code> referenced</span>
       </div>
       <div class="statusbar-meta">
         <span>Bridge: embedded python script</span>
@@ -1660,17 +2046,22 @@ function render(): void {
   `;
   syncDraftIndicators();
   syncSidebarMetadataIndicators();
+  syncSecretDraftIndicators();
 }
 
-async function refreshSnapshot(attempt = 0): Promise<void> {
+async function refreshSnapshot(attempt = 0, force = false): Promise<void> {
   state.loading = true;
   if (attempt === 0) {
     state.error = null;
+    if (force) {
+      clearSecretsProviderStatus();
+      clearSecretScopeStatus();
+    }
   }
   render();
 
   try {
-    const snapshot = normalizeSnapshot(await proxnixRpc.request.loadSnapshot());
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.loadSnapshot({ force }));
     const nextSecretsKey = secretsProviderCacheKey(snapshot);
     if (
       state.secretsProviderLoadedKey !== nextSecretsKey &&
@@ -1683,8 +2074,11 @@ async function refreshSnapshot(attempt = 0): Promise<void> {
     state.draft = cloneConfig(snapshot.config);
     ensureSelection(snapshot);
     syncContainerMetadataDraft(snapshot);
-    if (state.selection === "secrets") {
-      void ensureSecretsProviderStatus();
+    if (isSecretsIndexSelection()) {
+      void ensureSecretsProviderStatus(force);
+    }
+    if (state.selection.startsWith("secrets:")) {
+      void ensureSecretScopeStatus(force);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1692,7 +2086,7 @@ async function refreshSnapshot(attempt = 0): Promise<void> {
       state.error = `Initial load failed (${attempt + 1}/5): ${message}`;
       render();
       await sleep(250 * (attempt + 1));
-      return refreshSnapshot(attempt + 1);
+      return refreshSnapshot(attempt + 1, force);
     }
     state.error = message;
   } finally {
@@ -1838,9 +2232,133 @@ async function handleGitPush(): Promise<void> {
   }
 }
 
+async function refreshAfterSecretMutation(): Promise<void> {
+  await refreshSnapshot(0, true);
+  if (isSecretsIndexSelection()) {
+    void ensureSecretsProviderStatus(true);
+  }
+  if (state.selection.startsWith("secrets:")) {
+    await ensureSecretScopeStatus(true);
+  }
+}
+
+async function handleSetSecret(): Promise<void> {
+  const scope = secretScopeFromSelection();
+  if (!scope) {
+    return;
+  }
+
+  state.secretScopeRunning = true;
+  state.secretScopeResult = null;
+  render();
+  try {
+    state.secretScopeResult = await proxnixRpc.request.setSecret({
+      scopeType: scope.scopeType,
+      scopeId: scope.scopeType === "shared" ? undefined : scope.scopeId,
+      name: state.secretDraftName.trim(),
+      value: state.secretDraftValue,
+    });
+    if (state.secretScopeResult.exitCode === 0) {
+      state.secretDraftName = "";
+      state.secretDraftValue = "";
+      await refreshAfterSecretMutation();
+    }
+  } catch (error) {
+    state.secretScopeResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretScopeRunning = false;
+    render();
+  }
+}
+
+async function handleRemoveSecret(name: string): Promise<void> {
+  const scope = secretScopeFromSelection();
+  if (!scope || !name) {
+    return;
+  }
+
+  state.secretScopeRunning = true;
+  state.secretScopeResult = null;
+  render();
+  try {
+    state.secretScopeResult = await proxnixRpc.request.removeSecret({
+      scopeType: scope.scopeType,
+      scopeId: scope.scopeType === "shared" ? undefined : scope.scopeId,
+      name,
+    });
+    if (state.secretScopeResult.exitCode === 0) {
+      await refreshAfterSecretMutation();
+    }
+  } catch (error) {
+    state.secretScopeResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretScopeRunning = false;
+    render();
+  }
+}
+
+async function handleRotateSecretScope(): Promise<void> {
+  const scope = secretScopeFromSelection();
+  if (!scope) {
+    return;
+  }
+
+  state.secretScopeRunning = true;
+  state.secretScopeResult = null;
+  render();
+  try {
+    state.secretScopeResult = await proxnixRpc.request.rotateSecretScope({
+      scopeType: scope.scopeType,
+      scopeId: scope.scopeType === "shared" ? undefined : scope.scopeId,
+    });
+    await refreshAfterSecretMutation();
+  } catch (error) {
+    state.secretScopeResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretScopeRunning = false;
+    render();
+  }
+}
+
+async function handleInitContainerIdentity(): Promise<void> {
+  const scope = secretScopeFromSelection();
+  if (!scope || scope.scopeType !== "container") {
+    return;
+  }
+
+  state.secretScopeRunning = true;
+  state.secretScopeResult = null;
+  render();
+  try {
+    state.secretScopeResult = await proxnixRpc.request.initContainerIdentity({ vmid: scope.scopeId });
+    await refreshAfterSecretMutation();
+  } catch (error) {
+    state.secretScopeResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretScopeRunning = false;
+    render();
+  }
+}
+
 async function handleAction(action: string, element: HTMLElement): Promise<void> {
   if (action === "retry-load") {
-    await refreshSnapshot();
+    await refreshSnapshot(0, true);
     return;
   }
 
@@ -1849,7 +2367,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
   }
 
   if (action === "refresh") {
-    await refreshSnapshot();
+    await refreshSnapshot(0, true);
     return;
   }
 
@@ -1870,6 +2388,31 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 
   if (action === "refresh-git") {
     await handleRefreshGit();
+    return;
+  }
+
+  if (action === "refresh-secret-scope") {
+    await ensureSecretScopeStatus(true);
+    return;
+  }
+
+  if (action === "set-secret") {
+    await handleSetSecret();
+    return;
+  }
+
+  if (action === "remove-secret") {
+    await handleRemoveSecret(element.dataset.secretName ?? "");
+    return;
+  }
+
+  if (action === "rotate-secret-scope") {
+    await handleRotateSecretScope();
+    return;
+  }
+
+  if (action === "init-container-identity") {
+    await handleInitContainerIdentity();
     return;
   }
 
@@ -1976,8 +2519,11 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       state.draft = cloneConfig(snapshot.config);
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
-      if (state.selection === "secrets") {
+      if (isSecretsIndexSelection()) {
         void ensureSecretsProviderStatus();
+      }
+      if (state.selection.startsWith("secrets:")) {
+        void ensureSecretScopeStatus(true);
       }
     } catch (error) {
       state.error = error instanceof Error ? error.message : String(error);
@@ -2033,8 +2579,11 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       state.draft = cloneConfig(snapshot.config);
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
-      if (state.selection === "secrets") {
+      if (isSecretsIndexSelection()) {
         void ensureSecretsProviderStatus();
+      }
+      if (state.selection.startsWith("secrets:")) {
+        void ensureSecretScopeStatus(true);
       }
     } catch (error) {
       state.error = error instanceof Error ? error.message : String(error);
@@ -2139,14 +2688,21 @@ function updateOptionFromField(target: HTMLInputElement): void {
     if (option === "doctorVmid") state.doctorVmid = target.value;
     if (option === "publishVmid") state.publishVmid = target.value;
     if (option === "gitCommitMessage") state.gitCommitMessage = target.value;
+    if (option === "secretDraftName") state.secretDraftName = target.value;
   }
 }
 
 root.addEventListener("input", (event) => {
   const target = event.target;
   if (target instanceof HTMLInputElement) {
-    if (target.dataset.option) {
+    if (target.dataset.secretValue) {
+      state.secretDraftValue = target.value;
+      syncSecretDraftIndicators();
+    } else if (target.dataset.option) {
       updateOptionFromField(target);
+      if (target.dataset.option === "secretDraftName") {
+        syncSecretDraftIndicators();
+      }
     } else if (target.dataset.containerField) {
       updateContainerMetadataFromField(target);
     } else {

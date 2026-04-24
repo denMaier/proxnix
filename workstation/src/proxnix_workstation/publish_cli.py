@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shlex
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -48,9 +49,123 @@ class PublishOptions:
     target_vmid: str | None = None
 
 
+@dataclass(frozen=True)
+class PublishSource:
+    site_paths: SitePaths
+    commit: str | None
+    branch: str | None
+    dirty: bool = False
+    using_head: bool = False
+
+
+def _git(site_dir: Path, *args: str, check: bool = True):
+    return run_command(["git", "-C", str(site_dir), *args], check=check, capture_output=True)
+
+
+def _git_output(site_dir: Path, *args: str) -> str:
+    return _git(site_dir, *args).stdout.strip()
+
+
+def is_git_worktree(site_dir: Path) -> bool:
+    result = _git(site_dir, "rev-parse", "--is-inside-work-tree", check=False)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _uses_embedded_site_secrets(config: WorkstationConfig) -> bool:
+    return config.secret_provider == "embedded-sops"
+
+
+def _head_paths_for_publish(config: WorkstationConfig, options: PublishOptions) -> list[str]:
+    if options.target_vmid is None:
+        paths = ["site.nix", "containers"]
+        if _uses_embedded_site_secrets(config):
+            paths.append("private")
+        return paths
+
+    paths = [
+        "containers/_template",
+        f"containers/{options.target_vmid}",
+    ]
+    if _uses_embedded_site_secrets(config):
+        paths.extend(
+            [
+                "private/host_relay_identity.sops.yaml",
+                f"private/containers/{options.target_vmid}",
+                "private/shared",
+                "private/groups",
+            ]
+        )
+    return paths
+
+
+def _existing_head_paths(site_dir: Path, paths: list[str]) -> list[str]:
+    existing: list[str] = []
+    for path in paths:
+        result = _git(site_dir, "cat-file", "-e", f"HEAD:{path}", check=False)
+        if result.returncode == 0:
+            existing.append(path)
+    return existing
+
+
+def materialize_head_site(
+    config: WorkstationConfig,
+    site_paths: SitePaths,
+    destination: Path,
+    options: PublishOptions | None = None,
+) -> PublishSource:
+    source_dir = site_paths.site_dir
+    if not is_git_worktree(source_dir):
+        print("warning: site directory is not a git worktree; publishing the live worktree")
+        return PublishSource(site_paths=site_paths, commit=None, branch=None)
+
+    commit = _git_output(source_dir, "rev-parse", "HEAD")
+    branch = _git_output(source_dir, "branch", "--show-current") or None
+    status = _git_output(source_dir, "status", "--porcelain=v1", "-uall")
+    dirty = bool(status)
+    if dirty:
+        print(
+            "warning: site repo has uncommitted changes; publish uses HEAD "
+            "and ignores staged, unstaged, and untracked files"
+        )
+
+    top_level = Path(_git_output(source_dir, "rev-parse", "--show-toplevel"))
+    prefix = _git_output(source_dir, "rev-parse", "--show-prefix").rstrip("/")
+    treeish = f"HEAD:{prefix}" if prefix else "HEAD"
+    archive_paths = _existing_head_paths(source_dir, _head_paths_for_publish(config, options or PublishOptions()))
+    archive_path = destination.with_suffix(".tar")
+    destination.mkdir(parents=True, exist_ok=True)
+    if archive_paths:
+        _git(source_dir, "archive", "--format=tar", f"--output={archive_path}", treeish, "--", *archive_paths)
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(destination, filter="data")
+        archive_path.unlink()
+
+    label = f"{commit[:12]}"
+    if branch is not None:
+        label = f"{label} on {branch}"
+    if top_level != source_dir:
+        try:
+            label = f"{label} ({source_dir.relative_to(top_level)})"
+        except ValueError:
+            pass
+    print(f"Publishing site repo HEAD {label}")
+    return PublishSource(site_paths=SitePaths(destination), commit=commit, branch=branch, dirty=dirty, using_head=True)
+
+
+def write_publish_revision(source: PublishSource, destination: Path) -> None:
+    payload = {
+        "branch": source.branch,
+        "commit": source.commit,
+        "dirty_worktree_ignored": source.dirty,
+        "source": "git-head" if source.using_head else "worktree",
+    }
+    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    destination.chmod(0o644)
+
+
 def need_publish_tools(config: WorkstationConfig, *, config_only: bool) -> SitePaths:
     site_paths = SitePaths.from_config(config)
-    required_commands = ["ssh", "rsync"]
+    required_commands = ["git", "ssh", "rsync"]
     if not config_only:
         required_commands.insert(0, "sops")
     ensure_commands(required_commands)
@@ -326,7 +441,7 @@ def stage_relay_identities_into_tree(
 
 
 def should_report_change(config: WorkstationConfig, path: PurePosixPath) -> bool:
-    if path == config.remote_dir / "site.nix":
+    if path in {config.remote_dir / "site.nix", config.remote_dir / "publish-revision.json"}:
         return True
     try:
         path.relative_to(config.remote_dir / "containers")
@@ -504,6 +619,16 @@ def publish_host(
     else:
         remove_remote_file(session, config, config.remote_dir / "site.nix", dry_run=options.dry_run, report=report)
 
+    revision = tree / "publish-revision.json"
+    sync_file(
+        session,
+        config,
+        revision,
+        config.remote_dir / "publish-revision.json",
+        dry_run=options.dry_run,
+        report=report,
+    )
+
     sync_path(session, config, tree / "containers", config.remote_dir / "containers", dry_run=options.dry_run, report=report)
 
     if options.config_only:
@@ -557,6 +682,16 @@ def publish_vmid_host(
     else:
         print(f"Publishing container {vmid} to {session.host}")
     ensure_remote_dirs(session, config, dry_run=options.dry_run)
+
+    revision = tree / "publish-revision.json"
+    sync_file(
+        session,
+        config,
+        revision,
+        config.remote_dir / "publish-revision.json",
+        dry_run=options.dry_run,
+        report=report,
+    )
 
     template_source = tree / "containers" / "_template"
     if template_source.is_dir():
@@ -638,31 +773,33 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
 
     try:
         site_paths = need_publish_tools(config, config_only=options.config_only)
-        provider = load_secret_provider(config, site_paths)
-        if options.target_vmid is not None:
-            validate_target_vmid_repo(
-                config,
-                site_paths,
-                provider,
-                options.target_vmid,
-                config_only=options.config_only,
-            )
-        elif not options.config_only:
-            validate_site_repo(config, site_paths, provider)
-
         hosts = list(args.hosts) if args.hosts else list(config.hosts)
         if not hosts:
             raise ProxnixWorkstationError("no publish hosts configured")
 
         with tempfile.TemporaryDirectory(prefix="proxnix-publish.") as temp_dir:
             temp_root = Path(temp_dir)
+            source = materialize_head_site(config, site_paths, temp_root / "site-head", options)
+            provider = load_secret_provider(config, source.site_paths)
+            if options.target_vmid is not None:
+                validate_target_vmid_repo(
+                    config,
+                    source.site_paths,
+                    provider,
+                    options.target_vmid,
+                    config_only=options.config_only,
+                )
+            elif not options.config_only:
+                validate_site_repo(config, source.site_paths, provider)
+
             relay_tree = temp_root / "relay"
-            build_publish_tree(config, site_paths, options, relay_tree)
+            build_publish_tree(config, source.site_paths, options, relay_tree)
+            write_publish_revision(source, relay_tree / "publish-revision.json")
 
             for host in hosts:
                 with SSHSession(config, host, temp_root=temp_root) as session:
-                    if not options.config_only and have_host_relay_private_key(config, provider, site_paths):
-                        stage_relay_identities_into_tree(config, site_paths, options, relay_tree)
+                    if not options.config_only and have_host_relay_private_key(config, provider, source.site_paths):
+                        stage_relay_identities_into_tree(config, source.site_paths, options, relay_tree)
                     publish_selected_host(session, config, options, relay_tree)
 
         print("Publish complete")

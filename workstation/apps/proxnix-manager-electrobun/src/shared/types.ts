@@ -87,6 +87,19 @@ export interface SecretsProviderStatus {
   warnings: string[];
 }
 
+export interface SecretEntry {
+  name: string;
+  source: string;
+}
+
+export interface SecretScopeStatus {
+  scopeType: "shared" | "group" | "container";
+  scopeId: string;
+  entries: SecretEntry[];
+  canRotate: boolean;
+  warnings: string[];
+}
+
 export interface AppSnapshot {
   configPath: string;
   configExists: boolean;
@@ -104,7 +117,11 @@ export type ProxnixManagerRPC = {
   bun: RPCSchema<{
     requests: {
       loadSnapshot: {
-        params: void;
+        params:
+          | {
+              force?: boolean;
+            }
+          | undefined;
         response: AppSnapshot;
       };
       saveConfig: {
@@ -135,8 +152,50 @@ export type ProxnixManagerRPC = {
         response: AppSnapshot;
       };
       loadSecretsProviderStatus: {
-        params: void;
+        params:
+          | {
+              force?: boolean;
+            }
+          | undefined;
         response: SecretsProviderStatus;
+      };
+      loadSecretScopeStatus: {
+        params: {
+          scopeType: "shared" | "group" | "container";
+          scopeId?: string;
+          force?: boolean;
+        };
+        response: SecretScopeStatus;
+      };
+      setSecret: {
+        params: {
+          scopeType: "shared" | "group" | "container";
+          scopeId?: string;
+          name: string;
+          value: string;
+        };
+        response: CommandResult;
+      };
+      removeSecret: {
+        params: {
+          scopeType: "shared" | "group" | "container";
+          scopeId?: string;
+          name: string;
+        };
+        response: CommandResult;
+      };
+      rotateSecretScope: {
+        params: {
+          scopeType: "shared" | "group" | "container";
+          scopeId?: string;
+        };
+        response: CommandResult;
+      };
+      initContainerIdentity: {
+        params: {
+          vmid: string;
+        };
+        response: CommandResult;
       };
       runDoctor: {
         params: { configOnly?: boolean; vmid?: string };

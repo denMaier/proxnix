@@ -110,6 +110,7 @@ def _ensure_pythonpath_bootstrap() -> None:
 
 def _subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
+    env = _with_tool_path(env)
     extra_entries = _pythonpath_entries()
     if extra_entries:
         existing = env.get("PYTHONPATH", "").strip()
@@ -120,13 +121,7 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _command_output(stdout: str, stderr: str) -> str:
-    parts = [part.strip() for part in (stdout, stderr) if part.strip()]
-    return "\n".join(parts)
-
-
-def _git_env() -> dict[str, str]:
-    env = dict(os.environ)
+def _with_tool_path(env: dict[str, str]) -> dict[str, str]:
     extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
     existing = [part for part in env.get("PATH", "").split(os.pathsep) if part]
     merged: list[str] = []
@@ -134,6 +129,17 @@ def _git_env() -> dict[str, str]:
         if path not in merged:
             merged.append(path)
     env["PATH"] = os.pathsep.join(merged)
+    return env
+
+
+def _command_output(stdout: str, stderr: str) -> str:
+    parts = [part.strip() for part in (stdout, stderr) if part.strip()]
+    return "\n".join(parts)
+
+
+def _git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env = _with_tool_path(env)
     env["HOME"] = os.environ.get("HOME", str(Path.home()))
     return env
 
@@ -203,6 +209,16 @@ def _publish_command() -> tuple[list[str], dict[str, str]]:
     if repo_cli is not None:
         return [str(repo_cli)], _subprocess_env()
     return [sys.executable, "-m", "proxnix_workstation.publish_cli"], _subprocess_env()
+
+
+def _secrets_command() -> tuple[list[str], dict[str, str]]:
+    bundled_cli = _bundled_cli("proxnix-secrets")
+    if bundled_cli is not None:
+        return [str(bundled_cli)], _subprocess_env()
+    repo_cli = _repo_cli("proxnix-secrets")
+    if repo_cli is not None:
+        return [str(repo_cli)], _subprocess_env()
+    return [sys.executable, "-m", "proxnix_workstation.secrets_cli"], _subprocess_env()
 
 
 def sidebar_metadata_path() -> Path:
@@ -507,9 +523,31 @@ def _load_provider_context() -> tuple[tuple[object, object, object] | None, str 
 def _check_container_identity(ctx: tuple[object, object, object], vmid: str) -> bool:
     config, site_paths, provider = ctx
     try:
-        from proxnix_workstation.provider_keys import have_container_private_key
+        from proxnix_workstation.provider_keys import (
+            INTERNAL_KEYS_GROUP,
+            container_key_name,
+            have_container_private_key,
+        )
+        from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
+        from proxnix_workstation.secret_provider_types import group_scope
 
-        return have_container_private_key(config, provider, site_paths, vmid)
+        if isinstance(provider, EmbeddedSopsProvider):
+            store = site_paths.container_identity_store(vmid)
+            if store.is_file():
+                return True
+            return have_container_private_key(config, provider, site_paths, vmid)
+
+        key_name = container_key_name(vmid)
+        internal_keys = group_scope(INTERNAL_KEYS_GROUP)
+        try:
+            if key_name in provider.list_names(internal_keys):
+                return True
+        except Exception:
+            pass
+        try:
+            return provider.get(internal_keys, key_name) is not None
+        except Exception:
+            return have_container_private_key(config, provider, site_paths, vmid)
     except Exception:
         return False
 
@@ -748,6 +786,7 @@ def _run_cli(
     *,
     timeout: int = 120,
     env: dict[str, str] | None = None,
+    stdin_text: str | None = None,
 ) -> tuple[str, str, int]:
     result = subprocess.run(
         args,
@@ -755,6 +794,7 @@ def _run_cli(
         text=True,
         timeout=timeout,
         env=env,
+        input=stdin_text,
     )
     return result.stdout, result.stderr, result.returncode
 
@@ -866,6 +906,198 @@ def run_publish(payload: object) -> dict[str, object]:
             else (stdout.strip() if exit_code != 0 and stdout.strip() else "")
         ),
     }
+
+
+def _secret_scope_payload(payload: object) -> tuple[str, str]:
+    opts = payload if isinstance(payload, dict) else {}
+    scope_type = str(opts.get("scopeType", "")).strip()
+    scope_id = str(opts.get("scopeId", "")).strip()
+    if scope_type not in {"shared", "group", "container"}:
+        raise ValueError("secret scope must be shared, group, or container")
+    if scope_type in {"group", "container"} and not scope_id:
+        raise ValueError(f"{scope_type} secret scope requires an id")
+    if scope_type == "group" and not valid_secret_group_name(scope_id):
+        raise ValueError(f"invalid group name: {scope_id}")
+    if scope_type == "container" and not scope_id.isdigit():
+        raise ValueError(f"invalid container VMID: {scope_id}")
+    return scope_type, scope_id
+
+
+def _secret_args_for(scope_type: str, scope_id: str, base: str, name: str | None = None) -> list[str]:
+    if base == "ls":
+        if scope_type == "shared":
+            return ["ls-shared"]
+        if scope_type == "group":
+            return ["ls-group", scope_id]
+        return ["ls", scope_id]
+    if base == "set":
+        if not name:
+            raise ValueError("secret name is required")
+        if scope_type == "shared":
+            return ["set-shared", name]
+        if scope_type == "group":
+            return ["set-group", scope_id, name]
+        return ["set", scope_id, name]
+    if base == "rm":
+        if not name:
+            raise ValueError("secret name is required")
+        if scope_type == "shared":
+            return ["rm-shared", name]
+        if scope_type == "group":
+            return ["rm-group", scope_id, name]
+        return ["rm", scope_id, name]
+    if base == "rotate":
+        if scope_type == "shared":
+            return ["rotate-shared"]
+        if scope_type == "group":
+            return ["rotate-group", scope_id]
+        return ["rotate", scope_id]
+    raise ValueError(f"unsupported secret action: {base}")
+
+
+def _parse_secret_entries(scope_type: str, output: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "\t" in line:
+            name, source = line.split("\t", 1)
+        else:
+            name = line
+            source = scope_type
+        name = name.strip()
+        source = source.strip() or scope_type
+        key = (name, source)
+        if name and key not in seen:
+            seen.add(key)
+            entries.append({"name": name, "source": source})
+    return entries
+
+
+def secret_scope_status(payload: object) -> dict[str, object]:
+    config, _, _ = read_config_payload()
+    if not config["siteDir"]:
+        return {
+            "scopeType": "shared",
+            "scopeId": "",
+            "entries": [],
+            "canRotate": config["secretProvider"] == "embedded-sops",
+            "warnings": ["Set site directory first."],
+        }
+
+    scope_type, scope_id = _secret_scope_payload(payload)
+    args, env = _secrets_command()
+    args.extend(_secret_args_for(scope_type, scope_id, "ls"))
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "scopeType": scope_type,
+            "scopeId": scope_id,
+            "entries": [],
+            "canRotate": config["secretProvider"] == "embedded-sops",
+            "warnings": ["Secret listing timed out after 60 minutes."],
+        }
+
+    warnings = []
+    if exit_code != 0:
+        warnings.append(_command_output(stdout, stderr) or "Could not list secrets.")
+
+    return {
+        "scopeType": scope_type,
+        "scopeId": scope_id,
+        "entries": _parse_secret_entries(scope_type, stdout if exit_code == 0 else ""),
+        "canRotate": config["secretProvider"] == "embedded-sops",
+        "warnings": warnings,
+    }
+
+
+def set_secret(payload: object) -> dict[str, object]:
+    scope_type, scope_id = _secret_scope_payload(payload)
+    opts = payload if isinstance(payload, dict) else {}
+    name = str(opts.get("name", "")).strip()
+    value = str(opts.get("value", ""))
+    if not name:
+        return {"output": "", "exitCode": 1, "error": "Secret name is required."}
+    if value == "":
+        return {"output": "", "exitCode": 1, "error": "Secret value cannot be empty."}
+
+    args, env = _secrets_command()
+    args.extend(_secret_args_for(scope_type, scope_id, "set", name))
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+            stdin_text=value,
+        )
+    except subprocess.TimeoutExpired:
+        return {"output": "", "exitCode": 1, "error": "Setting secret timed out after 60 minutes."}
+    output = _command_output(stdout, stderr)
+    return _command_result(output, exit_code, f"Set secret {name}.")
+
+
+def remove_secret(payload: object) -> dict[str, object]:
+    scope_type, scope_id = _secret_scope_payload(payload)
+    opts = payload if isinstance(payload, dict) else {}
+    name = str(opts.get("name", "")).strip()
+    if not name:
+        return {"output": "", "exitCode": 1, "error": "Secret name is required."}
+
+    args, env = _secrets_command()
+    args.extend(_secret_args_for(scope_type, scope_id, "rm", name))
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"output": "", "exitCode": 1, "error": "Removing secret timed out after 60 minutes."}
+    output = _command_output(stdout, stderr)
+    return _command_result(output, exit_code, f"Removed secret {name}.")
+
+
+def rotate_secret_scope(payload: object) -> dict[str, object]:
+    scope_type, scope_id = _secret_scope_payload(payload)
+    args, env = _secrets_command()
+    args.extend(_secret_args_for(scope_type, scope_id, "rotate"))
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"output": "", "exitCode": 1, "error": "Rotating secret store timed out after 60 minutes."}
+    output = _command_output(stdout, stderr)
+    return _command_result(output, exit_code, "Secret store rotated.")
+
+
+def init_container_identity(payload: object) -> dict[str, object]:
+    opts = payload if isinstance(payload, dict) else {}
+    vmid = str(opts.get("vmid", "")).strip()
+    if not vmid.isdigit():
+        return {"output": "", "exitCode": 1, "error": "Container VMID is required."}
+
+    args, env = _secrets_command()
+    args.extend(["init-container", vmid])
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"output": "", "exitCode": 1, "error": "Identity initialization timed out after 60 minutes."}
+    output = _command_output(stdout, stderr)
+    return _command_result(output, exit_code, f"Initialized identity for {vmid}.")
 
 
 def git_status(_payload: object) -> dict[str, object]:
@@ -1097,6 +1329,21 @@ def main(argv: list[str]) -> int:
             result = snapshot()
         elif command == "secrets-provider-status":
             result = secrets_provider_status()
+        elif command == "secret-scope-status":
+            payload = json.load(sys.stdin)
+            result = secret_scope_status(payload)
+        elif command == "set-secret":
+            payload = json.load(sys.stdin)
+            result = set_secret(payload)
+        elif command == "remove-secret":
+            payload = json.load(sys.stdin)
+            result = remove_secret(payload)
+        elif command == "rotate-secret-scope":
+            payload = json.load(sys.stdin)
+            result = rotate_secret_scope(payload)
+        elif command == "init-container-identity":
+            payload = json.load(sys.stdin)
+            result = init_container_identity(payload)
         elif command == "save-config":
             payload = json.load(sys.stdin)
             result = save_config(payload)

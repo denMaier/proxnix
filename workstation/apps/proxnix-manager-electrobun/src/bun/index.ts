@@ -5,12 +5,17 @@ import {
   gitCommit,
   gitPush,
   gitStatus,
+  initContainerIdentity,
+  loadSecretScopeStatus,
   loadSecretsProviderStatus,
   loadSnapshot,
+  removeSecret,
+  rotateSecretScope,
   runDoctor,
   runPublish,
   saveConfig,
   saveSidebarMetadata,
+  setSecret,
 } from "./workstationBridge";
 
 const INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
@@ -19,7 +24,7 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
   maxRequestTime: INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS,
   handlers: {
     requests: {
-      loadSnapshot: (_params: void) => loadSnapshot(),
+      loadSnapshot: (params) => loadSnapshot(params),
       saveConfig: (params) => saveConfig(params.config),
       chooseSiteDirectory: async (params) => {
         const startingFolder = params?.startingFolder;
@@ -38,7 +43,12 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
       },
       openPath: (params) => Utils.openPath(params.path),
       saveSidebarMetadata: (params) => saveSidebarMetadata(params.vmid, params.metadata),
-      loadSecretsProviderStatus: (_params: void) => loadSecretsProviderStatus(),
+      loadSecretsProviderStatus: (params) => loadSecretsProviderStatus(params),
+      loadSecretScopeStatus: (params) => loadSecretScopeStatus(params),
+      setSecret: (params) => setSecret(params),
+      removeSecret: (params) => removeSecret(params),
+      rotateSecretScope: (params) => rotateSecretScope(params),
+      initContainerIdentity: (params) => initContainerIdentity(params.vmid),
       runDoctor: (params) => runDoctor(params),
       runPublish: (params) => runPublish(params),
       gitStatus: (_params: void) => gitStatus(),

@@ -4,6 +4,7 @@ import type {
   DoctorResult,
   GitStatusResult,
   ProxnixConfig,
+  SecretScopeStatus,
   SecretsProviderStatus,
   SidebarMetadata,
 } from "../shared/types";
@@ -20,6 +21,23 @@ type BridgeEnvelope<T> =
       ok: false;
       error: string;
     };
+
+type SecretScopeOptions = {
+  scopeType: "shared" | "group" | "container";
+  scopeId?: string;
+};
+
+const SECRET_CACHE_TTL_MS = 15_000;
+
+const cache: {
+  snapshot: AppSnapshot | null;
+  providerStatus: { key: string; value: SecretsProviderStatus; loadedAt: number } | null;
+  scopeStatuses: Map<string, { value: SecretScopeStatus; loadedAt: number }>;
+} = {
+  snapshot: null,
+  providerStatus: null,
+  scopeStatuses: new Map(),
+};
 
 function resolvePythonCommand(): string[] {
   const explicit = process.env.PROXNIX_MANAGER_PYTHON?.trim();
@@ -112,20 +130,141 @@ function runBridge<T>(command: string, payload?: unknown): T {
   return envelope.result;
 }
 
-export function loadSnapshot(): AppSnapshot {
-  return runBridge<AppSnapshot>("snapshot");
+function snapshotCacheKey(snapshot: AppSnapshot): string {
+  return JSON.stringify({
+    siteDir: snapshot.config.siteDir,
+    provider: snapshot.config.secretProvider,
+    providerCommand: snapshot.config.secretProviderCommand,
+  });
+}
+
+function currentSecretsCacheKey(): string {
+  return cache.snapshot ? snapshotCacheKey(cache.snapshot) : "";
+}
+
+function secretScopeCacheKey(options: SecretScopeOptions): string {
+  return JSON.stringify({
+    secrets: currentSecretsCacheKey(),
+    scopeType: options.scopeType,
+    scopeId: options.scopeId ?? "",
+  });
+}
+
+function isFresh(loadedAt: number, ttlMs: number): boolean {
+  return Date.now() - loadedAt < ttlMs;
+}
+
+function invalidateSecretsCache(): void {
+  cache.providerStatus = null;
+  cache.scopeStatuses.clear();
+}
+
+function setSnapshotCache(snapshot: AppSnapshot, options?: { invalidateSecrets?: boolean }): AppSnapshot {
+  const previousKey = cache.snapshot ? snapshotCacheKey(cache.snapshot) : null;
+  const nextKey = snapshotCacheKey(snapshot);
+  cache.snapshot = snapshot;
+  if (options?.invalidateSecrets || previousKey !== nextKey) {
+    invalidateSecretsCache();
+  }
+  return snapshot;
+}
+
+function invalidateAllCache(): void {
+  cache.snapshot = null;
+  invalidateSecretsCache();
+}
+
+export function loadSnapshot(options?: { force?: boolean }): AppSnapshot {
+  if (!options?.force && cache.snapshot) {
+    return cache.snapshot;
+  }
+  return setSnapshotCache(runBridge<AppSnapshot>("snapshot"), {
+    invalidateSecrets: options?.force,
+  });
 }
 
 export function saveConfig(config: ProxnixConfig): AppSnapshot {
-  return runBridge<AppSnapshot>("save-config", { config });
+  return setSnapshotCache(runBridge<AppSnapshot>("save-config", { config }));
 }
 
 export function saveSidebarMetadata(vmid: string, metadata: SidebarMetadata): AppSnapshot {
-  return runBridge<AppSnapshot>("save-sidebar-metadata", { vmid, metadata });
+  return setSnapshotCache(runBridge<AppSnapshot>("save-sidebar-metadata", { vmid, metadata }));
 }
 
-export function loadSecretsProviderStatus(): SecretsProviderStatus {
-  return runBridge<SecretsProviderStatus>("secrets-provider-status");
+export function loadSecretsProviderStatus(options?: { force?: boolean }): SecretsProviderStatus {
+  const key = currentSecretsCacheKey();
+  if (
+    !options?.force &&
+    cache.providerStatus &&
+    cache.providerStatus.key === key &&
+    isFresh(cache.providerStatus.loadedAt, SECRET_CACHE_TTL_MS)
+  ) {
+    return cache.providerStatus.value;
+  }
+
+  const value = runBridge<SecretsProviderStatus>("secrets-provider-status");
+  cache.providerStatus = { key, value, loadedAt: Date.now() };
+  return value;
+}
+
+export function loadSecretScopeStatus(options: {
+  scopeType: "shared" | "group" | "container";
+  scopeId?: string;
+  force?: boolean;
+}): SecretScopeStatus {
+  const key = secretScopeCacheKey(options);
+  const cached = cache.scopeStatuses.get(key);
+  if (!options.force && cached && isFresh(cached.loadedAt, SECRET_CACHE_TTL_MS)) {
+    return cached.value;
+  }
+
+  const value = runBridge<SecretScopeStatus>("secret-scope-status", options);
+  cache.scopeStatuses.set(key, { value, loadedAt: Date.now() });
+  return value;
+}
+
+function invalidateAfterCommand(
+  result: CommandResult,
+  options: { secrets?: boolean; snapshot?: boolean } = { secrets: true },
+): CommandResult {
+  if (result.exitCode === 0) {
+    if (options.snapshot) {
+      invalidateAllCache();
+    } else if (options.secrets) {
+      invalidateSecretsCache();
+    }
+  }
+  return result;
+}
+
+export function setSecret(options: {
+  scopeType: "shared" | "group" | "container";
+  scopeId?: string;
+  name: string;
+  value: string;
+}): CommandResult {
+  return invalidateAfterCommand(runBridge<CommandResult>("set-secret", options));
+}
+
+export function removeSecret(options: {
+  scopeType: "shared" | "group" | "container";
+  scopeId?: string;
+  name: string;
+}): CommandResult {
+  return invalidateAfterCommand(runBridge<CommandResult>("remove-secret", options));
+}
+
+export function rotateSecretScope(options: {
+  scopeType: "shared" | "group" | "container";
+  scopeId?: string;
+}): CommandResult {
+  return invalidateAfterCommand(runBridge<CommandResult>("rotate-secret-scope", options));
+}
+
+export function initContainerIdentity(vmid: string): CommandResult {
+  return invalidateAfterCommand(runBridge<CommandResult>("init-container-identity", { vmid }), {
+    snapshot: true,
+  });
 }
 
 export function runDoctor(options: { configOnly?: boolean; vmid?: string }): DoctorResult {
@@ -133,7 +272,10 @@ export function runDoctor(options: { configOnly?: boolean; vmid?: string }): Doc
 }
 
 export function runPublish(options: { dryRun?: boolean; configOnly?: boolean; vmid?: string; hosts?: string[] }): CommandResult {
-  return runBridge<CommandResult>("run-publish", options);
+  return invalidateAfterCommand(runBridge<CommandResult>("run-publish", options), {
+    snapshot: !options.dryRun,
+    secrets: false,
+  });
 }
 
 export function gitStatus(): GitStatusResult {

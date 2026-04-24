@@ -414,6 +414,12 @@ host relay key at `/etc/proxnix/host_relay_identity`, and stores container
 identities re-encrypted to both the host relay key and the master recovery key
 under `/var/lib/proxnix/private/containers/<vmid>/`.
 
+When the site directory is a git worktree, publish uses the committed `HEAD`
+snapshot rather than the live worktree. It writes the deployed revision to
+`/var/lib/proxnix/publish-revision.json` on the host. If staged, unstaged, or
+untracked local changes exist, publish prints a warning because those changes
+are ignored.
+
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 
 Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the shared `/var/lib/proxnix/containers/_template/` tree and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
