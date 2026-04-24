@@ -2,6 +2,7 @@ import { Electroview } from "electrobun/view";
 import type {
   AppSnapshot,
   CommandResult,
+  FilePreview,
   ContainerSummary,
   DoctorResult,
   GitFile,
@@ -15,6 +16,7 @@ import type {
 
 type ViewSelection =
   | "welcome"
+  | "site"
   | "settings"
   | "publish"
   | "secrets"
@@ -41,7 +43,8 @@ type IconName =
   | "open"
   | "publish"
   | "refresh"
-  | "spark";
+  | "spark"
+  | "trash";
 
 const SECRET_PROVIDER_OPTIONS = [
   "embedded-sops",
@@ -88,6 +91,9 @@ const state: {
   loading: boolean;
   saving: boolean;
   metadataSaving: boolean;
+  displaySettingsOpen: boolean;
+  sidebarGroupInput: string;
+  sidebarLabelInput: string;
   error: string | null;
   doctorResult: DoctorResult | null;
   doctorRunning: boolean;
@@ -102,6 +108,8 @@ const state: {
   gitRunning: boolean;
   gitCommandResult: CommandResult | null;
   gitCommitMessage: string;
+  onboardingRunning: boolean;
+  onboardingResult: CommandResult | null;
   secretsProviderStatus: SecretsProviderStatus | null;
   secretsProviderLoading: boolean;
   secretsProviderError: string | null;
@@ -118,6 +126,17 @@ const state: {
   secretScopeResult: CommandResult | null;
   secretDraftName: string;
   secretDraftValue: string;
+  secretGroupDraftName: string;
+  containerSecretGroupDraft: string;
+  containerBundleDraftVmid: string;
+  containerBundleRunning: boolean;
+  containerBundleResult: CommandResult | null;
+  pendingDeleteContainerBundleVmid: string | null;
+  siteNixResult: CommandResult | null;
+  secretTopologyRunning: boolean;
+  secretTopologyResult: CommandResult | null;
+  filePreview: (FilePreview & { title: string }) | null;
+  filePreviewLoading: boolean;
 } = {
   snapshot: null,
   draft: null,
@@ -128,6 +147,9 @@ const state: {
   loading: true,
   saving: false,
   metadataSaving: false,
+  displaySettingsOpen: false,
+  sidebarGroupInput: "",
+  sidebarLabelInput: "",
   error: null,
   doctorResult: null,
   doctorRunning: false,
@@ -142,6 +164,8 @@ const state: {
   gitRunning: false,
   gitCommandResult: null,
   gitCommitMessage: "",
+  onboardingRunning: false,
+  onboardingResult: null,
   secretsProviderStatus: null,
   secretsProviderLoading: false,
   secretsProviderError: null,
@@ -158,6 +182,17 @@ const state: {
   secretScopeResult: null,
   secretDraftName: "",
   secretDraftValue: "",
+  secretGroupDraftName: "",
+  containerSecretGroupDraft: "",
+  containerBundleDraftVmid: "",
+  containerBundleRunning: false,
+  containerBundleResult: null,
+  pendingDeleteContainerBundleVmid: null,
+  siteNixResult: null,
+  secretTopologyRunning: false,
+  secretTopologyResult: null,
+  filePreview: null,
+  filePreviewLoading: false,
 };
 
 function sleep(ms: number): Promise<void> {
@@ -261,6 +296,31 @@ function usesExecProvider(provider: string): boolean {
   return provider.trim() === "exec";
 }
 
+function defaultMasterIdentityPath(): string {
+  return "~/.ssh/proxnix-master";
+}
+
+function onboardingConfig(): ProxnixConfig {
+  const draft = normalizeConfig(state.draft ?? state.snapshot?.config ?? defaultConfig());
+  if (usesEmbeddedSops(draft.secretProvider) && !draft.sopsMasterIdentity.trim()) {
+    draft.sopsMasterIdentity = defaultMasterIdentityPath();
+  }
+  return draft;
+}
+
+function canRunOnboarding(config: ProxnixConfig): boolean {
+  if (!config.siteDir.trim() || state.onboardingRunning) {
+    return false;
+  }
+  if (usesEmbeddedSops(config.secretProvider) && !config.sopsMasterIdentity.trim()) {
+    return false;
+  }
+  if (usesExecProvider(config.secretProvider) && !config.secretProviderCommand.trim()) {
+    return false;
+  }
+  return true;
+}
+
 function normalizeSnapshot(snapshot: AppSnapshot): AppSnapshot {
   const sidebarMetadata = Object.fromEntries(
     Object.entries(snapshot.sidebarMetadata ?? {}).map(([vmid, metadata]) => [
@@ -273,6 +333,9 @@ function normalizeSnapshot(snapshot: AppSnapshot): AppSnapshot {
     configPath: normalizeString(snapshot.configPath),
     configExists: Boolean(snapshot.configExists),
     siteDirExists: Boolean(snapshot.siteDirExists),
+    siteNixPath: normalizeString(snapshot.siteNixPath),
+    siteNixExists: Boolean(snapshot.siteNixExists),
+    siteNixContent: normalizeString(snapshot.siteNixContent),
     preservedConfigKeys: normalizeStringList(snapshot.preservedConfigKeys),
     warnings: normalizeStringList(snapshot.warnings),
     config: normalizeConfig(snapshot.config),
@@ -333,7 +396,7 @@ function sidebarMetadataFor(snapshot: AppSnapshot, vmid: string): SidebarMetadat
 
 function sidebarTitleFor(snapshot: AppSnapshot, container: ContainerSummary): string {
   const metadata = sidebarMetadataFor(snapshot, container.vmid);
-  return metadata.displayName || container.vmid;
+  return metadata.displayName || `VMID ${container.vmid}`;
 }
 
 function effectiveContainerHasIdentity(container: ContainerSummary): boolean {
@@ -349,6 +412,8 @@ function syncContainerMetadataDraft(snapshot: AppSnapshot): void {
   state.containerMetadataDraft = container
     ? currentContainerSidebarMetadata(snapshot, container.vmid)
     : null;
+  state.sidebarGroupInput = "";
+  state.sidebarLabelInput = "";
 }
 
 function secretsProviderCacheKey(snapshot: AppSnapshot): string {
@@ -384,6 +449,9 @@ function secretScopeFromSelection(): { scopeType: "shared" | "group" | "containe
   }
   if (state.selection.startsWith("secrets:container:")) {
     return { scopeType: "container", scopeId: state.selection.slice("secrets:container:".length) };
+  }
+  if (state.selection.startsWith("container:")) {
+    return { scopeType: "container", scopeId: state.selection.slice("container:".length) };
   }
   return null;
 }
@@ -505,17 +573,21 @@ function ensureSecretsProviderStatus(force = false): Promise<void> | null {
 
 function setSelection(next: ViewSelection): void {
   state.selection = next;
+  state.pendingDeleteContainerBundleVmid = null;
   if (state.snapshot) {
     syncContainerMetadataDraft(state.snapshot);
+  }
+  if (!next.startsWith("container:")) {
+    state.displaySettingsOpen = false;
   }
   render();
   if (next === "git" && !state.gitResult && !state.gitLoading) {
     void handleRefreshGit();
   }
-  if (next === "secrets" || next.startsWith("secrets:")) {
+  if (next === "secrets" || next.startsWith("secrets:") || next.startsWith("container:")) {
     void ensureSecretsProviderStatus();
   }
-  if (next.startsWith("secrets:")) {
+  if (next.startsWith("secrets:") || next.startsWith("container:")) {
     void ensureSecretScopeStatus();
   } else {
     clearSecretScopeStatus();
@@ -528,6 +600,7 @@ function ensureSelection(snapshot: AppSnapshot): void {
       state.selection = "welcome";
     }
     state.containerMetadataDraft = null;
+    state.displaySettingsOpen = false;
     return;
   }
 
@@ -540,6 +613,7 @@ function ensureSelection(snapshot: AppSnapshot): void {
 
   if (
     state.selection === "settings" ||
+    state.selection === "site" ||
     state.selection === "welcome" ||
     state.selection === "publish" ||
     state.selection === "secrets" ||
@@ -551,11 +625,13 @@ function ensureSelection(snapshot: AppSnapshot): void {
     state.selection === "git"
   ) {
     state.containerMetadataDraft = null;
+    state.displaySettingsOpen = false;
     return;
   }
 
   state.selection = "welcome";
   state.containerMetadataDraft = null;
+  state.displaySettingsOpen = false;
 }
 
 function escapeHtml(value: unknown): string {
@@ -599,6 +675,8 @@ function icon(name: IconName): string {
       '<path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M7 17a7 7 0 0 0 11-3" /><path d="M17 7A7 7 0 0 0 6 10" />',
     spark:
       '<path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" />',
+    trash:
+      '<path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 15h10l1-15" /><path d="M10 10v7" /><path d="M14 10v7" />',
   };
 
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`;
@@ -655,10 +733,6 @@ function sidebarContainerDetail(snapshot: AppSnapshot, container: ContainerSumma
     parts.push(
       metadata.labels.length > 2 ? `${preview} +${metadata.labels.length - 2}` : preview,
     );
-  }
-
-  if (container.dropins.length > 0 && parts.length < 2) {
-    parts.push(`${container.dropins.length} drop-in${container.dropins.length === 1 ? "" : "s"}`);
   }
 
   return parts.join(" • ");
@@ -718,6 +792,7 @@ function syncExpandedGroups(snapshot: AppSnapshot): void {
 
 function renderSidebar(snapshot: AppSnapshot): string {
   const containerGroups = sidebarGroups(snapshot);
+  const canCreateBundle = snapshot.config.siteDir.length > 0 && snapshot.siteDirExists;
   const containerButtons =
     containerGroups.length > 0
       ? containerGroups
@@ -783,6 +858,7 @@ function renderSidebar(snapshot: AppSnapshot): string {
           ${renderNavItem("branch", "Git", "git", state.selection, "")}
           ${renderNavItem("publish", "Publish", "publish", state.selection, "")}
           ${renderNavItem("lock", "Secrets", "secrets", state.selection, "")}
+          ${renderNavItem("edit", "Site", "site", state.selection, "")}
           ${renderNavItem("health", "Doctor", "doctor", state.selection, "")}
         </div>
       </section>
@@ -790,6 +866,25 @@ function renderSidebar(snapshot: AppSnapshot): string {
       <section class="nav-section nav-section-containers">
         <div class="nav-heading">
           <span>Containers</span>
+        </div>
+        <div class="sidebar-bundle-create">
+          <input
+            type="text"
+            data-option="containerBundleDraftVmid"
+            value="${escapeHtml(state.containerBundleDraftVmid)}"
+            placeholder="New VMID"
+            spellcheck="false"
+            ${canCreateBundle ? "" : "disabled"}
+          />
+          <button
+            class="icon-button"
+            data-action="create-container-bundle"
+            title="Create empty container bundle"
+            aria-label="Create empty container bundle"
+            ${canCreateBundle && !state.containerBundleRunning && state.containerBundleDraftVmid.trim() ? "" : "disabled"}
+          >
+            ${icon("box")}
+          </button>
         </div>
         <div class="nav-list nav-list-groups">${containerButtons}</div>
       </section>
@@ -811,6 +906,11 @@ function renderSidebar(snapshot: AppSnapshot): string {
 
 
 function renderWarnings(snapshot: AppSnapshot): string {
+  const firstRun = snapshot.config.siteDir.length === 0 && !state.error;
+  if (firstRun) {
+    return "";
+  }
+
   if (snapshot.warnings.length === 0 && !state.error) {
     return "";
   }
@@ -845,6 +945,8 @@ function renderToolbar(snapshot: AppSnapshot): string {
     (currentContainer && state.snapshot ? sidebarTitleFor(state.snapshot, currentContainer) : null) ??
     (state.selection === "welcome"
       ? "Welcome"
+      : state.selection === "site"
+      ? "Site"
       : state.selection === "settings"
       ? "Settings"
       : state.selection === "publish"
@@ -869,6 +971,7 @@ function renderToolbar(snapshot: AppSnapshot): string {
 
   const subtitleMap: Record<string, string> = {
     welcome: "Start from the main workstation tasks.",
+    site: "Site-wide NixOS overrides published as site.nix.",
     settings: "Paths, SSH targets, and secret backend used across all proxnix tools.",
     publish: "Sync config, secrets, and identities to your Proxmox hosts.",
     secrets: "Manage shared and named secret groups.",
@@ -943,30 +1046,119 @@ function renderOpenDropdown(path: string, extraItems?: { label: string; action: 
   `;
 }
 
+function renderSiteNixOpenDropdown(sitePath: string, siteDir: string): string {
+  const items = [
+    { label: "File", action: "open-path", path: sitePath },
+    { label: "Editor", action: "open-in-editor", path: sitePath },
+    { label: "Preview", action: "preview-file", path: sitePath },
+    { label: "Site Directory", action: "open-path", path: siteDir },
+  ];
+  return `
+    <div class="dropdown">
+      <button class="secondary-button dropdown-toggle" data-dropdown-toggle>
+        ${icon("open")}
+        <span>Open</span>
+        <span class="dropdown-caret">${icon("chevron")}</span>
+      </button>
+      <div class="dropdown-menu">
+        ${items.map((item) => `
+          <button class="dropdown-item" data-action="${item.action}" data-path="${escapeHtml(item.path)}" data-preview-title="site.nix">
+            <span>${escapeHtml(item.label)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderOnboarding(snapshot: AppSnapshot): string {
+  const draft = onboardingConfig();
+  const running = state.onboardingRunning;
+  const canStart = canRunOnboarding(draft);
+  const backendNeeds = usesEmbeddedSops(draft.secretProvider)
+    ? renderSettingsField(
+        "Master identity",
+        "sopsMasterIdentity",
+        draft.sopsMasterIdentity,
+        "Created if missing; used as the embedded-sops recovery key.",
+        undefined,
+        true,
+      )
+    : usesExecProvider(draft.secretProvider)
+      ? renderSettingsField(
+          "Provider command",
+          "secretProviderCommand",
+          draft.secretProviderCommand,
+          "Command implementing the proxnix secret-provider protocol.",
+          undefined,
+          true,
+        )
+      : `
+        <div class="onboarding-note wide">
+          ${icon("key")}
+          <span>The master and host-relay keys will be stored in the selected provider under proxnix internal keys.</span>
+        </div>
+      `;
+
   return `
     <div class="page-stack">
-      <section class="hero-band">
+      <section class="onboarding-flow">
         <div class="hero-copy">
           <div class="eyebrow">Getting started</div>
-          <div class="hero-title">Point to your site repo</div>
+          <div class="hero-title">Create a proxnix site repo</div>
           <div class="hero-text">
-            Select the root of your proxnix site directory. The app will
-            discover containers, secrets, and identities from there.
+            Choose where the live site state should live, select the secret backend,
+            then scaffold the repo and create the master and host-relay keys.
           </div>
         </div>
+
+        ${state.onboardingResult ? `<div class="${state.onboardingResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.onboardingResult.output || state.onboardingResult.error || "")}</div>` : ""}
+
+        <div class="onboarding-steps">
+          <div class="onboarding-step">
+            <div class="onboarding-step-index">1</div>
+            <div class="onboarding-step-body">
+              <div class="section-title">${icon("folder")}<span>Site Path</span></div>
+              <div class="form-grid compact-form-grid">
+                ${renderSettingsField("Repository path", "siteDir", draft.siteDir, "The directory will be created if it does not exist.", undefined, true, true)}
+              </div>
+            </div>
+          </div>
+
+          <div class="onboarding-step">
+            <div class="onboarding-step-index">2</div>
+            <div class="onboarding-step-body">
+              <div class="section-title">${icon("lock")}<span>Secrets Backend</span></div>
+              <div class="form-grid compact-form-grid">
+                ${renderSettingsField("Backend", "secretProvider", draft.secretProvider, "Where proxnix stores source secrets and generated keys.", SECRET_PROVIDER_OPTIONS, true)}
+                ${backendNeeds}
+              </div>
+            </div>
+          </div>
+
+          <div class="onboarding-step">
+            <div class="onboarding-step-index">3</div>
+            <div class="onboarding-step-body">
+              <div class="section-title">${icon("publish")}<span>Scaffold</span></div>
+              <div class="section-copy">
+                Creates site.nix, containers and private directories, initializes git, saves the workstation config, and creates master plus host-relay keys.
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="hero-actions">
-          <button class="primary-button" data-action="choose-site">
-            ${icon("folder")}
-            <span>Choose Site Directory</span>
+          <button class="primary-button" data-action="run-onboarding" ${canStart ? "" : "disabled"}>
+            ${icon(running ? "refresh" : "spark")}
+            <span>${running ? "Creating..." : "Create Site"}</span>
           </button>
           <button class="secondary-button" data-nav="settings">
             ${icon("gear")}
-            <span>Review Settings</span>
+            <span>Advanced Settings</span>
           </button>
         </div>
       </section>
-      ${renderSettingsForm(snapshot)}
+      ${snapshot.configExists ? renderSettingsForm(snapshot) : ""}
     </div>
   `;
 }
@@ -992,6 +1184,10 @@ function renderWelcomePage(snapshot: AppSnapshot): string {
               <button class="primary-button" data-nav="secrets">
                 ${icon("lock")}
                 <span>Manage Secrets</span>
+              </button>
+              <button class="secondary-button" data-nav="site">
+                ${icon("edit")}
+                <span>Review site.nix</span>
               </button>
               <button class="secondary-button" data-nav="publish">
                 ${icon("publish")}
@@ -1035,6 +1231,10 @@ function renderWelcomePage(snapshot: AppSnapshot): string {
           <button class="welcome-link" data-nav="secrets" ${hasSite ? "" : "disabled"}>
             <span>${icon("lock")}</span>
             <span>Manage shared, group, and container secrets</span>
+          </button>
+          <button class="welcome-link" data-nav="site" ${hasSite ? "" : "disabled"}>
+            <span>${icon("edit")}</span>
+            <span>Review site.nix</span>
           </button>
           <button class="welcome-link" data-nav="doctor" ${hasSite ? "" : "disabled"}>
             <span>${icon("health")}</span>
@@ -1177,10 +1377,56 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
   `;
 }
 
+function renderSitePage(snapshot: AppSnapshot): string {
+  const canCreate = snapshot.siteDirExists && !snapshot.siteNixExists;
+  const sitePath = snapshot.siteNixPath || `${snapshot.config.siteDir}/site.nix`;
+
+  return `
+    <div class="page-stack">
+      ${state.siteNixResult ? `<div class="${state.siteNixResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.siteNixResult.output || state.siteNixResult.error || "")}</div>` : ""}
+
+      <section class="page-controls">
+        <div class="controls-start">
+          <div class="status-line">
+            <span class="${snapshot.siteNixExists ? "status-dot good" : "status-dot warn"}"></span>
+            <span>${snapshot.siteNixExists ? "site.nix found" : "site.nix missing"}</span>
+            <code>${escapeHtml(compactPath(sitePath))}</code>
+          </div>
+        </div>
+        <div class="controls-end">
+          ${
+            snapshot.siteNixExists
+              ? renderSiteNixOpenDropdown(sitePath, snapshot.config.siteDir)
+              : `<button class="secondary-button" data-action="open-path" data-path="${escapeHtml(snapshot.config.siteDir)}">${icon("folder")}<span>Open Directory</span></button>`
+          }
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("edit")}<span>site.nix</span></div>
+          </div>
+          <div class="section-actions">
+            ${
+              snapshot.siteNixExists
+                ? `<button class="secondary-button" data-action="open-in-editor" data-path="${escapeHtml(sitePath)}">${icon("edit")}<span>Edit</span></button>`
+                : `<button class="primary-button" data-action="create-site-nix" ${canCreate ? "" : "disabled"}>${icon("publish")}<span>Create site.nix</span></button>`
+            }
+          </div>
+        </div>
+
+        <pre class="embedded-file-preview">${escapeHtml(snapshot.siteNixExists ? snapshot.siteNixContent : "site.nix has not been created yet.")}</pre>
+      </section>
+    </div>
+  `;
+}
+
 function syncDraftIndicators(): void {
   const dirty = isDirty();
   const saveButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="save-config"]');
   const resetButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="reset-draft"]');
+  const onboardingButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="run-onboarding"]');
   const status = root.querySelector<HTMLDivElement>(".toolbar-status");
   const statusLabel = status?.querySelector("span") ?? null;
 
@@ -1190,6 +1436,10 @@ function syncDraftIndicators(): void {
 
   for (const button of resetButtons) {
     button.disabled = !dirty || state.saving;
+  }
+
+  for (const button of onboardingButtons) {
+    button.disabled = !canRunOnboarding(onboardingConfig());
   }
 
   if (status && statusLabel && !state.loading && !state.saving) {
@@ -1211,19 +1461,20 @@ function syncSidebarMetadataIndicators(): void {
   const resetButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="reset-sidebar-metadata"]');
   const clearButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="clear-sidebar-metadata"]');
   const dirty = container && snapshot ? sidebarMetadataDirty(container, snapshot) : false;
+  const hasPendingPickerInput = state.sidebarGroupInput.trim().length > 0 || state.sidebarLabelInput.trim().length > 0;
   const hasMetadata =
     (state.containerMetadataDraft?.displayName ?? "").length > 0 ||
     (state.containerMetadataDraft?.group ?? "").length > 0 ||
     (state.containerMetadataDraft?.labels.length ?? 0) > 0;
 
   for (const button of saveButtons) {
-    button.disabled = !dirty || state.metadataSaving;
+    button.disabled = (!dirty && !hasPendingPickerInput) || state.metadataSaving;
   }
   for (const button of resetButtons) {
-    button.disabled = !dirty || state.metadataSaving;
+    button.disabled = (!dirty && !hasPendingPickerInput) || state.metadataSaving;
   }
   for (const button of clearButtons) {
-    button.disabled = !hasMetadata || state.metadataSaving;
+    button.disabled = (!hasMetadata && !hasPendingPickerInput) || state.metadataSaving;
   }
 }
 
@@ -1238,76 +1489,249 @@ function syncSecretDraftIndicators(): void {
   }
 }
 
+function syncSecretTopologyIndicators(): void {
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-action="create-secret-group"]')) {
+    button.disabled = state.secretTopologyRunning || state.secretGroupDraftName.trim().length === 0;
+  }
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-action="attach-secret-group"]')) {
+    button.disabled = state.secretTopologyRunning || state.containerSecretGroupDraft.trim().length === 0;
+  }
+}
+
+function syncContainerBundleIndicators(): void {
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-action="create-container-bundle"]')) {
+    button.disabled = state.containerBundleRunning || state.containerBundleDraftVmid.trim().length === 0;
+  }
+}
+
 function renderSidebarMetadataForm(container: ContainerSummary, snapshot: AppSnapshot): string {
   const metadata = state.containerMetadataDraft ?? currentContainerSidebarMetadata(snapshot, container.vmid);
   const dirty = sidebarMetadataDirty(container, snapshot);
   const hasMetadata = metadata.displayName || metadata.group || metadata.labels.length > 0;
+  const isOpen = state.displaySettingsOpen;
+  const summary = [
+    metadata.displayName ? `Alias: ${metadata.displayName}` : "",
+    metadata.group ? `Group: ${metadata.group}` : "",
+    metadata.labels.length > 0 ? `${metadata.labels.length} label(s)` : "",
+  ]
+    .filter(Boolean)
+    .join(" / ");
 
   return `
-    <section class="page-band">
-      <div class="section-header">
-        <div>
-          <div class="section-title">${icon("spark")}<span>Display Settings</span></div>
-          <div class="section-copy">
-            Custom name, group, and labels for this container in the sidebar.
-          </div>
-        </div>
-        <div class="section-actions">
-          <button class="secondary-button" data-action="clear-sidebar-metadata" ${hasMetadata ? "" : "disabled"}>
-            ${icon("refresh")}
-            <span>Clear</span>
-          </button>
-          <button class="secondary-button" data-action="reset-sidebar-metadata" ${dirty ? "" : "disabled"}>
-            ${icon("refresh")}
-            <span>Reset</span>
-          </button>
-          <button class="primary-button" data-action="save-sidebar-metadata" ${dirty ? "" : "disabled"}>
-            ${icon("publish")}
-            <span>Save</span>
-          </button>
-        </div>
-      </div>
+    <section class="display-settings-disclosure${isOpen ? " open" : ""}">
+      <button
+        class="display-settings-toggle"
+        type="button"
+        data-action="toggle-display-settings"
+        aria-expanded="${isOpen ? "true" : "false"}"
+      >
+        <span class="display-settings-summary-title">${icon("spark")}<span>Display Settings</span></span>
+        <span class="display-settings-summary-copy">${escapeHtml(summary || "Sidebar presentation only")}</span>
+        <span class="display-settings-toggle-label">${isOpen ? "Hide" : "Edit"}</span>
+      </button>
 
-      <div class="pill-row">
-        ${pill(metadata.displayName ? `Alias: ${metadata.displayName}` : `VMID ${container.vmid}`, metadata.displayName ? "good" : "info", metadata.displayName ? "spark" : "box")}
-        ${pill(metadata.group || "No custom group", metadata.group ? "magenta" : "info", "folder")}
-        ${pill(
-          metadata.labels.length > 0 ? `${metadata.labels.length} label(s)` : "No labels",
-          metadata.labels.length > 0 ? "good" : "info",
-          "key",
-        )}
-      </div>
+      ${
+        isOpen
+          ? `<div class="display-settings-body">
+              <div class="section-header">
+                <div class="section-copy">
+                  Custom name, group, and labels for this container in the sidebar.
+                </div>
+                <div class="section-actions">
+                  <button class="secondary-button" data-action="clear-sidebar-metadata" ${hasMetadata ? "" : "disabled"}>
+                    ${icon("refresh")}
+                    <span>Clear</span>
+                  </button>
+                  <button class="secondary-button" data-action="reset-sidebar-metadata" ${dirty ? "" : "disabled"}>
+                    ${icon("refresh")}
+                    <span>Reset</span>
+                  </button>
+                  <button class="primary-button" data-action="save-sidebar-metadata" ${dirty ? "" : "disabled"}>
+                    ${icon("publish")}
+                    <span>Save</span>
+                  </button>
+                </div>
+              </div>
 
-      <div class="form-grid">
-        ${renderSettingsField("Display name", "displayName", metadata.displayName, "Friendly name shown instead of the VMID.", undefined, true, false, "data-container-field")}
-        ${renderSettingsField("Group", "group", metadata.group, "Sidebar group heading.", undefined, false, false, "data-container-field")}
-        ${renderSettingsField("Labels", "labels", metadata.labels.join(", "), "Comma-separated tags shown in the sidebar.", undefined, true, false, "data-container-field")}
-      </div>
+              <div class="form-grid">
+                ${renderSettingsField("Display name", "displayName", metadata.displayName, "Friendly name shown instead of the VMID.", undefined, true, false, "data-container-field")}
+                ${renderOrganizationalGroupPicker(container, snapshot, metadata)}
+                ${renderLabelPicker(container, snapshot, metadata)}
+              </div>
+            </div>`
+          : ""
+      }
     </section>
+  `;
+}
+
+function organizationalGroupOptions(
+  container: ContainerSummary,
+  snapshot: AppSnapshot,
+  metadata: SidebarMetadata,
+): string[] {
+  const groups = new Map<string, string>();
+  for (const [vmid, candidateMetadata] of Object.entries(snapshot.sidebarMetadata)) {
+    const group = normalizeString(candidateMetadata?.group).trim();
+    if (!group || vmid === container.vmid) {
+      continue;
+    }
+    groups.set(group.toLocaleLowerCase(), group);
+  }
+  if (metadata.group) {
+    groups.set(metadata.group.toLocaleLowerCase(), metadata.group);
+  }
+  return [...groups.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+function sidebarLabelOptions(
+  container: ContainerSummary,
+  snapshot: AppSnapshot,
+  metadata: SidebarMetadata,
+): string[] {
+  const labels = new Map<string, string>();
+  for (const [vmid, candidateMetadata] of Object.entries(snapshot.sidebarMetadata)) {
+    if (vmid === container.vmid) {
+      continue;
+    }
+    for (const label of normalizeStringList(candidateMetadata?.labels)) {
+      labels.set(label.toLocaleLowerCase(), label);
+    }
+  }
+  for (const label of metadata.labels) {
+    labels.set(label.toLocaleLowerCase(), label);
+  }
+  return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
+function renderOrganizationalGroupPicker(
+  container: ContainerSummary,
+  snapshot: AppSnapshot,
+  metadata: SidebarMetadata,
+): string {
+  const options = organizationalGroupOptions(container, snapshot, metadata);
+  const selected = metadata.group.trim();
+  const suggestions = options.filter((group) => group !== selected);
+  const optionButtons =
+    suggestions.length > 0
+      ? suggestions
+          .map(
+            (group) => `
+              <button class="metadata-picker-option" type="button" data-action="set-sidebar-group" data-group-value="${escapeHtml(group)}">
+                ${escapeHtml(group)}
+              </button>
+            `,
+          )
+          .join("")
+      : `<span class="metadata-picker-empty">No saved groups yet</span>`;
+
+  return `
+    <div class="field organizational-group-picker">
+      <div class="field-label-row">
+        <label class="field-label" for="sidebar-group-input">Group</label>
+        <span class="field-hint">Sidebar group heading.</span>
+      </div>
+      <div class="metadata-picker">
+        <div class="metadata-picker-input-row">
+          ${
+            selected
+              ? `<button class="metadata-picker-token" type="button" data-action="set-sidebar-group" data-group-value="">
+                  <span>${escapeHtml(selected)}</span>
+                  <span aria-hidden="true">Clear</span>
+                </button>`
+              : ""
+          }
+          <input
+            id="sidebar-group-input"
+            type="text"
+            data-sidebar-group-input="true"
+            value="${escapeHtml(state.sidebarGroupInput)}"
+            placeholder="${selected ? "Change group" : "Type group and press Enter"}"
+            spellcheck="false"
+          />
+        </div>
+        <div class="metadata-picker-suggestions">
+          <span>Suggestions</span>
+          <div>${optionButtons}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLabelPicker(
+  container: ContainerSummary,
+  snapshot: AppSnapshot,
+  metadata: SidebarMetadata,
+): string {
+  const selectedKeys = new Set(metadata.labels.map((label) => label.toLocaleLowerCase()));
+  const suggestions = sidebarLabelOptions(container, snapshot, metadata).filter(
+    (label) => !selectedKeys.has(label.toLocaleLowerCase()),
+  );
+  const tokens =
+    metadata.labels.length > 0
+      ? metadata.labels
+          .map(
+            (label) => `
+              <button class="metadata-picker-token" type="button" data-action="remove-sidebar-label" data-label-value="${escapeHtml(label)}">
+                <span>${escapeHtml(label)}</span>
+                <span aria-hidden="true">Remove</span>
+              </button>
+            `,
+          )
+          .join("")
+      : "";
+  const optionButtons =
+    suggestions.length > 0
+      ? suggestions
+          .map(
+            (label) => `
+              <button class="metadata-picker-option" type="button" data-action="add-sidebar-label" data-label-value="${escapeHtml(label)}">
+                ${escapeHtml(label)}
+              </button>
+            `,
+          )
+          .join("")
+      : `<span class="metadata-picker-empty">No saved labels yet</span>`;
+
+  return `
+    <div class="field wide">
+      <div class="field-label-row">
+        <label class="field-label" for="sidebar-label-input">Labels</label>
+        <span class="field-hint">Sidebar tags.</span>
+      </div>
+      <div class="metadata-picker">
+        <div class="metadata-picker-input-row">
+          ${tokens}
+          <input
+            id="sidebar-label-input"
+            type="text"
+            data-sidebar-label-input="true"
+            value="${escapeHtml(state.sidebarLabelInput)}"
+            placeholder="Type labels and press Enter"
+            spellcheck="false"
+          />
+        </div>
+        <div class="metadata-picker-suggestions">
+          <span>Suggestions</span>
+          <div>${optionButtons}</div>
+        </div>
+      </div>
+    </div>
   `;
 }
 
 function renderContainerPage(container: ContainerSummary): string {
   const snapshot = state.snapshot;
-  const metadata = snapshot ? sidebarMetadataFor(snapshot, container.vmid) : defaultSidebarMetadata();
   const isEmbeddedSops = usesEmbeddedSops(snapshot?.config.secretProvider ?? "");
-  const labels =
-    metadata.labels.length > 0
-      ? `<div class="pill-row">${metadata.labels
-          .map((label) => pill(label, "info", "spark"))
-          .join("")}</div>`
-      : "";
+  const confirmingDelete = state.pendingDeleteContainerBundleVmid === container.vmid;
 
   return `
     <div class="page-stack">
-      <section class="page-controls">
-        <div class="controls-start">
-          ${pill(container.hasConfig ? "Config found" : "No config dir", container.hasConfig ? "good" : "warn", "box")}
-          ${pill(`${container.secretGroups.length} secret group${container.secretGroups.length === 1 ? "" : "s"}`, container.secretGroups.length > 0 ? "magenta" : "info", "lock")}
-          ${pill(effectiveContainerHasIdentity(container) ? "Identity present" : "No identity", effectiveContainerHasIdentity(container) ? "good" : "warn", "key")}
-          ${labels}
-        </div>
-        <div class="controls-end">
+      ${state.containerBundleResult ? `<div class="${state.containerBundleResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.containerBundleResult.output || state.containerBundleResult.error || "")}</div>` : ""}
+      <section class="container-config-row">
+        ${snapshot ? renderSidebarMetadataForm(container, snapshot) : ""}
+        <div class="container-config-actions">
           ${renderOpenDropdown(
             container.containerPath,
             isEmbeddedSops
@@ -1316,8 +1740,6 @@ function renderContainerPage(container: ContainerSummary): string {
           )}
         </div>
       </section>
-
-      ${snapshot ? renderSidebarMetadataForm(container, snapshot) : ""}
 
       <section class="page-band">
         <div class="details-grid">
@@ -1328,14 +1750,18 @@ function renderContainerPage(container: ContainerSummary): string {
                 container.dropins.length > 0
                   ? container.dropins
                       .map(
-                        (dropin) => `
-                          <div class="list-item">
+                        (dropin) => {
+                          const path = `${container.containerPath}/dropins/${dropin}`;
+                          return `
+                          <button class="list-item preview-list-item" data-action="preview-file" data-preview-title="${escapeHtml(dropin)}" data-path="${escapeHtml(path)}">
                             <div class="list-item-copy">
                               <div class="list-item-title"><code>${escapeHtml(dropin)}</code></div>
-                              <div class="list-item-meta">repo overlay</div>
+                              <div class="list-item-meta">repo overlay / preview</div>
                             </div>
-                          </div>
-                        `,
+                            ${icon("open")}
+                          </button>
+                        `;
+                        },
                       )
                       .join("")
                   : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No drop-ins configured.</div></div></div>`
@@ -1344,30 +1770,119 @@ function renderContainerPage(container: ContainerSummary): string {
           </div>
 
           <div class="list-block">
-            <div class="section-title">${icon("lock")}<span>Secret Groups</span></div>
-            <div class="list">
-              ${
-                container.secretGroups.length > 0
-                  ? container.secretGroups
-                      .map(
-                        (group) => `
-                          <div class="list-item">
-                            <div class="list-item-copy">
-                              <div class="list-item-title"><code>${escapeHtml(group)}</code></div>
-                              <div class="list-item-meta">attached to this container</div>
-                            </div>
-                          </div>
-                        `,
-                      )
-                      .join("")
-                  : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secret groups attached.</div></div></div>`
-              }
-            </div>
+            ${renderContainerSecrets(container)}
           </div>
         </div>
       </section>
+
+      <section class="container-danger-row">
+        <div>
+          <div class="container-danger-title">Container Bundle</div>
+          <div class="container-danger-copy">Deletes the scaffold and provider-backed identity. Container-local secrets must be removed first.</div>
+        </div>
+        <button class="secondary-button${confirmingDelete ? " danger-button" : ""}" data-action="delete-container-bundle" data-vmid="${escapeHtml(container.vmid)}" ${state.containerBundleRunning ? "disabled" : ""}>
+          ${icon("trash")}
+          <span>${confirmingDelete ? "Sure?" : "Delete Bundle"}</span>
+        </button>
+      </section>
     </div>
   `;
+}
+
+function renderContainerSecrets(container: ContainerSummary): string {
+  const snapshot = state.snapshot;
+  const status = state.secretScopeStatus?.scopeType === "container" && state.secretScopeStatus.scopeId === container.vmid
+    ? state.secretScopeStatus
+    : null;
+  const secretWarnings = [
+    ...(state.secretScopeError ? [state.secretScopeError] : []),
+    ...(status?.warnings ?? []),
+  ];
+  const secretRows = state.secretScopeLoading
+    ? `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">Loading secrets...</div></div></div>`
+    : status && status.entries.length > 0
+      ? status.entries
+          .map(
+            (entry) => `
+              <div class="list-item">
+                <div class="list-item-copy">
+                  <div class="list-item-title"><code>${escapeHtml(entry.name)}</code></div>
+                  <div class="list-item-meta">source: ${escapeHtml(entry.source)}</div>
+                </div>
+              </div>
+            `,
+          )
+          .join("")
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secrets configured.</div></div></div>`;
+  const attachableGroups = snapshot
+    ? allNamedSecretGroups(snapshot).filter((group) => !container.secretGroups.includes(group))
+    : [];
+  const attachOptions = attachableGroups
+    .map((group) => `<option value="${escapeHtml(group)}"></option>`)
+    .join("");
+
+  return `
+    <div class="section-title">${icon("lock")}<span>Secrets</span></div>
+    ${secretWarnings.length > 0 ? `<div class="error-band compact-band">${secretWarnings.map((warning) => escapeHtml(warning)).join("<br />")}</div>` : ""}
+    ${state.secretTopologyResult ? `<div class="${state.secretTopologyResult.exitCode === 0 ? "success-band compact-band" : "error-band compact-band"}">${escapeHtml(state.secretTopologyResult.output || state.secretTopologyResult.error || "")}</div>` : ""}
+    <div class="nested-list-block">
+      <div class="list-subtitle">Groups</div>
+      <div class="inline-action-row">
+        <input
+          class="inline-action-input"
+          type="text"
+          list="container-secret-groups-${escapeHtml(container.vmid)}"
+          data-option="containerSecretGroupDraft"
+          value="${escapeHtml(state.containerSecretGroupDraft)}"
+          placeholder="Attach group"
+          spellcheck="false"
+        />
+        <datalist id="container-secret-groups-${escapeHtml(container.vmid)}">${attachOptions}</datalist>
+        <button class="secondary-button compact-button" data-action="attach-secret-group" data-vmid="${escapeHtml(container.vmid)}" ${state.secretTopologyRunning || !state.containerSecretGroupDraft.trim() ? "disabled" : ""}>Attach</button>
+      </div>
+      <div class="list">
+        ${
+          container.secretGroups.length > 0
+            ? container.secretGroups
+                .map(
+                  (group) => `
+                    <div class="list-item">
+                      <div class="list-item-copy">
+                        <div class="list-item-title"><code>${escapeHtml(group)}</code></div>
+                        <div class="list-item-meta">attached to this container</div>
+                      </div>
+                      <button class="secondary-button compact-button" data-action="detach-secret-group" data-vmid="${escapeHtml(container.vmid)}" data-secret-group="${escapeHtml(group)}" ${state.secretTopologyRunning ? "disabled" : ""}>Detach</button>
+                    </div>
+                  `,
+                )
+                .join("")
+            : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No groups attached.</div></div></div>`
+        }
+      </div>
+    </div>
+    <div class="nested-list-block">
+      <div class="list-subtitle">Secrets</div>
+      <div class="list">${secretRows}</div>
+    </div>
+  `;
+}
+
+function containerStatusSummary(container: ContainerSummary): string {
+  const status = container.hasConfig ? "Config found" : "No config dir";
+  const secrets = `${container.secretGroups.length} secret group${container.secretGroups.length === 1 ? "" : "s"}`;
+  const identity = effectiveContainerHasIdentity(container) ? "Identity present" : "No identity";
+  return `${status} / ${secrets} / ${identity}`;
+}
+
+function selectedContainerStatusbarLabel(): string | null {
+  if (!state.selection.startsWith("container:")) {
+    return null;
+  }
+  const container = selectedContainer();
+  if (!container) {
+    return null;
+  }
+  return `Container config: <code title="${escapeHtml(container.containerPath)}">${escapeHtml(compactPath(container.containerPath))}</code> <span>${escapeHtml(containerStatusSummary(container))}</span>`;
 }
 
 function fileStatusClass(status: string): string {
@@ -1445,14 +1960,14 @@ function renderDoctorPage(snapshot: AppSnapshot): string {
     <div class="page-stack">
       <section class="page-controls">
         <div class="controls-start">
-          <label class="option-toggle">
-            <input type="checkbox" data-option="doctorConfigOnly" ${state.doctorConfigOnly ? "checked" : ""} />
-            <span>Config only</span>
-          </label>
           <div class="option-field">
             <span class="option-field-label">Target VMID</span>
             <input type="text" data-option="doctorVmid" value="${escapeHtml(state.doctorVmid)}" placeholder="All" spellcheck="false" />
           </div>
+          <label class="option-toggle">
+            <input type="checkbox" data-option="doctorConfigOnly" ${state.doctorConfigOnly ? "checked" : ""} />
+            <span>Config only</span>
+          </label>
         </div>
         <div class="controls-end">
           <button class="primary-button" data-action="run-doctor" ${running ? "disabled" : ""}>
@@ -1472,7 +1987,11 @@ function renderDoctorPage(snapshot: AppSnapshot): string {
 function renderPublishPage(snapshot: AppSnapshot): string {
   const result = state.publishResult;
   const running = state.publishRunning;
-  const hasHosts = snapshot.config.hosts.trim().length > 0;
+  const hosts = snapshot.config.hosts
+    .split(/[,\s]+/)
+    .map((host) => host.trim())
+    .filter(Boolean);
+  const hasHosts = hosts.length > 0;
 
   const resultsHtml = running
     ? `<div class="running-band">${icon("refresh")}<span>Publishing...</span></div>`
@@ -1493,27 +2012,41 @@ function renderPublishPage(snapshot: AppSnapshot): string {
 
   return `
     <div class="page-stack">
-      <section class="page-controls">
-        <div class="controls-start">
-          ${pill(hasHosts ? `Hosts: ${snapshot.config.hosts}` : "No hosts configured", hasHosts ? "info" : "warn", "spark")}
-          <label class="option-toggle">
-            <input type="checkbox" data-option="publishConfigOnly" ${state.publishConfigOnly ? "checked" : ""} />
-            <span>Config only</span>
-          </label>
-          <div class="option-field">
-            <span class="option-field-label">Target VMID</span>
-            <input type="text" data-option="publishVmid" value="${escapeHtml(state.publishVmid)}" placeholder="All" spellcheck="false" />
+      <section class="publish-controls">
+        <div class="publish-control-stack">
+          <div class="controls-start">
+            <div class="option-field">
+              <span class="option-field-label">Target VMID</span>
+              <input type="text" data-option="publishVmid" value="${escapeHtml(state.publishVmid)}" placeholder="All" spellcheck="false" />
+            </div>
+            <label class="option-toggle">
+              <input type="checkbox" data-option="publishConfigOnly" ${state.publishConfigOnly ? "checked" : ""} />
+              <span>Config only</span>
+            </label>
+          </div>
+          <div class="publish-actions">
+            <button class="secondary-button" data-action="publish-preview" ${running || !hasHosts ? "disabled" : ""}>
+              ${icon("refresh")}
+              <span>Preview Changes</span>
+            </button>
+            <button class="primary-button" data-action="publish-execute" ${running || !hasHosts ? "disabled" : ""}>
+              ${icon("publish")}
+              <span>${running ? "Publishing..." : "Publish Now"}</span>
+            </button>
           </div>
         </div>
-        <div class="controls-end">
-          <button class="secondary-button" data-action="publish-preview" ${running || !hasHosts ? "disabled" : ""}>
-            ${icon("refresh")}
-            <span>Preview Changes</span>
-          </button>
-          <button class="primary-button" data-action="publish-execute" ${running || !hasHosts ? "disabled" : ""}>
-            ${icon("publish")}
-            <span>${running ? "Publishing..." : "Publish Now"}</span>
-          </button>
+        <div class="publish-hosts ${hasHosts ? "" : "empty"}">
+          <div class="publish-hosts-header">
+            <span class="publish-hosts-label">Hosts</span>
+            <span class="publish-hosts-count">${hosts.length}</span>
+          </div>
+          <div class="host-list" aria-label="Publish hosts">
+            ${
+              hasHosts
+                ? hosts.map((host) => `<span class="host-chip">${escapeHtml(host)}</span>`).join("")
+                : `<span class="host-chip">None configured</span>`
+            }
+          </div>
         </div>
       </section>
 
@@ -1543,12 +2076,6 @@ function renderGitPage(snapshot: AppSnapshot): string {
       <div class="page-stack">
         <section class="page-band">
           <div class="error-band">${result?.error ? escapeHtml(result.error) : "Could not load repository status."}</div>
-          <div class="action-row">
-            <button class="secondary-button" data-action="refresh-git" ${loading ? "disabled" : ""}>
-              ${icon("refresh")}
-              <span>Retry</span>
-            </button>
-          </div>
         </section>
       </div>
     `;
@@ -1621,10 +2148,6 @@ function renderGitPage(snapshot: AppSnapshot): string {
           ${hasRemote ? pill(ahead > 0 ? `${ahead} ahead` : "Up to date", ahead > 0 ? "warn" : "good", "publish") : pill("No upstream", "info", "branch")}
         </div>
         <div class="controls-end">
-          <button class="secondary-button" data-action="refresh-git" ${loading ? "disabled" : ""}>
-            ${icon("refresh")}
-            <span>${loading ? "Loading..." : "Refresh"}</span>
-          </button>
           ${renderOpenDropdown(snapshot.config.siteDir)}
         </div>
       </section>
@@ -1690,12 +2213,17 @@ function renderSecretsProviderBanner(): string {
     ...(providerStatus?.warnings ?? []),
   ];
   return state.secretsProviderLoading
-    ? `<div class="running-band">${icon("refresh")}<span>Loading provider-backed secret status...</span></div>`
+    ? ""
     : providerWarnings.length > 0
       ? `<div class="error-band">${providerWarnings.map((warning) => escapeHtml(warning)).join("<br />")}</div>`
-      : providerStatus
-        ? `<div class="running-band">${icon("spark")}<span>Provider status loaded from <code>${escapeHtml(providerStatus.provider)}</code>.</span></div>`
-        : "";
+      : "";
+}
+
+function allNamedSecretGroups(snapshot: AppSnapshot): string[] {
+  const providerDefinedGroups = state.secretsProviderStatus?.definedSecretGroups ?? [];
+  return [...new Set([...snapshot.definedSecretGroups, ...providerDefinedGroups, ...snapshot.attachedSecretGroups])]
+    .filter((group) => group !== "shared")
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "accent" }));
 }
 
 function renderSecretsPage(snapshot: AppSnapshot): string {
@@ -1706,10 +2234,7 @@ function renderSecretGroupsPage(snapshot: AppSnapshot): string {
   const providerStatus = state.secretsProviderStatus;
   const providerDefinedGroups = providerStatus?.definedSecretGroups ?? [];
   const defined = new Set([...snapshot.definedSecretGroups, ...providerDefinedGroups]);
-  const attached = new Set(snapshot.attachedSecretGroups);
-  const namedGroups = [...new Set([...defined, ...attached])]
-    .filter((group) => group !== "shared")
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "accent" }));
+  const namedGroups = allNamedSecretGroups(snapshot);
 
   const groupCards = namedGroups
     .map((group) => {
@@ -1720,29 +2245,33 @@ function renderSecretGroupsPage(snapshot: AppSnapshot): string {
           ? `${containers.length} container${containers.length === 1 ? "" : "s"}`
           : "No containers";
       return `
-        <button class="secret-group-card" data-nav="secrets:group:${escapeHtml(group)}">
-          <span class="secret-group-card-title"><code>${escapeHtml(group)}</code></span>
-          <span class="secret-group-card-meta">${escapeHtml(containerLabel)}</span>
-          <span class="secret-group-card-status ${isDefined ? "configured" : "referenced"}">
-            ${escapeHtml(isDefined ? "Configured" : "Referenced")}
-          </span>
-        </button>
+        <div class="secret-group-card">
+          <button class="secret-group-card-main" data-nav="secrets:group:${escapeHtml(group)}">
+            <span class="secret-group-card-title"><code>${escapeHtml(group)}</code></span>
+            <span class="secret-group-card-meta">${escapeHtml(containerLabel)}</span>
+            <span class="secret-group-card-status ${isDefined ? "configured" : "referenced"}">
+              ${escapeHtml(isDefined ? "Configured" : "Referenced")}
+            </span>
+          </button>
+          <div class="secret-group-card-actions">
+            <button class="secondary-button compact-button" data-nav="secrets:group:${escapeHtml(group)}">Open</button>
+            <button class="secondary-button compact-button" data-action="delete-secret-group" data-secret-group="${escapeHtml(group)}" ${state.secretTopologyRunning ? "disabled" : ""}>Delete</button>
+          </div>
+        </div>
       `;
     })
     .join("");
 
   return `
     <div class="page-stack">
-      <section class="page-controls">
+      <section class="page-controls secrets-page-controls">
         <div class="controls-start">
           ${renderSecretsModeTabs("groups")}
-        </div>
-        <div class="controls-end">
-          ${pill(`${namedGroups.length} named group${namedGroups.length === 1 ? "" : "s"}`, "magenta", "folder")}
         </div>
       </section>
 
       ${renderSecretsProviderBanner()}
+      ${state.secretTopologyResult ? `<div class="${state.secretTopologyResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.secretTopologyResult.output || state.secretTopologyResult.error || "")}</div>` : ""}
 
       <section class="page-band">
         <button class="shared-secret-scope" data-nav="secrets:group:shared">
@@ -1760,14 +2289,28 @@ function renderSecretGroupsPage(snapshot: AppSnapshot): string {
           <div>
             <div class="section-title">${icon("folder")}<span>Named Groups</span></div>
             <div class="section-copy">
-              Select a group to list, set, remove, or rotate its secret store.
+              Create groups, attach them to containers, then manage their secret stores.
             </div>
+          </div>
+          <div class="section-actions secret-create-actions">
+            <input
+              class="inline-action-input"
+              type="text"
+              data-option="secretGroupDraftName"
+              value="${escapeHtml(state.secretGroupDraftName)}"
+              placeholder="New group"
+              spellcheck="false"
+            />
+            <button class="primary-button" data-action="create-secret-group" ${state.secretTopologyRunning || !state.secretGroupDraftName.trim() ? "disabled" : ""}>
+              ${icon("publish")}
+              <span>Create</span>
+            </button>
           </div>
         </div>
         ${
           namedGroups.length > 0
             ? `<div class="secret-group-card-grid">${groupCards}</div>`
-            : `<div class="empty-state">No named groups yet. Add group names to a container's <code>secret-groups.list</code>.</div>`
+            : `<div class="empty-state">No named groups yet.</div>`
         }
       </section>
     </div>
@@ -1806,19 +2349,34 @@ function renderSecretContainersPage(snapshot: AppSnapshot): string {
 
   return `
     <div class="page-stack">
-      <section class="page-controls">
+      <section class="page-controls secrets-page-controls">
         <div class="controls-start">
           ${renderSecretsModeTabs("containers")}
         </div>
       </section>
 
       ${renderSecretsProviderBanner()}
+      ${state.containerBundleResult ? `<div class="${state.containerBundleResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.containerBundleResult.output || state.containerBundleResult.error || "")}</div>` : ""}
 
       <section class="page-band">
         <div class="section-header">
           <div>
             <div class="section-title">${icon("box")}<span>Containers</span></div>
-            <div class="section-copy">Open a container to manage local secrets and its age identity.</div>
+            <div class="section-copy">Create container bundles or open one to manage local secrets and its age identity.</div>
+          </div>
+          <div class="section-actions secret-create-actions">
+            <input
+              class="inline-action-input"
+              type="text"
+              data-option="containerBundleDraftVmid"
+              value="${escapeHtml(state.containerBundleDraftVmid)}"
+              placeholder="New VMID"
+              spellcheck="false"
+            />
+            <button class="primary-button" data-action="create-container-bundle" ${state.containerBundleRunning || !state.containerBundleDraftVmid.trim() ? "disabled" : ""}>
+              ${icon("box")}
+              <span>Create</span>
+            </button>
           </div>
         </div>
         <div class="list">${containerRows}</div>
@@ -1880,10 +2438,6 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
           ${isContainer ? pill(hasIdentity ? "Identity present" : "No identity", hasIdentity ? "good" : "warn", "key") : ""}
         </div>
         <div class="controls-end">
-          <button class="secondary-button" data-action="refresh-secret-scope" ${state.secretScopeLoading || state.secretScopeRunning ? "disabled" : ""}>
-            ${icon("refresh")}
-            <span>Refresh</span>
-          </button>
           ${isContainer ? `<button class="secondary-button" data-action="init-container-identity" ${state.secretScopeRunning ? "disabled" : ""}>${icon("key")}<span>Init Identity</span></button>` : ""}
           <button class="secondary-button" data-action="rotate-secret-scope" ${state.secretScopeRunning || !(status?.canRotate ?? usesEmbeddedSops(snapshot.config.secretProvider)) ? "disabled" : ""}>
             ${icon("refresh")}
@@ -1936,16 +2490,20 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
 }
 
 function renderMain(snapshot: AppSnapshot): string {
-  if (state.selection === "welcome") {
-    return renderWelcomePage(snapshot);
-  }
-
-  if (snapshot.config.siteDir.length === 0) {
+  if (snapshot.config.siteDir.length === 0 && state.selection !== "settings") {
     return renderOnboarding(snapshot);
   }
 
   if (state.selection === "settings") {
     return renderSettingsForm(snapshot);
+  }
+
+  if (state.selection === "welcome") {
+    return renderWelcomePage(snapshot);
+  }
+
+  if (state.selection === "site") {
+    return renderSitePage(snapshot);
   }
 
   if (state.selection.startsWith("container:")) {
@@ -1996,11 +2554,14 @@ function renderMain(snapshot: AppSnapshot): string {
 
 function renderStatusbar(snapshot: AppSnapshot): string {
   const isSecretsPage = state.selection === "secrets" || state.selection.startsWith("secrets:");
-  const leftLabel = isSecretsPage
-    ? `Secrets: <code>${escapeHtml(snapshot.config.secretProvider)}</code>`
-    : snapshot.config.siteDir
-      ? `Site: <code>${escapeHtml(compactPath(snapshot.config.siteDir))}</code>`
-      : "Site: Not configured";
+  const containerLabel = selectedContainerStatusbarLabel();
+  const leftLabel = containerLabel
+    ? containerLabel
+    : isSecretsPage
+      ? `Secrets: <code>${escapeHtml(snapshot.config.secretProvider)}</code>`
+      : snapshot.config.siteDir
+        ? `Site: <code>${escapeHtml(compactPath(snapshot.config.siteDir))}</code>`
+        : "Site: Not configured";
   const activityLabel =
     state.saving
       ? "Saving config"
@@ -2008,6 +2569,8 @@ function renderStatusbar(snapshot: AppSnapshot): string {
         ? "Saving sidebar"
         : state.loading
           ? "Refreshing state"
+          : state.onboardingRunning
+            ? "Creating site"
           : state.publishRunning
             ? "Publishing"
             : state.doctorRunning
@@ -2035,6 +2598,29 @@ function renderStatusbar(snapshot: AppSnapshot): string {
         }
       </div>
     </footer>
+  `;
+}
+
+function renderFilePreview(): string {
+  if (!state.filePreview && !state.filePreviewLoading) {
+    return "";
+  }
+
+  return `
+    <div class="modal-backdrop">
+      <section class="file-preview-modal" role="dialog" aria-modal="true" aria-label="File preview">
+        <div class="file-preview-header">
+          <div>
+            <div class="file-preview-title">${escapeHtml(state.filePreview?.title ?? "Loading preview...")}</div>
+            <div class="file-preview-path">${escapeHtml(state.filePreview?.path ?? "")}</div>
+          </div>
+          <button class="secondary-button compact-button" data-action="close-file-preview">
+            <span>Close</span>
+          </button>
+        </div>
+        <pre class="file-preview-content">${escapeHtml(state.filePreviewLoading ? "Loading..." : state.filePreview?.content ?? "")}</pre>
+      </section>
+    </div>
   `;
 }
 
@@ -2077,10 +2663,13 @@ function render(): void {
         ${renderStatusbar(snapshot)}
       </main>
     </div>
+    ${renderFilePreview()}
   `;
   syncDraftIndicators();
   syncSidebarMetadataIndicators();
   syncSecretDraftIndicators();
+  syncSecretTopologyIndicators();
+  syncContainerBundleIndicators();
 }
 
 async function refreshSnapshot(attempt = 0, force = false): Promise<void> {
@@ -2111,7 +2700,7 @@ async function refreshSnapshot(attempt = 0, force = false): Promise<void> {
     if (isSecretsIndexSelection()) {
       void ensureSecretsProviderStatus(force);
     }
-    if (state.selection.startsWith("secrets:")) {
+    if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
       void ensureSecretScopeStatus(force);
     }
   } catch (error) {
@@ -2172,6 +2761,63 @@ async function handleRunPublish(dryRun: boolean): Promise<void> {
     };
   } finally {
     state.publishRunning = false;
+    render();
+  }
+}
+
+async function handleCreateSiteNix(): Promise<void> {
+  state.siteNixResult = null;
+  render();
+
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.createSiteNix());
+    installMutatedSnapshot(snapshot);
+    state.siteNixResult = { output: "Created site.nix.", exitCode: 0 };
+  } catch (error) {
+    state.siteNixResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    render();
+  }
+}
+
+async function handleRunOnboarding(): Promise<void> {
+  if (!state.draft) {
+    return;
+  }
+
+  const config = onboardingConfig();
+  if (!canRunOnboarding(config)) {
+    return;
+  }
+
+  state.onboardingRunning = true;
+  state.onboardingResult = null;
+  state.error = null;
+  render();
+
+  try {
+    const result = await proxnixRpc.request.runOnboarding({ config });
+    const snapshot = normalizeSnapshot(result.snapshot);
+    installMutatedSnapshot(snapshot);
+    state.onboardingResult = {
+      output: result.output,
+      exitCode: 0,
+    };
+    state.selection = "welcome";
+    void ensureSecretsProviderStatus(true);
+    void handleRefreshGit();
+  } catch (error) {
+    state.onboardingResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.onboardingRunning = false;
     render();
   }
 }
@@ -2271,8 +2917,208 @@ async function refreshAfterSecretMutation(): Promise<void> {
   if (isSecretsIndexSelection()) {
     void ensureSecretsProviderStatus(true);
   }
-  if (state.selection.startsWith("secrets:")) {
+  if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
     await ensureSecretScopeStatus(true);
+  }
+}
+
+function installMutatedSnapshot(snapshot: AppSnapshot): void {
+  const nextSecretsKey = secretsProviderCacheKey(snapshot);
+  if (
+    state.secretsProviderLoadedKey !== nextSecretsKey &&
+    state.secretsProviderLoadingKey !== nextSecretsKey
+  ) {
+    clearSecretsProviderStatus();
+  }
+  syncExpandedGroups(snapshot);
+  state.snapshot = snapshot;
+  state.draft = cloneConfig(snapshot.config);
+  ensureSelection(snapshot);
+  syncContainerMetadataDraft(snapshot);
+}
+
+async function refreshAfterSecretTopologyMutation(snapshot: AppSnapshot): Promise<void> {
+  installMutatedSnapshot(snapshot);
+  if (isSecretsIndexSelection()) {
+    void ensureSecretsProviderStatus(true);
+  }
+  if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
+    await ensureSecretScopeStatus(true);
+  }
+}
+
+async function refreshAfterContainerBundleMutation(snapshot: AppSnapshot): Promise<void> {
+  installMutatedSnapshot(snapshot);
+  void ensureSecretsProviderStatus(true);
+  if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
+    await ensureSecretScopeStatus(true);
+  }
+}
+
+async function handleCreateContainerBundle(): Promise<void> {
+  const vmid = state.containerBundleDraftVmid.trim();
+  if (!vmid) {
+    return;
+  }
+
+  state.containerBundleRunning = true;
+  state.containerBundleResult = null;
+  state.pendingDeleteContainerBundleVmid = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.createContainerBundle({ vmid }));
+    state.containerBundleDraftVmid = "";
+    state.containerBundleResult = { output: `Created container bundle ${vmid} and initialized its identity.`, exitCode: 0 };
+    state.selection = `container:${vmid}`;
+    await refreshAfterContainerBundleMutation(snapshot);
+  } catch (error) {
+    state.containerBundleResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.containerBundleRunning = false;
+    render();
+  }
+}
+
+async function handleDeleteContainerBundle(vmid: string): Promise<void> {
+  if (!vmid) {
+    return;
+  }
+  if (state.pendingDeleteContainerBundleVmid !== vmid) {
+    state.pendingDeleteContainerBundleVmid = vmid;
+    render();
+    return;
+  }
+
+  state.containerBundleRunning = true;
+  state.containerBundleResult = null;
+  state.pendingDeleteContainerBundleVmid = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.deleteContainerBundle({ vmid }));
+    if (state.selection === `container:${vmid}` || state.selection === `secrets:container:${vmid}`) {
+      state.selection = "secrets:containers";
+    }
+    state.containerBundleResult = { output: `Deleted container bundle ${vmid} and removed its identity.`, exitCode: 0 };
+    await refreshAfterContainerBundleMutation(snapshot);
+  } catch (error) {
+    state.containerBundleResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.containerBundleRunning = false;
+    render();
+  }
+}
+
+async function handleCreateSecretGroup(): Promise<void> {
+  const group = state.secretGroupDraftName.trim();
+  if (!group) {
+    return;
+  }
+
+  state.secretTopologyRunning = true;
+  state.secretTopologyResult = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.createSecretGroup({ group }));
+    state.secretGroupDraftName = "";
+    state.secretTopologyResult = { output: `Created group ${group}.`, exitCode: 0 };
+    await refreshAfterSecretTopologyMutation(snapshot);
+  } catch (error) {
+    state.secretTopologyResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretTopologyRunning = false;
+    render();
+  }
+}
+
+async function handleDeleteSecretGroup(group: string): Promise<void> {
+  if (!group) {
+    return;
+  }
+  if (!window.confirm(`Delete group ${group} and detach it from all containers? Secret stores are not deleted.`)) {
+    return;
+  }
+
+  state.secretTopologyRunning = true;
+  state.secretTopologyResult = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.deleteSecretGroup({ group }));
+    if (state.selection === `secrets:group:${group}`) {
+      state.selection = "secrets";
+    }
+    state.secretTopologyResult = { output: `Deleted group ${group}.`, exitCode: 0 };
+    await refreshAfterSecretTopologyMutation(snapshot);
+  } catch (error) {
+    state.secretTopologyResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretTopologyRunning = false;
+    render();
+  }
+}
+
+async function handleAttachSecretGroup(vmid: string): Promise<void> {
+  const group = state.containerSecretGroupDraft.trim();
+  if (!vmid || !group) {
+    return;
+  }
+
+  state.secretTopologyRunning = true;
+  state.secretTopologyResult = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.attachSecretGroup({ vmid, group }));
+    state.containerSecretGroupDraft = "";
+    state.secretTopologyResult = { output: `Attached ${group} to VMID ${vmid}.`, exitCode: 0 };
+    await refreshAfterSecretTopologyMutation(snapshot);
+  } catch (error) {
+    state.secretTopologyResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretTopologyRunning = false;
+    render();
+  }
+}
+
+async function handleDetachSecretGroup(vmid: string, group: string): Promise<void> {
+  if (!vmid || !group) {
+    return;
+  }
+
+  state.secretTopologyRunning = true;
+  state.secretTopologyResult = null;
+  render();
+  try {
+    const snapshot = normalizeSnapshot(await proxnixRpc.request.detachSecretGroup({ vmid, group }));
+    state.secretTopologyResult = { output: `Detached ${group} from VMID ${vmid}.`, exitCode: 0 };
+    await refreshAfterSecretTopologyMutation(snapshot);
+  } catch (error) {
+    state.secretTopologyResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.secretTopologyRunning = false;
+    render();
   }
 }
 
@@ -2390,6 +3236,28 @@ async function handleInitContainerIdentity(): Promise<void> {
   }
 }
 
+async function handlePreviewFile(path: string, title: string): Promise<void> {
+  if (!path) {
+    return;
+  }
+  state.filePreview = { path, title, content: "" };
+  state.filePreviewLoading = true;
+  render();
+  try {
+    const preview = await proxnixRpc.request.readTextFile({ path });
+    state.filePreview = { ...preview, title };
+  } catch (error) {
+    state.filePreview = {
+      path,
+      title,
+      content: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.filePreviewLoading = false;
+    render();
+  }
+}
+
 async function handleAction(action: string, element: HTMLElement): Promise<void> {
   if (action === "retry-load") {
     await refreshSnapshot(0, true);
@@ -2401,7 +3269,11 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
   }
 
   if (action === "refresh") {
+    state.pendingDeleteContainerBundleVmid = null;
     await refreshSnapshot(0, true);
+    if (state.selection === "git") {
+      await handleRefreshGit();
+    }
     return;
   }
 
@@ -2420,13 +3292,13 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     return;
   }
 
-  if (action === "refresh-git") {
-    await handleRefreshGit();
+  if (action === "create-site-nix") {
+    await handleCreateSiteNix();
     return;
   }
 
-  if (action === "refresh-secret-scope") {
-    await ensureSecretScopeStatus(true);
+  if (action === "run-onboarding") {
+    await handleRunOnboarding();
     return;
   }
 
@@ -2447,6 +3319,48 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 
   if (action === "init-container-identity") {
     await handleInitContainerIdentity();
+    return;
+  }
+
+  if (action === "create-container-bundle") {
+    await handleCreateContainerBundle();
+    return;
+  }
+
+  if (action === "delete-container-bundle") {
+    await handleDeleteContainerBundle(element.dataset.vmid ?? "");
+    return;
+  }
+
+  if (action === "create-secret-group") {
+    await handleCreateSecretGroup();
+    return;
+  }
+
+  if (action === "delete-secret-group") {
+    await handleDeleteSecretGroup(element.dataset.secretGroup ?? "");
+    return;
+  }
+
+  if (action === "attach-secret-group") {
+    await handleAttachSecretGroup(element.dataset.vmid ?? "");
+    return;
+  }
+
+  if (action === "detach-secret-group") {
+    await handleDetachSecretGroup(element.dataset.vmid ?? "", element.dataset.secretGroup ?? "");
+    return;
+  }
+
+  if (action === "preview-file") {
+    await handlePreviewFile(element.dataset.path ?? "", element.dataset.previewTitle ?? "Preview");
+    return;
+  }
+
+  if (action === "close-file-preview") {
+    state.filePreview = null;
+    state.filePreviewLoading = false;
+    render();
     return;
   }
 
@@ -2556,7 +3470,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       if (isSecretsIndexSelection()) {
         void ensureSecretsProviderStatus();
       }
-      if (state.selection.startsWith("secrets:")) {
+      if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
         void ensureSecretScopeStatus(true);
       }
     } catch (error) {
@@ -2574,12 +3488,48 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       return;
     }
     state.containerMetadataDraft = currentContainerSidebarMetadata(snapshot, container.vmid);
+    state.sidebarGroupInput = "";
+    state.sidebarLabelInput = "";
     render();
     return;
   }
 
   if (action === "clear-sidebar-metadata") {
     state.containerMetadataDraft = defaultSidebarMetadata();
+    state.sidebarGroupInput = "";
+    state.sidebarLabelInput = "";
+    render();
+    return;
+  }
+
+  if (action === "toggle-display-settings") {
+    state.displaySettingsOpen = !state.displaySettingsOpen;
+    render();
+    return;
+  }
+
+  if (action === "set-sidebar-group") {
+    if (!state.containerMetadataDraft) {
+      return;
+    }
+    state.containerMetadataDraft.group = element.dataset.groupValue ?? "";
+    state.sidebarGroupInput = "";
+    syncSidebarMetadataIndicators();
+    render();
+    return;
+  }
+
+  if (action === "add-sidebar-label") {
+    addSidebarLabel(element.dataset.labelValue ?? "");
+    state.sidebarLabelInput = "";
+    syncSidebarMetadataIndicators();
+    render();
+    return;
+  }
+
+  if (action === "remove-sidebar-label") {
+    removeSidebarLabel(element.dataset.labelValue ?? "");
+    syncSidebarMetadataIndicators();
     render();
     return;
   }
@@ -2589,6 +3539,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     if (!container || !state.containerMetadataDraft || !state.snapshot) {
       return;
     }
+    commitSidebarPickerInputs();
 
     state.metadataSaving = true;
     state.error = null;
@@ -2616,7 +3567,7 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       if (isSecretsIndexSelection()) {
         void ensureSecretsProviderStatus();
       }
-      if (state.selection.startsWith("secrets:")) {
+      if (state.selection.startsWith("secrets:") || state.selection.startsWith("container:")) {
         void ensureSecretScopeStatus(true);
       }
     } catch (error) {
@@ -2711,6 +3662,46 @@ function updateContainerMetadataFromField(target: HTMLInputElement): void {
   }
 }
 
+function addSidebarLabel(label: string): void {
+  if (!state.containerMetadataDraft) {
+    return;
+  }
+  const normalized = label.trim();
+  if (!normalized) {
+    return;
+  }
+  const existing = new Set(state.containerMetadataDraft.labels.map((value) => value.toLocaleLowerCase()));
+  if (!existing.has(normalized.toLocaleLowerCase())) {
+    state.containerMetadataDraft.labels = [...state.containerMetadataDraft.labels, normalized];
+  }
+}
+
+function removeSidebarLabel(label: string): void {
+  if (!state.containerMetadataDraft) {
+    return;
+  }
+  const normalized = label.trim().toLocaleLowerCase();
+  state.containerMetadataDraft.labels = state.containerMetadataDraft.labels.filter(
+    (value) => value.toLocaleLowerCase() !== normalized,
+  );
+}
+
+function commitSidebarPickerInputs(): void {
+  if (!state.containerMetadataDraft) {
+    return;
+  }
+  const group = state.sidebarGroupInput.trim();
+  if (group) {
+    state.containerMetadataDraft.group = group;
+    state.sidebarGroupInput = "";
+  }
+  for (const label of parseSidebarLabels(state.sidebarLabelInput)) {
+    addSidebarLabel(label);
+  }
+  state.sidebarLabelInput = "";
+  syncSidebarMetadataIndicators();
+}
+
 function updateOptionFromField(target: HTMLInputElement): void {
   const option = target.dataset.option;
   if (!option) return;
@@ -2723,6 +3714,9 @@ function updateOptionFromField(target: HTMLInputElement): void {
     if (option === "publishVmid") state.publishVmid = target.value;
     if (option === "gitCommitMessage") state.gitCommitMessage = target.value;
     if (option === "secretDraftName") state.secretDraftName = target.value;
+    if (option === "secretGroupDraftName") state.secretGroupDraftName = target.value;
+    if (option === "containerSecretGroupDraft") state.containerSecretGroupDraft = target.value;
+    if (option === "containerBundleDraftVmid") state.containerBundleDraftVmid = target.value;
   }
 }
 
@@ -2732,10 +3726,25 @@ root.addEventListener("input", (event) => {
     if (target.dataset.secretValue) {
       state.secretDraftValue = target.value;
       syncSecretDraftIndicators();
+    } else if (target.dataset.sidebarGroupInput) {
+      state.sidebarGroupInput = target.value;
+      syncSidebarMetadataIndicators();
+    } else if (target.dataset.sidebarLabelInput) {
+      state.sidebarLabelInput = target.value;
+      syncSidebarMetadataIndicators();
     } else if (target.dataset.option) {
       updateOptionFromField(target);
       if (target.dataset.option === "secretDraftName") {
         syncSecretDraftIndicators();
+      }
+      if (
+        target.dataset.option === "secretGroupDraftName" ||
+        target.dataset.option === "containerSecretGroupDraft"
+      ) {
+        syncSecretTopologyIndicators();
+      }
+      if (target.dataset.option === "containerBundleDraftVmid") {
+        syncContainerBundleIndicators();
       }
     } else if (target.dataset.containerField) {
       updateContainerMetadataFromField(target);
@@ -2745,10 +3754,55 @@ root.addEventListener("input", (event) => {
   }
 });
 
+root.addEventListener("keydown", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (target.dataset.sidebarGroupInput && event.key === "Enter") {
+    event.preventDefault();
+    commitSidebarPickerInputs();
+    render();
+    return;
+  }
+
+  if (target.dataset.sidebarLabelInput && (event.key === "Enter" || event.key === ",")) {
+    event.preventDefault();
+    commitSidebarPickerInputs();
+    render();
+    return;
+  }
+
+  if (target.dataset.option === "secretGroupDraftName" && event.key === "Enter") {
+    event.preventDefault();
+    void handleCreateSecretGroup();
+    return;
+  }
+
+  if (target.dataset.option === "containerSecretGroupDraft" && event.key === "Enter") {
+    event.preventDefault();
+    const container = selectedContainer();
+    if (container) {
+      void handleAttachSecretGroup(container.vmid);
+    }
+    return;
+  }
+
+  if (target.dataset.option === "containerBundleDraftVmid" && event.key === "Enter") {
+    event.preventDefault();
+    void handleCreateContainerBundle();
+  }
+});
+
 root.addEventListener("change", (event) => {
   const target = event.target;
   if (target instanceof HTMLSelectElement) {
+    const field = target.dataset.field;
     updateDraftFromField(target);
+    if (field === "secretProvider") {
+      render();
+    }
   } else if (target instanceof HTMLInputElement && target.type === "checkbox" && target.dataset.option) {
     updateOptionFromField(target);
   }

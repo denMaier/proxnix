@@ -1,6 +1,13 @@
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
 import type { ProxnixManagerRPC } from "../shared/types";
 import {
+  attachSecretGroup,
+  createContainerBundle,
+  createSecretGroup,
+  createSiteNix,
+  deleteContainerBundle,
+  deleteSecretGroup,
+  detachSecretGroup,
   gitAdd,
   gitCommit,
   gitPush,
@@ -9,8 +16,10 @@ import {
   loadSecretScopeStatus,
   loadSecretsProviderStatus,
   loadSnapshot,
+  readTextFile,
   removeSecret,
   rotateSecretScope,
+  runOnboarding,
   runDoctor,
   runPublish,
   saveConfig,
@@ -26,6 +35,8 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
     requests: {
       loadSnapshot: (params) => loadSnapshot(params),
       saveConfig: (params) => saveConfig(params.config),
+      runOnboarding: (params) => runOnboarding(params.config),
+      createSiteNix: (_params: void) => createSiteNix(),
       chooseSiteDirectory: async (params) => {
         const startingFolder = params?.startingFolder;
         const chosenPaths = await Utils.openFileDialog({
@@ -49,12 +60,19 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
       removeSecret: (params) => removeSecret(params),
       rotateSecretScope: (params) => rotateSecretScope(params),
       initContainerIdentity: (params) => initContainerIdentity(params.vmid),
+      createContainerBundle: (params) => createContainerBundle(params.vmid),
+      deleteContainerBundle: (params) => deleteContainerBundle(params.vmid),
+      createSecretGroup: (params) => createSecretGroup(params.group),
+      deleteSecretGroup: (params) => deleteSecretGroup(params.group),
+      attachSecretGroup: (params) => attachSecretGroup(params.vmid, params.group),
+      detachSecretGroup: (params) => detachSecretGroup(params.vmid, params.group),
       runDoctor: (params) => runDoctor(params),
       runPublish: (params) => runPublish(params),
       gitStatus: (_params: void) => gitStatus(),
       gitAdd: (params) => gitAdd(params),
       gitCommit: (params) => gitCommit(params.message),
       gitPush: (_params: void) => gitPush(),
+      readTextFile: (params) => readTextFile(params.path),
       openInEditor: async (params) => {
         const editors = ["code", "cursor", "zed", "subl"];
         for (const editor of editors) {

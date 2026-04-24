@@ -1,29 +1,23 @@
 # proxnix-manager-electrobun
 
-This is the in-progress Electrobun replacement for the macOS-only Swift
-`ProxnixManager` app.
+This is the supported `ProxnixManager` GUI. It replaces the retired macOS-only
+Swift app with a cross-platform Electrobun app.
 
 Current scope:
 
-- Electrobun app shell
-- typed RPC between Bun and the renderer
-- repo-local Python bridge for workstation config + site scanning
-- working Settings + Containers screens
-
-Current blocker on this machine:
-
-- the corporate MITM proxy breaks Electrobun's binary download step
-
-That means this app can be scaffolded, installed from Bun's local cache, and
-typechecked, but `bun start` will still fail until the Electrobun core binary
-download is made to trust the local proxy CA or the binaries are vendored.
+- first-run onboarding and site scaffolding
+- workstation settings
+- site scanning and container bundle management
+- shared, group, and container secrets
+- git status, staging, commit, and push
+- doctor and publish workflows
 
 ## Commands
 
 From this directory:
 
 ```bash
-bun install --offline
+bun install
 bun run typecheck
 ```
 
@@ -33,7 +27,12 @@ The usual runtime command is:
 bun start
 ```
 
-On this workstation that remains blocked by the proxy certificate issue.
+Use a disposable config home to test onboarding without touching your real
+workstation config:
+
+```bash
+XDG_CONFIG_HOME=/tmp/proxnix-onboarding-config bun start
+```
 
 ## Layout
 
@@ -51,14 +50,34 @@ src/
     types.ts
 ```
 
+## macOS signing
+
+Release builds can be Developer ID signed and notarized by setting:
+
+```bash
+PROXNIX_MANAGER_MACOS_CODESIGN=1
+PROXNIX_MANAGER_MACOS_NOTARIZE=1
+ELECTROBUN_DEVELOPER_ID="Developer ID Application: ..."
+ELECTROBUN_TEAMID="..."
+ELECTROBUN_APPLEID="..."
+ELECTROBUN_APPLEIDPASS="..."
+```
+
+Unsigned local builds are ad-hoc signed by default so macOS can usually put
+them on the Privacy & Security "Open Anyway" path. They may still need
+quarantine removed before macOS will open them:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Proxnix Manager.app"
+```
+
+Set `PROXNIX_MANAGER_MACOS_ADHOC_SIGN=0` to disable the ad-hoc fallback.
+
 ## Bridge design
 
-The first slice does not depend on the publishable Python workstation package
-being installed. Instead it ships a very small Python bridge script alongside
-the Bun process and uses only the standard library to:
+The app ships a Python bridge script alongside the Bun process. The bridge can:
 
 - read and write `~/.config/proxnix/config`
 - preserve unknown `PROXNIX_*` assignments
 - scan the site repo for containers, drop-ins, secret groups, and identities
-
-That keeps development moving while the network environment is hostile.
+- call the workstation Python package for secrets, doctor, and publish actions

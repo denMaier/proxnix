@@ -54,6 +54,12 @@ export interface CommandResult {
   error?: string;
 }
 
+export interface OnboardingResult {
+  snapshot: AppSnapshot;
+  output: string;
+  actions: string[];
+}
+
 export interface GitFile {
   status: string;
   path: string;
@@ -100,10 +106,18 @@ export interface SecretScopeStatus {
   warnings: string[];
 }
 
+export interface FilePreview {
+  path: string;
+  content: string;
+}
+
 export interface AppSnapshot {
   configPath: string;
   configExists: boolean;
   siteDirExists: boolean;
+  siteNixPath: string;
+  siteNixExists: boolean;
+  siteNixContent: string;
   preservedConfigKeys: string[];
   warnings: string[];
   config: ProxnixConfig;
@@ -128,6 +142,16 @@ export type ProxnixManagerRPC = {
         params: {
           config: ProxnixConfig;
         };
+        response: AppSnapshot;
+      };
+      runOnboarding: {
+        params: {
+          config: ProxnixConfig;
+        };
+        response: OnboardingResult;
+      };
+      createSiteNix: {
+        params: void;
         response: AppSnapshot;
       };
       chooseSiteDirectory: {
@@ -197,6 +221,44 @@ export type ProxnixManagerRPC = {
         };
         response: CommandResult;
       };
+      createContainerBundle: {
+        params: {
+          vmid: string;
+        };
+        response: AppSnapshot;
+      };
+      deleteContainerBundle: {
+        params: {
+          vmid: string;
+        };
+        response: AppSnapshot;
+      };
+      createSecretGroup: {
+        params: {
+          group: string;
+        };
+        response: AppSnapshot;
+      };
+      deleteSecretGroup: {
+        params: {
+          group: string;
+        };
+        response: AppSnapshot;
+      };
+      attachSecretGroup: {
+        params: {
+          vmid: string;
+          group: string;
+        };
+        response: AppSnapshot;
+      };
+      detachSecretGroup: {
+        params: {
+          vmid: string;
+          group: string;
+        };
+        response: AppSnapshot;
+      };
       runDoctor: {
         params: { configOnly?: boolean; vmid?: string };
         response: DoctorResult;
@@ -224,6 +286,10 @@ export type ProxnixManagerRPC = {
       openInEditor: {
         params: { path: string };
         response: { opened: boolean; editor?: string; error?: string };
+      };
+      readTextFile: {
+        params: { path: string };
+        response: FilePreview;
       };
     };
   }>;

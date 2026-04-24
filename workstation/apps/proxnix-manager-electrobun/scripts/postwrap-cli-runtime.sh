@@ -21,3 +21,10 @@ install_workstation_bin "${bin_dir}"
 install_workstation_python_runtime "${resources_dir}"
 write_packaged_cli_wrappers "${bin_dir}" "${resources_dir}"
 write_runtime_readme "${resources_dir}" "electrobun-app"
+
+if [[ "$(uname -s)" == "Darwin" \
+  && "${PROXNIX_MANAGER_MACOS_CODESIGN:-0}" != "1" \
+  && "${PROXNIX_MANAGER_MACOS_ADHOC_SIGN:-1}" != "0" ]]; then
+  command -v codesign >/dev/null 2>&1 || die "codesign is required for macOS ad-hoc signing"
+  codesign --force --deep --sign - "$bundle_dir"
+fi

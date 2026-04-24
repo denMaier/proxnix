@@ -2,13 +2,15 @@ import type {
   AppSnapshot,
   CommandResult,
   DoctorResult,
+  FilePreview,
   GitStatusResult,
+  OnboardingResult,
   ProxnixConfig,
   SecretScopeStatus,
   SecretsProviderStatus,
   SidebarMetadata,
 } from "../shared/types";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -187,6 +189,18 @@ export function saveConfig(config: ProxnixConfig): AppSnapshot {
   return setSnapshotCache(runBridge<AppSnapshot>("save-config", { config }));
 }
 
+export function runOnboarding(config: ProxnixConfig): OnboardingResult {
+  const result = runBridge<OnboardingResult>("run-onboarding", { config });
+  setSnapshotCache(result.snapshot, { invalidateSecrets: true });
+  return result;
+}
+
+export function createSiteNix(): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("create-site-nix"), {
+    invalidateSecrets: false,
+  });
+}
+
 export function saveSidebarMetadata(vmid: string, metadata: SidebarMetadata): AppSnapshot {
   return setSnapshotCache(runBridge<AppSnapshot>("save-sidebar-metadata", { vmid, metadata }));
 }
@@ -267,6 +281,42 @@ export function initContainerIdentity(vmid: string): CommandResult {
   });
 }
 
+export function createContainerBundle(vmid: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("create-container-bundle", { vmid }), {
+    invalidateSecrets: true,
+  });
+}
+
+export function deleteContainerBundle(vmid: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("delete-container-bundle", { vmid }), {
+    invalidateSecrets: true,
+  });
+}
+
+export function createSecretGroup(group: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("create-secret-group", { group }), {
+    invalidateSecrets: true,
+  });
+}
+
+export function deleteSecretGroup(group: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("delete-secret-group", { group }), {
+    invalidateSecrets: true,
+  });
+}
+
+export function attachSecretGroup(vmid: string, group: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("attach-secret-group", { vmid, group }), {
+    invalidateSecrets: true,
+  });
+}
+
+export function detachSecretGroup(vmid: string, group: string): AppSnapshot {
+  return setSnapshotCache(runBridge<AppSnapshot>("detach-secret-group", { vmid, group }), {
+    invalidateSecrets: true,
+  });
+}
+
 export function runDoctor(options: { configOnly?: boolean; vmid?: string }): DoctorResult {
   return runBridge<DoctorResult>("run-doctor", options);
 }
@@ -296,4 +346,11 @@ export function gitPush(): CommandResult {
 
 export function openInEditor(path: string): { opened: boolean; editor?: string; error?: string } {
   return runBridge("open-in-editor", { path });
+}
+
+export function readTextFile(path: string): FilePreview {
+  return {
+    path,
+    content: readFileSync(path, "utf-8"),
+  };
 }

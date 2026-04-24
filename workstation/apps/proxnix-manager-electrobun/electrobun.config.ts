@@ -1,6 +1,8 @@
 import type { ElectrobunConfig } from "electrobun";
 
 const appVersion = process.env.VERSION ?? "0.0.0-dev";
+const enableMacCodesign = process.env.PROXNIX_MANAGER_MACOS_CODESIGN === "1";
+const enableMacNotarize = process.env.PROXNIX_MANAGER_MACOS_NOTARIZE === "1";
 
 export default {
   app: {
@@ -13,6 +15,10 @@ export default {
     exitOnLastWindowClosed: true,
   },
   build: {
+    mac: {
+      codesign: enableMacCodesign,
+      notarize: enableMacCodesign && enableMacNotarize,
+    },
     bun: {
       entrypoint: "src/bun/index.ts",
       sourcemap: "linked",

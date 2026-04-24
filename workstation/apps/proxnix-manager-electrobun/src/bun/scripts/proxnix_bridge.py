@@ -5,6 +5,7 @@ import json
 import os
 import glob
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -42,6 +43,17 @@ DEFAULT_CONFIG = {
     "secretProviderCommand": "",
     "scriptsDir": "",
 }
+
+SITE_NIX_SCAFFOLD = """\
+{ ... }: {
+}
+"""
+
+SITE_README_SCAFFOLD = """\
+# proxnix site
+
+This repository contains the site state published by Proxnix Manager.
+"""
 
 INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS = 60 * 60
 
@@ -501,6 +513,228 @@ def read_container_secret_groups(secret_groups_file: Path) -> list[str]:
     return groups
 
 
+def _site_dir_from_config(config: dict[str, str]) -> Path:
+    site_dir_raw = config["siteDir"]
+    if not site_dir_raw:
+        raise ValueError("Set site directory first.")
+    site_dir = Path(site_dir_raw).expanduser()
+    if not site_dir.is_dir():
+        raise ValueError(f"Site path is not a directory: {site_dir}")
+    return site_dir
+
+
+def _secret_group_from_payload(payload: object) -> str:
+    opts = payload if isinstance(payload, dict) else {}
+    group = str(opts.get("group", "")).strip()
+    if group == "shared":
+        raise ValueError("shared is built in and cannot be changed as a named group")
+    if not valid_secret_group_name(group):
+        raise ValueError(f"invalid group name: {group}")
+    return group
+
+
+def _vmid_from_payload(payload: object) -> str:
+    opts = payload if isinstance(payload, dict) else {}
+    vmid = str(opts.get("vmid", "")).strip()
+    if not vmid.isdigit():
+        raise ValueError("Container VMID is required.")
+    return vmid
+
+
+def _delete_sidebar_metadata(config: dict[str, str], vmid: str) -> None:
+    site_dir = config["siteDir"]
+    if not site_dir:
+        return
+    state = load_sidebar_state()
+    sites = state.get("sites")
+    if not isinstance(sites, dict):
+        return
+    site_key = _normalized_site_key(site_dir)
+    site_state = sites.get(site_key)
+    if not isinstance(site_state, dict):
+        return
+    containers = site_state.get("containers")
+    if not isinstance(containers, dict):
+        return
+    containers.pop(vmid, None)
+    if not containers:
+        sites.pop(site_key, None)
+    metadata_path = sidebar_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _container_secret_groups_file(site_dir: Path, vmid: str) -> Path:
+    return site_dir / "containers" / vmid / "secret-groups.list"
+
+
+def _write_container_secret_groups(path: Path, groups: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if groups:
+        path.write_text("\n".join(groups) + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+
+
+def create_secret_group(payload: object) -> dict[str, object]:
+    group = _secret_group_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    if config["secretProvider"] == "embedded-sops":
+        (site_dir / "private" / "groups" / group).mkdir(parents=True, exist_ok=True)
+    return snapshot()
+
+
+def _load_container_identity_context() -> tuple[object, object, object]:
+    ctx, provider_error = _load_provider_context()
+    if provider_error:
+        raise ValueError(f"Secret backend unavailable: {provider_error}")
+    assert ctx is not None
+    return ctx
+
+
+def _remove_container_identity(ctx: tuple[object, object, object], vmid: str) -> None:
+    config, site_paths, provider = ctx
+    from proxnix_workstation.provider_keys import (
+        INTERNAL_KEYS_GROUP,
+        container_key_name,
+        have_container_private_key,
+    )
+    from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
+    from proxnix_workstation.secret_provider_types import group_scope
+
+    if isinstance(provider, EmbeddedSopsProvider):
+        store = site_paths.container_identity_store(vmid)
+        if store.exists():
+            store.unlink()
+        container_private_dir = site_paths.private_dir / "containers" / vmid
+        if container_private_dir.exists():
+            try:
+                container_private_dir.rmdir()
+            except OSError:
+                pass
+        return
+
+    if not have_container_private_key(config, provider, site_paths, vmid):
+        return
+    provider.remove(group_scope(INTERNAL_KEYS_GROUP), container_key_name(vmid))
+
+
+def _container_has_source_secrets(ctx: tuple[object, object, object], vmid: str) -> bool:
+    config, site_paths, provider = ctx
+    from proxnix_workstation.secret_provider import container_scope
+    from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
+
+    if isinstance(provider, EmbeddedSopsProvider):
+        return site_paths.container_store(vmid).is_file()
+    try:
+        return bool(provider.list_names(container_scope(vmid)))
+    except Exception as exc:
+        raise ValueError(f"Could not check container-local secrets for {vmid}: {exc}") from exc
+
+
+def create_container_bundle(payload: object) -> dict[str, object]:
+    vmid = _vmid_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    public_dir = site_dir / "containers" / vmid
+    if public_dir.exists():
+        raise ValueError(f"Container bundle already exists: {public_dir}")
+
+    public_dir.mkdir(parents=True)
+    (public_dir / "dropins").mkdir()
+
+    ctx = _load_container_identity_context()
+    config_obj, site_paths, provider = ctx
+    from proxnix_workstation.provider_keys import initialize_container_identity
+
+    try:
+        initialize_container_identity(config_obj, provider, site_paths, vmid)
+    except Exception:
+        shutil.rmtree(public_dir, ignore_errors=True)
+        raise
+
+    return snapshot()
+
+
+def delete_container_bundle(payload: object) -> dict[str, object]:
+    vmid = _vmid_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    ctx = _load_container_identity_context()
+    config_obj, site_paths, _provider = ctx
+    if _container_has_source_secrets(ctx, vmid):
+        raise ValueError(f"Refusing to delete container {vmid}: container-local secrets still exist.")
+
+    public_dir = site_dir / "containers" / vmid
+    if public_dir.exists():
+        shutil.rmtree(public_dir)
+
+    try:
+        _remove_container_identity(ctx, vmid)
+    except Exception as exc:
+        raise ValueError(f"Container scaffold was removed, but identity deletion failed: {exc}") from exc
+
+    relay_cache_dir = site_paths.relay_cache_dir / "containers" / vmid
+    if relay_cache_dir.exists():
+        shutil.rmtree(relay_cache_dir)
+
+    _delete_sidebar_metadata(config, vmid)
+    return snapshot()
+
+
+def delete_secret_group(payload: object) -> dict[str, object]:
+    group = _secret_group_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    store = site_dir / "private" / "groups" / group / "secrets.sops.yaml"
+    if store.exists():
+        raise ValueError(f"Refusing to delete group {group}: secret store exists.")
+
+    containers_dir = site_dir / "containers"
+    if containers_dir.is_dir():
+        for entry in containers_dir.iterdir():
+            if not (entry.is_dir() and entry.name.isdigit()):
+                continue
+            groups_file = entry / "secret-groups.list"
+            groups = read_container_secret_groups(groups_file)
+            if group in groups:
+                _write_container_secret_groups(groups_file, [candidate for candidate in groups if candidate != group])
+
+    group_dir = site_dir / "private" / "groups" / group
+    if group_dir.exists():
+        try:
+            group_dir.rmdir()
+        except OSError as exc:
+            raise ValueError(f"Refusing to delete non-empty group directory: {group_dir}") from exc
+    return snapshot()
+
+
+def attach_secret_group(payload: object) -> dict[str, object]:
+    group = _secret_group_from_payload(payload)
+    vmid = _vmid_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    groups_file = _container_secret_groups_file(site_dir, vmid)
+    groups = read_container_secret_groups(groups_file)
+    if group not in groups:
+        groups.append(group)
+        _write_container_secret_groups(groups_file, groups)
+    return snapshot()
+
+
+def detach_secret_group(payload: object) -> dict[str, object]:
+    group = _secret_group_from_payload(payload)
+    vmid = _vmid_from_payload(payload)
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    groups_file = _container_secret_groups_file(site_dir, vmid)
+    groups = read_container_secret_groups(groups_file)
+    if group in groups:
+        _write_container_secret_groups(groups_file, [candidate for candidate in groups if candidate != group])
+    return snapshot()
+
+
 def _load_provider_context() -> tuple[tuple[object, object, object] | None, str | None]:
     """Try to load the workstation config and secret provider.
 
@@ -730,11 +964,16 @@ def snapshot() -> dict[str, object]:
     config, preserved_keys, config_path = read_config_payload()
     site_dir_exists, containers, defined_groups, attached_groups, warnings = scan_state(config)
     sidebar_metadata = read_sidebar_metadata(config["siteDir"])
+    site_nix = Path(config["siteDir"]).expanduser() / "site.nix" if config["siteDir"] else Path("site.nix")
+    site_nix_content = site_nix.read_text(encoding="utf-8", errors="replace") if site_nix.is_file() else ""
 
     return {
         "configPath": str(config_path),
         "configExists": config_path.is_file(),
         "siteDirExists": site_dir_exists,
+        "siteNixPath": str(site_nix),
+        "siteNixExists": site_nix.is_file(),
+        "siteNixContent": site_nix_content,
         "preservedConfigKeys": preserved_keys,
         "warnings": warnings,
         "config": config,
@@ -743,6 +982,16 @@ def snapshot() -> dict[str, object]:
         "attachedSecretGroups": attached_groups,
         "sidebarMetadata": sidebar_metadata,
     }
+
+
+def create_site_nix(_payload: object) -> dict[str, object]:
+    config, _, _ = read_config_payload()
+    site_dir = _site_dir_from_config(config)
+    site_nix = site_dir / "site.nix"
+    if site_nix.exists():
+        raise ValueError(f"site.nix already exists: {site_nix}")
+    site_nix.write_text(SITE_NIX_SCAFFOLD, encoding="utf-8")
+    return snapshot()
 
 
 def save_config(payload: dict[str, object]) -> dict[str, object]:
@@ -779,6 +1028,117 @@ def save_config(payload: dict[str, object]) -> dict[str, object]:
 
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return snapshot()
+
+
+def _scaffold_site_repo(site_dir: Path) -> list[str]:
+    actions: list[str] = []
+    if not site_dir.exists():
+        site_dir.mkdir(parents=True)
+        actions.append(f"Created site directory: {site_dir}")
+    elif not site_dir.is_dir():
+        raise ValueError(f"Site path is not a directory: {site_dir}")
+
+    for directory in (
+        site_dir / "containers",
+        site_dir / "private" / "shared",
+        site_dir / "private" / "groups",
+        site_dir / "private" / "containers",
+    ):
+        if not directory.exists():
+            directory.mkdir(parents=True)
+            actions.append(f"Created {directory.relative_to(site_dir)}")
+
+    site_nix = site_dir / "site.nix"
+    if not site_nix.exists():
+        site_nix.write_text(SITE_NIX_SCAFFOLD, encoding="utf-8")
+        actions.append("Created site.nix")
+
+    readme = site_dir / "README.md"
+    if not readme.exists():
+        readme.write_text(SITE_README_SCAFFOLD, encoding="utf-8")
+        actions.append("Created README.md")
+
+    if not (site_dir / ".git").exists():
+        output, exit_code = _run_git(site_dir, "init")
+        if exit_code != 0:
+            raise ValueError(output or "git init failed")
+        actions.append("Initialized git repository")
+
+    return actions
+
+
+def _ensure_master_key(config: object, provider: object, site_paths: object) -> str:
+    from proxnix_workstation.provider_keys import (
+        MASTER_KEY_NAME,
+        _provider_get_key,
+        _provider_set_key,
+        master_private_key_text,
+        sops_master_identity_path,
+    )
+    from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
+    from proxnix_workstation.sops_ops import generate_identity_keypair
+
+    if isinstance(provider, EmbeddedSopsProvider):
+        identity_path = sops_master_identity_path(config)
+        if identity_path.exists():
+            master_private_key_text(config, provider)
+            return f"Using existing master identity: {identity_path}"
+        private_text, _pubkey = generate_identity_keypair()
+        identity_path.parent.mkdir(parents=True, exist_ok=True)
+        identity_path.write_text(private_text, encoding="utf-8")
+        identity_path.chmod(0o600)
+        return f"Created master identity: {identity_path}"
+
+    if _provider_get_key(provider, MASTER_KEY_NAME) is not None:
+        return "Using existing provider master key"
+    private_text, _pubkey = generate_identity_keypair()
+    _provider_set_key(provider, MASTER_KEY_NAME, private_text)
+    return "Created provider master key"
+
+
+def run_onboarding(payload: dict[str, object]) -> dict[str, object]:
+    raw_config = payload.get("config")
+    if not isinstance(raw_config, dict):
+        raise ValueError("run-onboarding requires a config object")
+
+    config = {**DEFAULT_CONFIG, **{str(key): str(value) for key, value in raw_config.items()}}
+    site_dir = Path(config["siteDir"]).expanduser()
+    if not str(config["siteDir"]).strip():
+        raise ValueError("Choose a site directory first.")
+    if config["secretProvider"] == "embedded-sops" and not config["sopsMasterIdentity"].strip():
+        config["sopsMasterIdentity"] = str(Path.home() / ".ssh" / "proxnix-master")
+    if config["secretProvider"] == "exec" and not config["secretProviderCommand"].strip():
+        raise ValueError("Exec secret backend requires a provider command.")
+
+    actions = _scaffold_site_repo(site_dir)
+    save_config({"config": config})
+
+    _ensure_pythonpath_bootstrap()
+    from proxnix_workstation.config import load_workstation_config
+    from proxnix_workstation.paths import SitePaths
+    from proxnix_workstation.provider_keys import initialize_host_relay_identity
+    from proxnix_workstation.secret_provider import load_secret_provider
+
+    workstation_config = load_workstation_config()
+    site_paths = SitePaths.from_config(workstation_config)
+    provider = load_secret_provider(workstation_config, site_paths)
+
+    actions.append(_ensure_master_key(workstation_config, provider, site_paths))
+    try:
+        label, pubkey = initialize_host_relay_identity(workstation_config, provider, site_paths)
+        actions.append(f"Created {label} identity: {pubkey}")
+    except Exception as exc:
+        if "already exists" in str(exc):
+            actions.append("Using existing host relay identity")
+        else:
+            raise
+
+    current = snapshot()
+    return {
+        "snapshot": current,
+        "actions": actions,
+        "output": "\n".join(actions),
+    }
 
 
 def _run_cli(
@@ -1344,9 +1704,32 @@ def main(argv: list[str]) -> int:
         elif command == "init-container-identity":
             payload = json.load(sys.stdin)
             result = init_container_identity(payload)
+        elif command == "create-container-bundle":
+            payload = json.load(sys.stdin)
+            result = create_container_bundle(payload)
+        elif command == "delete-container-bundle":
+            payload = json.load(sys.stdin)
+            result = delete_container_bundle(payload)
+        elif command == "create-secret-group":
+            payload = json.load(sys.stdin)
+            result = create_secret_group(payload)
+        elif command == "delete-secret-group":
+            payload = json.load(sys.stdin)
+            result = delete_secret_group(payload)
+        elif command == "attach-secret-group":
+            payload = json.load(sys.stdin)
+            result = attach_secret_group(payload)
+        elif command == "detach-secret-group":
+            payload = json.load(sys.stdin)
+            result = detach_secret_group(payload)
         elif command == "save-config":
             payload = json.load(sys.stdin)
             result = save_config(payload)
+        elif command == "run-onboarding":
+            payload = json.load(sys.stdin)
+            result = run_onboarding(payload)
+        elif command == "create-site-nix":
+            result = create_site_nix(None)
         elif command == "save-sidebar-metadata":
             payload = json.load(sys.stdin)
             result = save_sidebar_metadata(payload)
