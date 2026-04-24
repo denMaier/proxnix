@@ -902,7 +902,6 @@ class ConfigProviderEnvironmentTests(unittest.TestCase):
             {
                 "PROXNIX_PASSHOLE_DATABASE": "/home/tester/secrets/proxnix.kdbx",
                 "PROXNIX_SECRET_PATH_PREFIX": "team/proxnix",
-                "PROXNIX_SOPS_MASTER_IDENTITY": "/home/tester/.ssh/id_ed25519",
                 "VAULT_ADDR": "https://vault.example.test",
             },
         )

@@ -94,7 +94,7 @@ def validate_target_vmid_repo(
 
     if provider.has_any(container_scope(vmid)) and not have_container_private_key(config, provider, site_paths, vmid):
         raise ProxnixWorkstationError(
-            f"container {vmid} secret store exists but identity is missing: {vmid}"
+            f"container {vmid} has source secrets but no container identity for compiled delivery"
         )
 
     if (
@@ -118,7 +118,7 @@ def validate_site_repo(config: WorkstationConfig, site_paths: SitePaths, provide
         if container_has_any_store(site_paths, provider, vmid):
             if not have_container_private_key(config, provider, site_paths, vmid):
                 raise ProxnixWorkstationError(
-                    f"container {vmid} secret store exists but identity is missing: {vmid}"
+                    f"container {vmid} has source secrets but no container identity for compiled delivery"
                 )
             if not have_host_relay_private_key(config, provider, site_paths):
                 raise ProxnixWorkstationError(
@@ -162,7 +162,7 @@ def build_compiled_secret_store(
 
     if not have_container_private_key(config, provider, site_paths, vmid):
         raise ProxnixWorkstationError(
-            f"container {vmid} compiled secret store needs a container identity"
+            f"container {vmid} compiled SOPS payload needs a container identity"
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)

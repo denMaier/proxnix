@@ -168,7 +168,7 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
     reporter.heading("site")
     reporter.ok("workstation tools and config present")
     reporter.ok(f"site repo present: {site_paths.site_dir}")
-    reporter.ok(f"secret provider configured: {provider.describe()}")
+    reporter.ok(f"secret backend configured: {provider.describe()}")
     if options.config_only:
         reporter.info("config-only mode skips secret-store prerequisites")
     else:
@@ -187,10 +187,11 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
     else:
         reporter.info("no containers/_template directory")
 
-    if site_paths.private_dir.is_dir():
-        reporter.ok("private site dir present")
-    else:
-        reporter.info("no private site dir yet")
+    if isinstance(provider, EmbeddedSopsProvider):
+        if site_paths.private_dir.is_dir():
+            reporter.ok("private site dir present")
+        else:
+            reporter.info("no private site dir yet")
 
     if not options.config_only:
         relay_private_text = host_relay_private_key_text(config, provider, site_paths)
@@ -200,9 +201,9 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
             reporter.warn("host relay identity missing")
 
         if provider.has_any(shared_scope()):
-            validate_provider_scope_payload(provider, shared_scope(), "shared secret store", reporter)
+            validate_provider_scope_payload(provider, shared_scope(), "shared source secrets", reporter)
         else:
-            reporter.info("no shared secret store")
+            reporter.info("no shared source secrets")
 
         if isinstance(provider, EmbeddedSopsProvider) and site_paths.shared_identity_store.is_file():
             validate_identity_store(config, site_paths.shared_identity_store, "shared identity store", reporter)
@@ -235,7 +236,7 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
                 validate_provider_scope_payload(
                     provider,
                     container_scope(vmid),
-                    f"container {vmid} secret store",
+                    f"container {vmid} source secrets",
                     reporter,
                 )
             identity_private_text = container_private_key_text(config, provider, site_paths, vmid)
@@ -254,9 +255,9 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
         check_expected_tree_dir(tree / "containers" / options.target_vmid, f"compiled config tree for container {options.target_vmid}", reporter)
         if not options.config_only and (tree / "private" / "containers" / options.target_vmid).is_dir():
             if (tree / "private" / "containers" / options.target_vmid / "effective.sops.yaml").is_file():
-                reporter.ok(f"compiled secret store built for container {options.target_vmid}")
+                reporter.ok(f"compiled SOPS payload built for container {options.target_vmid}")
             else:
-                reporter.info(f"no compiled secret store for container {options.target_vmid}")
+                reporter.info(f"no compiled SOPS payload for container {options.target_vmid}")
             if (tree / "private" / "containers" / options.target_vmid / "age_identity.sops.yaml").is_file():
                 reporter.ok(f"relay-encrypted identity staged for container {options.target_vmid}")
     else:

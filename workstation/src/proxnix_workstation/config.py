@@ -160,8 +160,6 @@ def load_workstation_config(
             if key not in core_keys
         }
     )
-    provider_environment.setdefault("PROXNIX_SOPS_MASTER_IDENTITY", str(home / ".ssh/id_ed25519"))
-
     return WorkstationConfig(
         config_file=config_path,
         site_dir=Path(site_dir_raw) if site_dir_raw else None,
