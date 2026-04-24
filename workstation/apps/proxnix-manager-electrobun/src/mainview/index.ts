@@ -972,21 +972,21 @@ function renderToolbar(snapshot: AppSnapshot): string {
               : "Proxnix Manager");
 
   const subtitleMap: Record<string, string> = {
-    welcome: "Start from the main workstation tasks.",
-    site: "Site-wide NixOS overrides published as site.nix.",
-    settings: "Paths, SSH targets, and secret backend used across all proxnix tools.",
-    publish: "Sync config, secrets, and identities to your Proxmox hosts.",
-    secrets: "Manage shared and named secret groups.",
-    "secrets:groups": "Shared is always available; named groups can be attached to containers.",
-    "secrets:containers": "Manage each container's local secret scope and identity.",
-    doctor: "Check your site for misconfigurations and missing files.",
-    git: "Current branch, uncommitted changes, and recent history.",
+    welcome: "Workstation overview and quick actions.",
+    site: "Site-wide NixOS overrides via site.nix.",
+    settings: "Paths, SSH targets, and secret backend configuration.",
+    publish: "Sync config, secrets, and identities to Proxmox hosts.",
+    secrets: "Shared and named secret groups.",
+    "secrets:groups": "Shared secrets are global; named groups attach to containers.",
+    "secrets:containers": "Per-container secret scope and identity.",
+    doctor: "Validate site configuration and dependencies.",
+    git: "Branch status, changes, and recent history.",
   };
 
   const subtitle = currentContainer
-    ? "Config files, secret groups, and identity for this container."
+    ? "Config, secret groups, and identity for this container."
     : secretScope
-      ? "Manage secret names and write values through proxnix-secrets without revealing stored values."
+      ? "Read and write secrets via proxnix-secrets. Stored values are never displayed."
     : subtitleMap[state.selection] ?? "";
 
   const canOpenSite = snapshot.config.siteDir.length > 0;
@@ -1001,7 +1001,7 @@ function renderToolbar(snapshot: AppSnapshot): string {
       <div class="toolbar-actions">
         <div class="toolbar-status${state.loading ? " loading" : ""}">
           ${icon(state.loading || state.saving ? "refresh" : "spark")}
-          <span>${state.saving ? "Saving config" : state.loading ? "Refreshing state" : dirty ? "Draft changed" : "Synced"}</span>
+          <span>${state.saving ? "Saving" : state.loading ? "Refreshing" : dirty ? "Unsaved" : "Synced"}</span>
         </div>
         <button class="icon-button" data-action="refresh" title="Refresh site state" aria-label="Refresh site state">
           ${icon("refresh")}
@@ -1082,7 +1082,7 @@ function renderOnboarding(snapshot: AppSnapshot): string {
         "Master identity",
         "sopsMasterIdentity",
         draft.sopsMasterIdentity,
-        "Created if missing; used as the embedded-sops recovery key.",
+        "Recovery key for embedded-sops. Created automatically if absent.",
         undefined,
         true,
       )
@@ -1091,14 +1091,14 @@ function renderOnboarding(snapshot: AppSnapshot): string {
           "Provider command",
           "secretProviderCommand",
           draft.secretProviderCommand,
-          "Command implementing the proxnix secret-provider protocol.",
+          "Command that implements the proxnix secret-provider protocol.",
           undefined,
           true,
         )
       : `
         <div class="onboarding-note wide">
           ${icon("key")}
-          <span>The master and host-relay keys will be stored in the selected provider under proxnix internal keys.</span>
+          <span>Master and host-relay keys are stored in the selected provider as internal proxnix entries.</span>
         </div>
       `;
 
@@ -1107,10 +1107,9 @@ function renderOnboarding(snapshot: AppSnapshot): string {
       <section class="onboarding-flow">
         <div class="hero-copy">
           <div class="eyebrow">Getting started</div>
-          <div class="hero-title">Create a proxnix site repo</div>
+          <div class="hero-title">Create a proxnix site</div>
           <div class="hero-text">
-            Choose where the live site state should live, select the secret backend,
-            then scaffold the repo and create the master and host-relay keys.
+            Set the site directory, choose a secret backend, then scaffold the repo with master and host-relay keys.
           </div>
         </div>
 
@@ -1122,7 +1121,7 @@ function renderOnboarding(snapshot: AppSnapshot): string {
             <div class="onboarding-step-body">
               <div class="section-title">${icon("folder")}<span>Site Path</span></div>
               <div class="form-grid compact-form-grid">
-                ${renderSettingsField("Repository path", "siteDir", draft.siteDir, "The directory will be created if it does not exist.", undefined, true, true)}
+                ${renderSettingsField("Repository path", "siteDir", draft.siteDir, "Created automatically if it does not exist.", undefined, true, true)}
               </div>
             </div>
           </div>
@@ -1132,7 +1131,7 @@ function renderOnboarding(snapshot: AppSnapshot): string {
             <div class="onboarding-step-body">
               <div class="section-title">${icon("lock")}<span>Secrets Backend</span></div>
               <div class="form-grid compact-form-grid">
-                ${renderSettingsField("Backend", "secretProvider", draft.secretProvider, "Where proxnix stores source secrets and generated keys.", SECRET_PROVIDER_OPTIONS, true)}
+                ${renderSettingsField("Backend", "secretProvider", draft.secretProvider, "Storage backend for secrets and generated keys.", SECRET_PROVIDER_OPTIONS, true)}
                 ${backendNeeds}
               </div>
             </div>
@@ -1143,7 +1142,7 @@ function renderOnboarding(snapshot: AppSnapshot): string {
             <div class="onboarding-step-body">
               <div class="section-title">${icon("publish")}<span>Scaffold</span></div>
               <div class="section-copy">
-                Creates site.nix, containers and private directories, initializes git, saves the workstation config, and creates master plus host-relay keys.
+                Creates site.nix, container directories, initializes git, saves config, and generates master and host-relay keys.
               </div>
             </div>
           </div>
@@ -1176,8 +1175,8 @@ function renderWelcomePage(snapshot: AppSnapshot): string {
         <div class="welcome-copy">
           <div class="welcome-text">
             ${hasSite
-              ? `Using ${snapshot.config.siteDir}.`
-              : "Choose a proxnix site directory to begin."}
+              ? `Site: ${snapshot.config.siteDir}`
+              : "Select a site directory to get started."}
           </div>
         </div>
         <div class="welcome-actions">
@@ -1225,14 +1224,14 @@ function renderWelcomePage(snapshot: AppSnapshot): string {
       <section class="page-band">
         <div class="section-header">
           <div>
-            <div class="section-title">${icon("spark")}<span>Start</span></div>
-            <div class="section-copy">Common workstation tasks for this site.</div>
+            <div class="section-title">${icon("spark")}<span>Quick Actions</span></div>
+            <div class="section-copy">Common tasks for this site.</div>
           </div>
         </div>
         <div class="welcome-link-list">
           <button class="welcome-link" data-nav="secrets" ${hasSite ? "" : "disabled"}>
             <span>${icon("lock")}</span>
-            <span>Manage shared, group, and container secrets</span>
+            <span>Manage secrets</span>
           </button>
           <button class="welcome-link" data-nav="site" ${hasSite ? "" : "disabled"}>
             <span>${icon("edit")}</span>
@@ -1240,15 +1239,15 @@ function renderWelcomePage(snapshot: AppSnapshot): string {
           </button>
           <button class="welcome-link" data-nav="doctor" ${hasSite ? "" : "disabled"}>
             <span>${icon("health")}</span>
-            <span>Run site checks</span>
+            <span>Run health checks</span>
           </button>
           <button class="welcome-link" data-nav="git" ${hasSite ? "" : "disabled"}>
             <span>${icon("branch")}</span>
-            <span>Review repository changes</span>
+            <span>Review git status</span>
           </button>
           <button class="welcome-link" data-nav="settings">
             <span>${icon("gear")}</span>
-            <span>Adjust workstation settings</span>
+            <span>Settings</span>
           </button>
         </div>
       </section>
@@ -1311,8 +1310,8 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
   const dirty = isDirty();
   const preserved =
     snapshot.preservedConfigKeys.length > 0
-      ? `${snapshot.preservedConfigKeys.length} extra config key${snapshot.preservedConfigKeys.length === 1 ? "" : "s"} preserved`
-      : "Unknown config keys preserved on save";
+      ? `${snapshot.preservedConfigKeys.length} extra key${snapshot.preservedConfigKeys.length === 1 ? "" : "s"} preserved`
+      : "Unknown keys preserved";
 
   return `
     <section class="page-band">
@@ -1320,7 +1319,7 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
         <div>
           <div class="section-title">${icon("gear")}<span>Settings</span></div>
           <div class="section-copy">
-            Changes are saved to the shared proxnix config and take effect immediately.
+            Saved to the shared proxnix config. Changes take effect immediately.
           </div>
         </div>
         <div class="section-actions">
@@ -1346,19 +1345,19 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
       </div>
 
       <div class="form-grid">
-        ${renderSettingsField("Site directory", "siteDir", draft.siteDir, "Root of your proxnix site repo.", undefined, true, true)}
+        ${renderSettingsField("Site directory", "siteDir", draft.siteDir, "Root of the proxnix site repo.", undefined, true, true)}
         ${renderSettingsField("SSH hosts", "hosts", draft.hosts, "Publish targets, e.g. root@node1 root@node2.")}
-        ${renderSettingsField("SSH identity", "sshIdentity", draft.sshIdentity, "Key for ssh -i. Blank uses your SSH agent.")}
-        ${renderSettingsField("Remote dir", "remoteDir", draft.remoteDir, "Public proxnix path on target hosts.")}
-        ${renderSettingsField("Remote private dir", "remotePrivDir", draft.remotePrivDir, "Private proxnix path on target hosts.")}
-        ${renderSettingsField("Host relay identity", "remoteHostRelayIdentity", draft.remoteHostRelayIdentity, "Age identity path on target hosts.")}
-        ${renderSettingsField("Secret backend", "secretProvider", draft.secretProvider, "How secrets and identities are stored.", SECRET_PROVIDER_OPTIONS)}
+        ${renderSettingsField("SSH identity", "sshIdentity", draft.sshIdentity, "Key for ssh -i. Leave blank to use the SSH agent.")}
+        ${renderSettingsField("Remote dir", "remoteDir", draft.remoteDir, "Public proxnix path on remote hosts.")}
+        ${renderSettingsField("Remote private dir", "remotePrivDir", draft.remotePrivDir, "Private proxnix path on remote hosts.")}
+        ${renderSettingsField("Host relay identity", "remoteHostRelayIdentity", draft.remoteHostRelayIdentity, "Age identity path on remote hosts.")}
+        ${renderSettingsField("Secret backend", "secretProvider", draft.secretProvider, "Storage backend for secrets and identities.", SECRET_PROVIDER_OPTIONS)}
         ${usesEmbeddedSops(draft.secretProvider)
           ? renderSettingsField(
               "SOPS master identity",
               "sopsMasterIdentity",
               draft.sopsMasterIdentity,
-              "SSH private key for the embedded-sops master identity.",
+              "SSH private key used as the embedded-sops master identity.",
               undefined,
               true,
             )
@@ -1368,13 +1367,13 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
               "Provider command",
               "secretProviderCommand",
               draft.secretProviderCommand,
-              "Command to run for the exec backend.",
+              "Exec backend command.",
               undefined,
               true,
             )
           : ""}
-        ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix command wrappers.", undefined, true)}
-        ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Advanced: extra import paths for the Manager bridge. Site-packages paths are preferred; venv bin paths are expanded automatically.", undefined, true)}
+        ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix CLI wrappers.", undefined, true)}
+        ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Extra import paths for the Manager bridge. Prefer site-packages; venv bin paths expand automatically.", undefined, true)}
       </div>
     </section>
   `;
@@ -1447,7 +1446,7 @@ function syncDraftIndicators(): void {
 
   if (status && statusLabel && !state.loading && !state.saving) {
     status.classList.toggle("loading", false);
-    statusLabel.textContent = dirty ? "Draft changed" : "Synced";
+    statusLabel.textContent = dirty ? "Unsaved" : "Synced";
   }
 }
 
@@ -1538,7 +1537,7 @@ function renderSidebarMetadataForm(container: ContainerSummary, snapshot: AppSna
           ? `<div class="display-settings-body">
               <div class="section-header">
                 <div class="section-copy">
-                  Custom name, group, and labels for this container in the sidebar.
+                  Sidebar display name, group, and labels for this container.
                 </div>
                 <div class="section-actions">
                   <button class="secondary-button" data-action="clear-sidebar-metadata" ${hasMetadata ? "" : "disabled"}>
@@ -1557,7 +1556,7 @@ function renderSidebarMetadataForm(container: ContainerSummary, snapshot: AppSna
               </div>
 
               <div class="form-grid">
-                ${renderSettingsField("Display name", "displayName", metadata.displayName, "Friendly name shown instead of the VMID.", undefined, true, false, "data-container-field")}
+                ${renderSettingsField("Display name", "displayName", metadata.displayName, "Shown in the sidebar instead of the VMID.", undefined, true, false, "data-container-field")}
                 ${renderOrganizationalGroupPicker(container, snapshot, metadata)}
                 ${renderLabelPicker(container, snapshot, metadata)}
               </div>
@@ -1759,7 +1758,7 @@ function renderContainerPage(container: ContainerSummary): string {
                           <button class="list-item preview-list-item" data-action="preview-file" data-preview-title="${escapeHtml(dropin)}" data-path="${escapeHtml(path)}">
                             <div class="list-item-copy">
                               <div class="list-item-title"><code>${escapeHtml(dropin)}</code></div>
-                              <div class="list-item-meta">repo overlay / preview</div>
+                              <div class="list-item-meta">overlay</div>
                             </div>
                             ${icon("open")}
                           </button>
@@ -1767,7 +1766,7 @@ function renderContainerPage(container: ContainerSummary): string {
                         },
                       )
                       .join("")
-                  : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No drop-ins configured.</div></div></div>`
+                  : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No drop-ins.</div></div></div>`
               }
             </div>
           </div>
@@ -1781,7 +1780,7 @@ function renderContainerPage(container: ContainerSummary): string {
       <section class="container-danger-row">
         <div>
           <div class="container-danger-title">Container Bundle</div>
-          <div class="container-danger-copy">Deletes the scaffold and provider-backed identity. Container-local secrets must be removed first.</div>
+          <div class="container-danger-copy">Removes the scaffold and provider-backed identity. Container-local secrets must be removed first.</div>
         </div>
         <button class="secondary-button${confirmingDelete ? " danger-button" : ""}" data-action="delete-container-bundle" data-vmid="${escapeHtml(container.vmid)}" ${state.containerBundleRunning ? "disabled" : ""}>
           ${icon("trash")}
@@ -1816,7 +1815,7 @@ function renderContainerSecrets(container: ContainerSummary): string {
             `,
           )
           .join("")
-      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secrets configured.</div></div></div>`;
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secrets.</div></div></div>`;
   const attachableGroups = snapshot
     ? allNamedSecretGroups(snapshot).filter((group) => !container.secretGroups.includes(group))
     : [];
@@ -1859,7 +1858,7 @@ function renderContainerSecrets(container: ContainerSummary): string {
                   `,
                 )
                 .join("")
-            : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No groups attached.</div></div></div>`
+            : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No groups.</div></div></div>`
         }
       </div>
     </div>
@@ -1871,9 +1870,9 @@ function renderContainerSecrets(container: ContainerSummary): string {
 }
 
 function containerStatusSummary(container: ContainerSummary): string {
-  const status = container.hasConfig ? "Config found" : "No config dir";
-  const secrets = `${container.secretGroups.length} secret group${container.secretGroups.length === 1 ? "" : "s"}`;
-  const identity = effectiveContainerHasIdentity(container) ? "Identity present" : "No identity";
+  const status = container.hasConfig ? "Config" : "No config";
+  const secrets = `${container.secretGroups.length} group${container.secretGroups.length === 1 ? "" : "s"}`;
+  const identity = effectiveContainerHasIdentity(container) ? "Identity" : "No identity";
   return `${status} / ${secrets} / ${identity}`;
 }
 
@@ -1957,7 +1956,7 @@ function renderDoctorPage(snapshot: AppSnapshot): string {
 
           return `${errorBand}${summaryPills}<div class="doctor-results">${sections}</div>`;
         })()
-      : `<div class="empty-state">Run a health check to look for problems in your site.</div>`;
+      : `<div class="empty-state">Run a health check to validate your site configuration.</div>`;
 
   return `
     <div class="page-stack">
@@ -2010,8 +2009,8 @@ function renderPublishPage(snapshot: AppSnapshot): string {
           return `${statusBand}${output}`;
         })()
       : hasHosts
-        ? `<div class="empty-state">Preview changes or publish to your hosts.</div>`
-        : `<div class="empty-state">Add target hosts in Settings first.</div>`;
+        ? `<div class="empty-state">Preview or publish changes to configured hosts.</div>`
+        : `<div class="empty-state">Configure target hosts in Settings to publish.</div>`;
 
   return `
     <div class="page-stack">
@@ -2078,7 +2077,7 @@ function renderGitPage(snapshot: AppSnapshot): string {
     return `
       <div class="page-stack">
         <section class="page-band">
-          <div class="error-band">${result?.error ? escapeHtml(result.error) : "Could not load repository status."}</div>
+          <div class="error-band">${result?.error ? escapeHtml(result.error) : "Failed to load repository status."}</div>
         </section>
       </div>
     `;
@@ -2124,7 +2123,7 @@ function renderGitPage(snapshot: AppSnapshot): string {
               : ""
           }
         `
-      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">Working tree is clean.</div></div></div>`;
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">Clean working tree.</div></div></div>`;
 
   const logHtml =
     result.log.length > 0
@@ -2140,7 +2139,7 @@ function renderGitPage(snapshot: AppSnapshot): string {
             `,
           )
           .join("")
-      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No commits found.</div></div></div>`;
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No commits.</div></div></div>`;
 
   return `
     <div class="page-stack">
@@ -2281,7 +2280,7 @@ function renderSecretGroupsPage(snapshot: AppSnapshot): string {
           <span class="shared-secret-icon">${icon("lock")}</span>
           <span class="shared-secret-copy">
             <span class="shared-secret-title">Shared</span>
-            <span class="shared-secret-meta">Always configured and visible to every container automatically.</span>
+            <span class="shared-secret-meta">Available to all containers automatically.</span>
           </span>
           <span class="shared-secret-action">Open</span>
         </button>
@@ -2292,7 +2291,7 @@ function renderSecretGroupsPage(snapshot: AppSnapshot): string {
           <div>
             <div class="section-title">${icon("folder")}<span>Named Groups</span></div>
             <div class="section-copy">
-              Create groups, attach them to containers, then manage their secret stores.
+              Create groups and attach them to containers to manage scoped secrets.
             </div>
           </div>
           <div class="section-actions secret-create-actions">
@@ -2340,15 +2339,15 @@ function renderSecretContainersPage(snapshot: AppSnapshot): string {
                   </div>
                 </div>
                 <div class="nav-meta">
-                  ${hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
                   ${groups.length > 0 ? `<span class="nav-badge" title="${escapeHtml(groups.join(", "))}">${groups.length}</span>` : ""}
+                  ${hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
                   <button class="secondary-button compact-button" data-nav="secrets:container:${escapeHtml(container.vmid)}">Manage</button>
                 </div>
               </div>
             `;
           })
           .join("")
-      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No containers found.</div></div></div>`;
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No containers.</div></div></div>`;
 
   return `
     <div class="page-stack">
@@ -2365,7 +2364,7 @@ function renderSecretContainersPage(snapshot: AppSnapshot): string {
         <div class="section-header">
           <div>
             <div class="section-title">${icon("box")}<span>Containers</span></div>
-            <div class="section-copy">Create container bundles or open one to manage local secrets and its age identity.</div>
+            <div class="section-copy">Create bundles or open a container to manage its secrets and age identity.</div>
           </div>
           <div class="section-actions secret-create-actions">
             <input
@@ -2428,7 +2427,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
             </div>
           `)
           .join("")
-      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secret names found.</div></div></div>`;
+      : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">No secrets.</div></div></div>`;
 
   return `
     <div class="page-stack">
@@ -2456,7 +2455,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
         <div class="section-header">
           <div>
             <div class="section-title">${icon("lock")}<span>Write Secret</span></div>
-            <div class="section-copy">Values are sent to proxnix-secrets and are not shown after saving.</div>
+            <div class="section-copy">Values are written via proxnix-secrets and never displayed after saving.</div>
           </div>
           <div class="section-actions">
             <button class="primary-button" data-action="set-secret" ${state.secretScopeRunning || !state.secretDraftName.trim() || !state.secretDraftValue ? "disabled" : ""}>
@@ -2466,7 +2465,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
           </div>
         </div>
         <div class="form-grid">
-          ${renderSettingsField("Name", "secretDraftName", state.secretDraftName, "Secret key in this scope.", undefined, false, false, "data-option")}
+          ${renderSettingsField("Name", "secretDraftName", state.secretDraftName, "Secret key name.", undefined, false, false, "data-option")}
           <label class="field">
             <div class="field-label-row">
               <span class="field-label">Value</span>
@@ -2474,7 +2473,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
             <div class="field-control">
               <input type="password" data-secret-value="secretDraftValue" value="${escapeHtml(state.secretDraftValue)}" spellcheck="false" />
             </div>
-            <div class="field-hint">New value to write.</div>
+            <div class="field-hint">Value to store.</div>
           </label>
         </div>
       </section>
@@ -2483,7 +2482,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
         <div class="section-header">
           <div>
             <div class="section-title">${icon("key")}<span>Secret Names</span></div>
-            <div class="section-copy">Container views include inherited shared and group entries with their source.</div>
+            <div class="section-copy">Container scopes include inherited shared and group entries.</div>
           </div>
         </div>
         <div class="list">${listHtml}</div>
@@ -2518,7 +2517,7 @@ function renderMain(snapshot: AppSnapshot): string {
             <div class="hero-copy">
               <div class="hero-title">Container not found</div>
               <div class="hero-text">
-                This VMID no longer exists in the site. Refresh or select another container.
+                This VMID is no longer present in the site. Refresh or select another container.
               </div>
             </div>
           </section>
@@ -2567,25 +2566,25 @@ function renderStatusbar(snapshot: AppSnapshot): string {
         : "Site: Not configured";
   const activityLabel =
     state.saving
-      ? "Saving config"
+      ? "Saving"
       : state.metadataSaving
-        ? "Saving sidebar"
+        ? "Saving"
         : state.loading
-          ? "Refreshing state"
+          ? "Refreshing"
           : state.onboardingRunning
             ? "Creating site"
           : state.publishRunning
             ? "Publishing"
             : state.doctorRunning
-              ? "Running doctor"
+              ? "Running checks"
               : state.gitRunning
-                ? "Updating git"
+                ? "Git operation"
                 : state.gitLoading
                   ? "Loading git"
                   : state.secretScopeRunning
                     ? "Updating secrets"
                     : state.secretScopeLoading || state.secretsProviderLoading
-                      ? "Refreshing secrets"
+                      ? "Loading secrets"
                       : null;
 
   return `
@@ -2629,7 +2628,7 @@ function renderFilePreview(): string {
 
 function render(): void {
   if (state.loading && !state.snapshot) {
-    root.innerHTML = `<div class="loading-state">Loading proxnix workstation state...</div>`;
+    root.innerHTML = `<div class="loading-state">Loading...</div>`;
     return;
   }
 
@@ -2637,7 +2636,7 @@ function render(): void {
   if (!snapshot) {
     root.innerHTML = `
       <div class="loading-state">
-        <div>No proxnix state available.</div>
+        <div>Unable to load site state.</div>
         ${
           state.error
             ? `<div class="error-band">${escapeHtml(state.error)}</div>`
