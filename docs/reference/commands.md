@@ -280,12 +280,13 @@ proxnix exercise lxc --host root@node1 --base-vmid 940
 
 Preferred verb layout:
 
-- `proxnix config ...`
-- `proxnix secrets ...`
-- `proxnix publish ...`
-- `proxnix doctor ...`
-- `proxnix tui`
-- `proxnix exercise lxc ...`
+- `proxnix config show` — print resolved workstation config
+- `proxnix config plan-tree` — show the publish plan tree for all containers
+- `proxnix secrets ...` — manage secrets (see below)
+- `proxnix publish ...` — publish site to relay hosts
+- `proxnix doctor ...` — run health checks
+- `proxnix tui` (alias: `proxnix ui`) — open the terminal UI
+- `proxnix exercise lxc ...` — run the exercise lab
 
 The legacy split commands such as `proxnix-secrets`, `proxnix-publish`,
 `proxnix-doctor`, `proxnix-tui`, and `proxnix-lxc-exercise` remain available as
@@ -335,6 +336,8 @@ proxnix-secrets ls-group <group>
 
 ```bash
 proxnix-secrets get <vmid> <name>
+proxnix-secrets get-shared <name>
+proxnix-secrets get-group <group> <name>
 ```
 
 ### Writing
@@ -367,19 +370,19 @@ proxnix-secrets rotate-shared
 proxnix-secrets rotate-group <group>
 ```
 
-These rotation commands are only available with the `embedded-sops` provider,
-because they operate on repo-local SOPS source stores directly.
+These rotation commands are only available with the `embedded-sops` provider.
 
-### Identity initialization
+### Identity and store initialization
 
 ```bash
 proxnix-secrets init-host-relay
 proxnix-secrets init-container 120
+proxnix-secrets init-shared
 ```
 
-`set` creates guest identities automatically when needed. `init-host-relay` is
-the one shared relay key that Proxmox hosts use to decrypt guest identities
-during staging.
+`set` creates guest identities automatically when needed. `init-host-relay`
+creates the shared relay key that Proxmox hosts use to decrypt guest identities
+during staging. `init-shared` creates the shared secret store.
 
 Built-in provider names:
 
