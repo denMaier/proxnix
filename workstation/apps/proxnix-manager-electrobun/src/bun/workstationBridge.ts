@@ -47,6 +47,11 @@ function resolvePythonCommand(): string[] {
     return explicit.split(/\s+/).filter(Boolean);
   }
 
+  const moduleRelative = fileURLToPath(new URL("../../../../.venv/bin/python", import.meta.url));
+  if (existsSync(moduleRelative)) {
+    return [moduleRelative];
+  }
+
   const preferredPaths = [
     "/opt/homebrew/opt/python@3.12/bin/python3.12",
     "/usr/local/opt/python@3.12/bin/python3.12",
