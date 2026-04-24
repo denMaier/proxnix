@@ -38,6 +38,12 @@ The cask depends on these Homebrew formulae:
 - `python@3.12`
 - `sops`
 
+The app bundle includes the workstation Python package source, the CLI wrapper
+scripts, and the core Python modules needed by the built-in workflows. It does
+not bundle optional secret-provider SDKs such as `pykeepass`; users who choose
+those providers install the corresponding Python package into the Python
+runtime used by the Manager.
+
 Runtime tools still expected from the machine:
 
 - `ssh`
@@ -83,6 +89,59 @@ still refuses to open an unsigned local/test install, remove quarantine:
 xattr -dr com.apple.quarantine "/Applications/Proxnix Manager.app"
 ```
 
+## Python runtime resolution
+
+`Proxnix Manager` is CLI-first at runtime. The Bun bridge invokes Python only to
+run the bundled bridge script and workstation CLI commands, and the bridge
+communicates with the UI through structured JSON.
+
+Interpreter selection is:
+
+1. `PROXNIX_MANAGER_PYTHON`, when explicitly set
+2. bundled `bin/proxnix-python` under the packaged app resources directory
+3. repo-local `workstation/.venv/bin/python` during development
+4. Homebrew `python@3.12`
+5. `python3`, `python`, or Windows `py -3` from `PATH`
+
+Advanced imports can be added with `PROXNIX_MANAGER_PYTHONPATH`, either in the
+shared proxnix config or in the Manager process environment. This is scoped to
+the Manager bridge and its workstation CLI subprocesses. Use it for local or
+third-party provider modules that are not bundled with the app; do not use it
+as the normal way to find `proxnix_workstation`. A
+`site-packages` path is the direct form; venv `bin` directories and venv Python
+executables are accepted and expanded to the matching `site-packages` directory.
+
+For local development, prepare the repo-local environment before running the
+app:
+
+```bash
+./ci/bootstrap-workstation-venv.sh
+```
+
+For the `pykeepass` provider, install `pykeepass` separately into the runtime
+used by the Manager, for example:
+
+```bash
+workstation/.venv/bin/python -m pip install pykeepass
+```
+
+For an installed packaged Manager, prefer a dedicated Python 3.12 provider venv
+instead of installing optional provider packages into Homebrew Python globally:
+
+```bash
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv ~/.local/share/proxnix/provider-python
+~/.local/share/proxnix/provider-python/bin/python -m pip install pykeepass
+```
+
+Then set `Manager Python path` in the app settings to:
+
+```text
+~/.local/share/proxnix/provider-python/bin
+```
+
+The bridge expands venv `bin` paths to the matching `site-packages` directory
+before launching workstation CLI subprocesses.
+
 ## Cask source
 
 This repository keeps the tap scaffold here:
@@ -113,6 +172,19 @@ Example:
   --version 0.1.0 \
   --output ../homebrew-tap/Casks/proxnix-manager.rb
 ```
+
+The release workflows create `workstation/.venv` with Python 3.12 and install
+the core runtime dependencies before wrapping the Electrobun app. The post-wrap
+step copies the workstation source and core Python dependencies into the app
+resources directory, then writes bundled CLI wrappers under its `bin/`
+subdirectory. Optional providers such as `pykeepass` are intentionally excluded
+from the shipped app bundle.
+
+Local package tests should use a Python 3.12 environment for the copied
+dependencies because the packaged `proxnix-python` wrapper runs Homebrew
+`python@3.12` when it is available. If the repo-local `workstation/.venv` uses
+a different Python minor version, create a temporary Python 3.12 venv and pass
+it as `PROXNIX_PACKAGE_PYTHON`.
 
 ## Recommended repository setup
 

@@ -149,6 +149,17 @@ repo version of `proxnix-workstation` into that repo-local virtualenv.
 ./ci/bootstrap-workstation-venv.sh
 ```
 
+For local Proxnix Manager work with the `pykeepass` provider, install
+`pykeepass` after bootstrapping:
+
+```bash
+workstation/.venv/bin/python -m pip install pykeepass
+```
+
+If a Manager-only integration needs extra import paths, set
+`PROXNIX_MANAGER_PYTHONPATH` through the app settings or in
+`~/.config/proxnix/config`.
+
 ### `ci/release.sh`
 
 One-command release flow:

@@ -197,6 +197,13 @@ under `workstation/bin/`:
 ./ci/bootstrap-workstation-venv.sh
 ```
 
+For local Proxnix Manager development with the `pykeepass` provider, install
+`pykeepass` into that virtualenv:
+
+```bash
+workstation/.venv/bin/python -m pip install pykeepass
+```
+
 Create `~/.config/proxnix/config`:
 
 ```bash
@@ -252,6 +259,13 @@ brew install denMaier/tap/proxnix-workstation
 a Homebrew tap so the macOS app can be installed with a single
 `brew install --cask` command. This repo includes the tap cask scaffold under
 `packaging/homebrew/`.
+
+Packaged Manager builds include the workstation CLI wrappers and core Python
+dependencies inside the app bundle. Development builds prefer
+`workstation/.venv/bin/python`, so optional Python providers such as
+`pykeepass` should be installed into that venv rather than the system Python.
+For custom Manager-only Python modules, set `PROXNIX_MANAGER_PYTHONPATH` in the
+Manager settings or config file.
 
 See [Proxnix Manager](../operations/proxnix-manager.md).
 

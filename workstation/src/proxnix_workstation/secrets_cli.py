@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
+from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
 
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
+from .json_api import error as json_error
+from .json_api import ok as json_ok
+from .json_api import print_json
+from .manager_api import build_status
 from .keepass_agent import derive_pykeepass_agent_password
 from .paths import SitePaths
-from .provider_keys import initialize_container_identity, initialize_host_relay_identity
+from .provider_keys import have_container_private_key, initialize_container_identity, initialize_host_relay_identity
 from .runtime import ensure_commands
 from .site import collect_site_vmids
 from .secret_provider import (
@@ -28,6 +35,22 @@ from .secret_provider import (
 )
 from .site import read_container_secret_groups, valid_secret_group_name
 from .sops_ops import read_secret_value
+
+
+@dataclass(frozen=True)
+class SecretScope:
+    scope_type: str
+    scope_id: str
+
+    @property
+    def ref(self):
+        if self.scope_type == "shared":
+            return shared_scope()
+        if self.scope_type == "group":
+            return group_scope(self.scope_id)
+        if self.scope_type == "container":
+            return container_scope(self.scope_id)
+        raise ProxnixWorkstationError(f"unsupported secret scope: {self.scope_type}")
 
 
 @contextmanager
@@ -50,6 +73,164 @@ def need_tools(config: WorkstationConfig) -> SitePaths:
     site_paths = SitePaths.from_config(config)
     ensure_commands(["sops"])
     return site_paths
+
+
+def _command_result(output: str, exit_code: int, *, error: str = "") -> dict[str, object]:
+    return {
+        "output": output,
+        "exitCode": exit_code,
+        "error": error if exit_code != 0 else "",
+    }
+
+
+def _scope_from_args(scope_type: str, scope_id: str | None = None) -> SecretScope:
+    scope_id = (scope_id or "").strip()
+    if scope_type == "shared":
+        return SecretScope("shared", "")
+    if scope_type == "group":
+        if not valid_secret_group_name(scope_id):
+            raise ProxnixWorkstationError(f"invalid group name: {scope_id}")
+        return SecretScope("group", scope_id)
+    if scope_type == "container":
+        if not scope_id.isdigit():
+            raise ProxnixWorkstationError(f"invalid container VMID: {scope_id}")
+        return SecretScope("container", scope_id)
+    raise ProxnixWorkstationError("secret scope must be shared, group, or container")
+
+
+def _entries_for_scope(config: WorkstationConfig, scope: SecretScope) -> list[dict[str, str]]:
+    site_paths = need_tools(config)
+    provider = load_secret_provider(config, site_paths)
+    entries: list[dict[str, str]] = []
+
+    if scope.scope_type == "container":
+        seen: dict[str, str] = {}
+        for key in provider.list_names(shared_scope()):
+            seen.setdefault(key, "shared")
+        for group in read_container_secret_groups(site_paths, scope.scope_id):
+            for key in provider.list_names(group_scope(group)):
+                if seen.get(key) != "container":
+                    seen[key] = f"group:{group}"
+        for key in provider.list_names(container_scope(scope.scope_id)):
+            seen[key] = "container"
+        return [{"name": key, "source": seen[key]} for key in sorted(seen)]
+
+    for key in provider.list_names(scope.ref):
+        entries.append({"name": key, "source": scope.scope_type})
+    return entries
+
+
+def secret_scope_status_data(config: WorkstationConfig, scope: SecretScope) -> dict[str, object]:
+    warnings: list[str] = []
+    entries: list[dict[str, str]] = []
+    if config.site_dir is None:
+        warnings.append("Set site directory first.")
+    else:
+        try:
+            entries = _entries_for_scope(config, scope)
+        except Exception as exc:
+            warnings.append(str(exc))
+    return {
+        "scopeType": scope.scope_type,
+        "scopeId": scope.scope_id,
+        "entries": entries,
+        "canRotate": config.secret_provider == "embedded-sops",
+        "warnings": warnings,
+    }
+
+
+def secrets_provider_status_data(config: WorkstationConfig) -> dict[str, object]:
+    warnings: list[str] = []
+    defined_groups: list[str] = []
+    container_identities: dict[str, bool] = {}
+
+    try:
+        status = build_status(config.config_file)
+        for warning in status.get("warnings", []):
+            warnings.append(str(warning))
+        containers = status.get("containers", [])
+        if isinstance(containers, list):
+            for container in containers:
+                if isinstance(container, dict):
+                    vmid = str(container.get("vmid", "")).strip()
+                    if vmid:
+                        container_identities[vmid] = False
+        local_defined = status.get("definedSecretGroups", [])
+        if isinstance(local_defined, list):
+            defined_groups = [str(group) for group in local_defined]
+    except Exception as exc:
+        warnings.append(str(exc))
+
+    if config.site_dir is None or not config.site_dir.is_dir():
+        return {
+            "provider": config.secret_provider,
+            "definedSecretGroups": defined_groups,
+            "containerIdentities": container_identities,
+            "warnings": warnings,
+        }
+
+    try:
+        site_paths = SitePaths.from_config(config)
+        provider = load_secret_provider(config, site_paths)
+        attached_groups = set()
+        for vmid in container_identities:
+            try:
+                container_identities[vmid] = have_container_private_key(config, provider, site_paths, vmid)
+                attached_groups.update(read_container_secret_groups(site_paths, vmid))
+            except Exception as exc:
+                warnings.append(f"Could not check container {vmid}: {exc}")
+        if isinstance(provider, EmbeddedSopsProvider):
+            defined_groups = sorted(
+                {
+                    *defined_groups,
+                    *[
+                        group
+                        for group in attached_groups
+                        if site_paths.group_store(group).is_file() or (site_paths.private_dir / "groups" / group).is_dir()
+                    ],
+                }
+            )
+        else:
+            provider_groups = []
+            for group in sorted(attached_groups):
+                try:
+                    if provider.has_any(group_scope(group)):
+                        provider_groups.append(group)
+                except Exception:
+                    pass
+            defined_groups = sorted({*defined_groups, *provider_groups})
+    except Exception as exc:
+        warnings.append(f"Secret backend unavailable: {exc}")
+
+    return {
+        "provider": config.secret_provider,
+        "definedSecretGroups": defined_groups,
+        "containerIdentities": container_identities,
+        "warnings": warnings,
+    }
+
+
+def cmd_status(config: WorkstationConfig, *, json: bool) -> int:
+    data = secrets_provider_status_data(config)
+    if json:
+        print_json(json_ok(data, warnings=[str(w) for w in data["warnings"]]))
+    else:
+        print(f"provider\t{data['provider']}")
+        for warning in data["warnings"]:
+            print(f"warning\t{warning}")
+    return 0
+
+
+def cmd_scope_status(config: WorkstationConfig, scope: SecretScope, *, json: bool) -> int:
+    data = secret_scope_status_data(config, scope)
+    if json:
+        print_json(json_ok(data, warnings=[str(w) for w in data["warnings"]]))
+    else:
+        for entry in data["entries"]:
+            print(f"{entry['name']}\t{entry['source']}")
+        for warning in data["warnings"]:
+            print(f"warning\t{warning}")
+    return 0
 
 
 def cmd_ls(config: WorkstationConfig, vmid: str | None) -> int:
@@ -284,10 +465,27 @@ def cmd_print_keepass_password(config: WorkstationConfig) -> int:
     return 0
 
 
+def _print_command_json(output: str, exit_code: int = 0, error: str = "") -> None:
+    print_json(json_ok(_command_result(output, exit_code, error=error)))
+
+
+def _run_for_json(fn) -> int:
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn()
+
+
 def build_parser(*, prog: str = "proxnix-secrets") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--config", type=Path, help="Path to the proxnix workstation config file")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    status = sub.add_parser("status")
+    status.add_argument("--json", action="store_true")
+
+    scope_status = sub.add_parser("scope-status")
+    scope_status.add_argument("--scope", choices=["shared", "group", "container"], required=True)
+    scope_status.add_argument("--id")
+    scope_status.add_argument("--json", action="store_true")
 
     ls = sub.add_parser("ls")
     ls.add_argument("vmid", nargs="?")
@@ -307,30 +505,40 @@ def build_parser(*, prog: str = "proxnix-secrets") -> argparse.ArgumentParser:
     setp = sub.add_parser("set")
     setp.add_argument("vmid")
     setp.add_argument("name")
+    setp.add_argument("--json", action="store_true")
     sets = sub.add_parser("set-shared")
     sets.add_argument("name")
+    sets.add_argument("--json", action="store_true")
     setg = sub.add_parser("set-group")
     setg.add_argument("group")
     setg.add_argument("name")
+    setg.add_argument("--json", action="store_true")
 
     rmp = sub.add_parser("rm")
     rmp.add_argument("vmid")
     rmp.add_argument("name")
+    rmp.add_argument("--json", action="store_true")
     rms = sub.add_parser("rm-shared")
     rms.add_argument("name")
+    rms.add_argument("--json", action="store_true")
     rmg = sub.add_parser("rm-group")
     rmg.add_argument("group")
     rmg.add_argument("name")
+    rmg.add_argument("--json", action="store_true")
 
     rot = sub.add_parser("rotate")
     rot.add_argument("vmid")
-    sub.add_parser("rotate-shared")
+    rot.add_argument("--json", action="store_true")
+    rots = sub.add_parser("rotate-shared")
+    rots.add_argument("--json", action="store_true")
     rotg = sub.add_parser("rotate-group")
     rotg.add_argument("group")
+    rotg.add_argument("--json", action="store_true")
 
     sub.add_parser("init-host-relay")
     initc = sub.add_parser("init-container")
     initc.add_argument("vmid")
+    initc.add_argument("--json", action="store_true")
     sub.add_parser("init-shared")
     sub.add_parser("print-keepass-password")
     return parser
@@ -343,6 +551,10 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-secrets") -> int
 
     try:
         match args.command:
+            case "status":
+                return cmd_status(config, json=args.json)
+            case "scope-status":
+                return cmd_scope_status(config, _scope_from_args(args.scope, args.id), json=args.json)
             case "ls":
                 return cmd_ls(config, args.vmid)
             case "ls-shared":
@@ -356,27 +568,77 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-secrets") -> int
             case "get-group":
                 return cmd_get_group(config, args.group, args.name)
             case "set":
-                return cmd_set(config, args.vmid, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_set(config, args.vmid, args.name))
+                    _print_command_json(f"Set secret {args.name}.", rc)
+                    return rc
+                rc = cmd_set(config, args.vmid, args.name)
+                return rc
             case "set-shared":
-                return cmd_set_shared(config, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_set_shared(config, args.name))
+                    _print_command_json(f"Set secret {args.name}.", rc)
+                    return rc
+                rc = cmd_set_shared(config, args.name)
+                return rc
             case "set-group":
-                return cmd_set_group(config, args.group, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_set_group(config, args.group, args.name))
+                    _print_command_json(f"Set secret {args.name}.", rc)
+                    return rc
+                rc = cmd_set_group(config, args.group, args.name)
+                return rc
             case "rm":
-                return cmd_rm(config, args.vmid, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rm(config, args.vmid, args.name))
+                    _print_command_json(f"Removed secret {args.name}.", rc)
+                    return rc
+                rc = cmd_rm(config, args.vmid, args.name)
+                return rc
             case "rm-shared":
-                return cmd_rm_shared(config, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rm_shared(config, args.name))
+                    _print_command_json(f"Removed secret {args.name}.", rc)
+                    return rc
+                rc = cmd_rm_shared(config, args.name)
+                return rc
             case "rm-group":
-                return cmd_rm_group(config, args.group, args.name)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rm_group(config, args.group, args.name))
+                    _print_command_json(f"Removed secret {args.name}.", rc)
+                    return rc
+                rc = cmd_rm_group(config, args.group, args.name)
+                return rc
             case "rotate":
-                return cmd_rotate(config, args.vmid)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rotate(config, args.vmid))
+                    _print_command_json("Secret store rotated.", rc)
+                    return rc
+                rc = cmd_rotate(config, args.vmid)
+                return rc
             case "rotate-shared":
-                return cmd_rotate_shared(config)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rotate_shared(config))
+                    _print_command_json("Secret store rotated.", rc)
+                    return rc
+                rc = cmd_rotate_shared(config)
+                return rc
             case "rotate-group":
-                return cmd_rotate_group(config, args.group)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_rotate_group(config, args.group))
+                    _print_command_json("Secret store rotated.", rc)
+                    return rc
+                rc = cmd_rotate_group(config, args.group)
+                return rc
             case "init-host-relay":
                 return cmd_init_host_relay(config)
             case "init-container":
-                return cmd_init_container(config, args.vmid)
+                if args.json:
+                    rc = _run_for_json(lambda: cmd_init_container(config, args.vmid))
+                    _print_command_json(f"Initialized identity for {args.vmid}.", rc)
+                    return rc
+                rc = cmd_init_container(config, args.vmid)
+                return rc
             case "init-shared":
                 return cmd_init_shared(config)
             case "print-keepass-password":
@@ -384,7 +646,10 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-secrets") -> int
             case _:
                 parser.error(f"unsupported command: {args.command}")
     except (ConfigError, PlanningError, ProxnixWorkstationError) as exc:
-        print(f"error: {exc}")
+        if getattr(args, "json", False):
+            print_json(json_error("secrets.failed", str(exc)))
+        else:
+            print(f"error: {exc}")
         return 1
 
     return 0

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import hashlib
 import json
 import os
@@ -12,6 +14,9 @@ from pathlib import Path, PurePosixPath
 
 from .config import WorkstationConfig, load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
+from .json_api import error as json_error
+from .json_api import ok as json_ok
+from .json_api import print_json
 from .paths import SitePaths
 from .provider_keys import (
     container_private_key_text,
@@ -477,6 +482,23 @@ def print_host_summary(host: str, report: list[tuple[str, PurePosixPath]]) -> No
         print(f"    {kind} {path}")
 
 
+def host_report_data(host: str, report: list[tuple[str, PurePosixPath]]) -> dict[str, object]:
+    return {
+        "host": host,
+        "changed": bool(report),
+        "creates": sum(1 for kind, _ in report if kind == "create"),
+        "updates": sum(1 for kind, _ in report if kind == "update"),
+        "deletes": sum(1 for kind, _ in report if kind == "delete"),
+        "changes": [
+            {
+                "action": kind,
+                "path": str(path),
+            }
+            for kind, path in report
+        ],
+    }
+
+
 def do_rsync(
     session: SSHSession,
     config: WorkstationConfig,
@@ -608,7 +630,7 @@ def publish_host(
     config: WorkstationConfig,
     options: PublishOptions,
     tree: Path,
-) -> None:
+) -> list[tuple[str, PurePosixPath]]:
     report: list[tuple[str, PurePosixPath]] | None = [] if options.report_changes else None
     print(f"Publishing relay cache to {session.host}")
     ensure_remote_dirs(session, config, dry_run=options.dry_run)
@@ -634,7 +656,8 @@ def publish_host(
     if options.config_only:
         if report is not None:
             print_host_summary(session.host, report)
-        return
+            return report
+        return []
 
     sync_path(
         session,
@@ -666,6 +689,8 @@ def publish_host(
 
     if report is not None:
         print_host_summary(session.host, report)
+        return report
+    return []
 
 
 def publish_vmid_host(
@@ -673,7 +698,7 @@ def publish_vmid_host(
     config: WorkstationConfig,
     options: PublishOptions,
     tree: Path,
-) -> None:
+) -> list[tuple[str, PurePosixPath]]:
     assert options.target_vmid is not None
     vmid = options.target_vmid
     report: list[tuple[str, PurePosixPath]] | None = [] if options.report_changes else None
@@ -735,13 +760,19 @@ def publish_vmid_host(
 
     if report is not None:
         print_host_summary(session.host, report)
+        return report
+    return []
 
 
-def publish_selected_host(session: SSHSession, config: WorkstationConfig, options: PublishOptions, tree: Path) -> None:
+def publish_selected_host(
+    session: SSHSession,
+    config: WorkstationConfig,
+    options: PublishOptions,
+    tree: Path,
+) -> list[tuple[str, PurePosixPath]]:
     if options.target_vmid is not None:
-        publish_vmid_host(session, config, options, tree)
-    else:
-        publish_host(session, config, options, tree)
+        return publish_vmid_host(session, config, options, tree)
+    return publish_host(session, config, options, tree)
 
 
 def build_parser(*, prog: str = "proxnix-publish") -> argparse.ArgumentParser:
@@ -752,6 +783,7 @@ def build_parser(*, prog: str = "proxnix-publish") -> argparse.ArgumentParser:
     parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--vmid")
     parser.add_argument("--container-config")
+    parser.add_argument("--json", action="store_true", help="Emit a structured JSON result")
     parser.add_argument("hosts", nargs="*")
     return parser
 
@@ -762,7 +794,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
     config = load_workstation_config(args.config)
     options = PublishOptions(
         dry_run=args.dry_run,
-        report_changes=args.report_changes,
+        report_changes=args.report_changes or args.json,
         config_only=args.config_only,
         target_vmid=args.vmid,
     )
@@ -771,41 +803,71 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
         options.target_vmid = args.container_config
         options.config_only = True
 
+    output = io.StringIO()
+    stream_context = contextlib.redirect_stdout(output) if args.json else contextlib.nullcontext()
+
     try:
-        site_paths = need_publish_tools(config, config_only=options.config_only)
-        hosts = list(args.hosts) if args.hosts else list(config.hosts)
-        if not hosts:
-            raise ProxnixWorkstationError("no publish hosts configured")
+        host_results: list[dict[str, object]] = []
+        with stream_context:
+            site_paths = need_publish_tools(config, config_only=options.config_only)
+            hosts = list(args.hosts) if args.hosts else list(config.hosts)
+            if not hosts:
+                raise ProxnixWorkstationError("no publish hosts configured")
 
-        with tempfile.TemporaryDirectory(prefix="proxnix-publish.") as temp_dir:
-            temp_root = Path(temp_dir)
-            source = materialize_head_site(config, site_paths, temp_root / "site-head", options)
-            provider = load_secret_provider(config, source.site_paths)
-            if options.target_vmid is not None:
-                validate_target_vmid_repo(
-                    config,
-                    source.site_paths,
-                    provider,
-                    options.target_vmid,
-                    config_only=options.config_only,
+            with tempfile.TemporaryDirectory(prefix="proxnix-publish.") as temp_dir:
+                temp_root = Path(temp_dir)
+                source = materialize_head_site(config, site_paths, temp_root / "site-head", options)
+                provider = load_secret_provider(config, source.site_paths)
+                if options.target_vmid is not None:
+                    validate_target_vmid_repo(
+                        config,
+                        source.site_paths,
+                        provider,
+                        options.target_vmid,
+                        config_only=options.config_only,
+                    )
+                elif not options.config_only:
+                    validate_site_repo(config, source.site_paths, provider)
+
+                relay_tree = temp_root / "relay"
+                build_publish_tree(config, source.site_paths, options, relay_tree)
+                write_publish_revision(source, relay_tree / "publish-revision.json")
+
+                for host in hosts:
+                    with SSHSession(config, host, temp_root=temp_root) as session:
+                        if not options.config_only and have_host_relay_private_key(config, provider, source.site_paths):
+                            stage_relay_identities_into_tree(config, source.site_paths, options, relay_tree)
+                        report = publish_selected_host(session, config, options, relay_tree)
+                        host_results.append(host_report_data(host, report))
+
+            if not args.json:
+                print("Publish complete")
+
+        if args.json:
+            print_json(
+                json_ok(
+                    {
+                        "exitCode": 0,
+                        "dryRun": options.dry_run,
+                        "configOnly": options.config_only,
+                        "vmid": options.target_vmid,
+                        "hosts": host_results,
+                        "output": output.getvalue().strip(),
+                    }
                 )
-            elif not options.config_only:
-                validate_site_repo(config, source.site_paths, provider)
-
-            relay_tree = temp_root / "relay"
-            build_publish_tree(config, source.site_paths, options, relay_tree)
-            write_publish_revision(source, relay_tree / "publish-revision.json")
-
-            for host in hosts:
-                with SSHSession(config, host, temp_root=temp_root) as session:
-                    if not options.config_only and have_host_relay_private_key(config, provider, source.site_paths):
-                        stage_relay_identities_into_tree(config, source.site_paths, options, relay_tree)
-                    publish_selected_host(session, config, options, relay_tree)
-
-        print("Publish complete")
+            )
         return 0
     except (ConfigError, PlanningError, ProxnixWorkstationError) as exc:
-        print(f"error: {exc}")
+        if args.json:
+            print_json(
+                json_error(
+                    "publish.failed",
+                    str(exc),
+                    details={"output": output.getvalue().strip()},
+                )
+            )
+        else:
+            print(f"error: {exc}")
         return 1
 
 
