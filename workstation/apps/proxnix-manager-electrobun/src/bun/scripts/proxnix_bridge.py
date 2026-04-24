@@ -1347,6 +1347,10 @@ def _cli_run_validation(payload: object) -> dict[str, object] | None:
 
 
 def run_publish(payload: object) -> dict[str, object]:
+    cli_result = _cli_run_publish(payload)
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = config["siteDir"]
     if not site_dir:
@@ -1384,6 +1388,35 @@ def run_publish(payload: object) -> dict[str, object]:
             if stderr.strip()
             else (stdout.strip() if exit_code != 0 and stdout.strip() else "")
         ),
+    }
+
+
+def _cli_run_publish(payload: object) -> dict[str, object] | None:
+    opts = payload if isinstance(payload, dict) else {}
+    args = ["diff" if opts.get("dryRun") else "sync", "--json"]
+    if opts.get("configOnly"):
+        args.append("--config-only")
+    vmid = opts.get("vmid")
+    if vmid:
+        args.extend(["--vmid", str(vmid)])
+    for host in opts.get("hosts") or []:
+        args.append(str(host))
+
+    data, error, exit_code = _json_cli_data(
+        args,
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+    )
+    if data is None:
+        return {
+            "output": "",
+            "exitCode": exit_code or 1,
+            "error": error,
+        }
+    output = str(data.get("output", "")).strip()
+    return {
+        "output": output or ("Dry run complete." if opts.get("dryRun") else "Publish complete."),
+        "exitCode": int(data.get("exitCode", exit_code) or exit_code),
+        "error": "",
     }
 
 
