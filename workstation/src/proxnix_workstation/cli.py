@@ -6,6 +6,8 @@ from pathlib import Path
 
 from .config import load_workstation_config
 from .errors import ProxnixWorkstationError
+from .json_api import ok, print_json
+from .manager_api import build_status
 from .planning import PlanRunner
 from .publish_tree import build_desired_config_tree
 from .resources import MirrorTree
@@ -18,6 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  proxnix status --json\n"
             "  proxnix config show\n"
             "  proxnix publish --dry-run\n"
             "  proxnix doctor --site-only\n"
@@ -33,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=["config", "publish", "doctor", "secrets", "tui", "ui", "exercise"],
+        choices=["status", "config", "publish", "doctor", "validation", "secrets", "tui", "ui", "exercise"],
         help="Command group to run",
     )
     parser.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -61,6 +64,24 @@ def _forward(main_fn, args: list[str], *, config: Path | None, accepts_config: b
     return main_fn(forwarded, prog=prog)
 
 
+def _run_status(args: argparse.Namespace) -> int:
+    status = build_status(args.config)
+    if args.json:
+        print_json(ok(status, warnings=list(status["warnings"])))
+        return 0
+
+    config = status["config"]
+    assert isinstance(config, dict)
+    print(f"config: {status['configPath']}")
+    print(f"site: {config.get('siteDir') or '(not set)'}")
+    print(f"containers: {len(status['containers'])}")
+    warnings = status["warnings"]
+    if isinstance(warnings, list):
+        for warning in warnings:
+            print(f"warning: {warning}")
+    return 0
+
+
 def _run_show_config(args: argparse.Namespace) -> int:
     config = load_workstation_config(args.config)
     print(config.to_json())
@@ -83,6 +104,12 @@ def _build_config_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Apply the planned changes instead of running in check mode",
     )
+    return parser
+
+
+def _build_status_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="proxnix status", description="Inspect workstation and site state")
+    parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope")
     return parser
 
 
@@ -124,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "status":
+            status_args = _build_status_parser().parse_args(_strip_remainder_prefix(args.args))
+            status_args.config = args.config
+            return _run_status(status_args)
+
         if args.command == "config":
             config_args = _build_config_parser().parse_args(_strip_remainder_prefix(args.args))
             config_args.config = args.config
@@ -136,10 +168,11 @@ def main(argv: list[str] | None = None) -> int:
             from .publish_cli import main as publish_main
 
             return _forward(publish_main, args.args, config=args.config, accepts_config=True, prog="proxnix publish")
-        if args.command == "doctor":
+        if args.command in {"doctor", "validation"}:
             from .doctor_cli import main as doctor_main
 
-            return _forward(doctor_main, args.args, config=args.config, accepts_config=True, prog="proxnix doctor")
+            prog = "proxnix validation" if args.command == "validation" else "proxnix doctor"
+            return _forward(doctor_main, args.args, config=args.config, accepts_config=True, prog=prog)
         if args.command == "secrets":
             from .secrets_cli import main as secrets_main
 

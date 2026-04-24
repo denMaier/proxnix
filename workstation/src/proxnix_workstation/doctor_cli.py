@@ -8,6 +8,9 @@ from pathlib import Path, PurePosixPath
 
 from .config import load_workstation_config
 from .errors import ConfigError, PlanningError, ProxnixWorkstationError
+from .json_api import error as json_error
+from .json_api import ok as json_ok
+from .json_api import print_json
 from .paths import SitePaths
 from .publish_cli import (
     PublishOptions,
@@ -75,6 +78,47 @@ class DoctorReporter:
         if self.warns > 0:
             return 1
         return 0
+
+    def to_data(self) -> dict[str, object]:
+        sections: list[dict[str, object]] = []
+        current: dict[str, object] | None = None
+        oks = 0
+        infos = 0
+        for line in self.lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                current = {"heading": stripped[1:-1], "entries": []}
+                sections.append(current)
+                continue
+            parts = stripped.split(None, 1)
+            if len(parts) != 2 or current is None:
+                continue
+            level, text = parts[0].lower(), parts[1]
+            if level not in {"ok", "info", "warn", "fail"}:
+                continue
+            entries = current["entries"]
+            assert isinstance(entries, list)
+            entries.append({"level": level, "text": text})
+            if level == "ok":
+                oks += 1
+            elif level == "info":
+                infos += 1
+        return {
+            "sections": sections,
+            "oks": oks,
+            "infos": infos,
+            "warns": self.warns,
+            "fails": self.fails,
+            "exitCode": self.exit_code(),
+        }
+
+
+def _finish(reporter: DoctorReporter, *, json: bool) -> int:
+    if json:
+        print_json(json_ok(reporter.to_data()))
+    else:
+        print(reporter.render())
+    return reporter.exit_code()
 
 
 def validate_provider_scope_payload(
@@ -404,6 +448,7 @@ def build_parser(*, prog: str = "proxnix-doctor") -> argparse.ArgumentParser:
     parser.add_argument("--host-only", action="store_true")
     parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--vmid")
+    parser.add_argument("--json", action="store_true", help="Emit a structured JSON validation result")
     parser.add_argument("hosts", nargs="*")
     return parser
 
@@ -412,7 +457,10 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-doctor") -> int:
     parser = build_parser(prog=prog)
     args = parser.parse_args(argv)
     if args.site_only and args.host_only:
-        print("error: --site-only and --host-only are mutually exclusive")
+        if args.json:
+            print_json(json_error("validation.invalid_args", "--site-only and --host-only are mutually exclusive"))
+        else:
+            print("error: --site-only and --host-only are mutually exclusive")
         return 2
 
     config = load_workstation_config(args.config)
@@ -430,21 +478,19 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-doctor") -> int:
                 lint_site_repo(config, site_paths, options, reporter, temp_root)
 
             if reporter.fails > 0:
-                print(reporter.render())
-                return reporter.exit_code()
+                return _finish(reporter, json=args.json)
 
             if args.site_only:
-                print(reporter.render())
-                return reporter.exit_code()
+                return _finish(reporter, json=args.json)
 
             hosts = list(args.hosts) if args.hosts else list(config.hosts)
             if not hosts:
                 reporter.warn("no hosts configured; skipping remote relay-cache checks")
-                print(reporter.render())
-                return reporter.exit_code()
+                return _finish(reporter, json=args.json)
 
             relay_tree = temp_root / "relay"
             build_publish_tree(config, site_paths, options, relay_tree)
+            provider = load_secret_provider(config, site_paths)
             if not options.config_only and have_host_relay_private_key(config, provider, site_paths):
                 stage_relay_identities_into_tree(config, site_paths, options, relay_tree)
 
@@ -452,10 +498,12 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-doctor") -> int:
                 with SSHSession(config, host, temp_root=temp_root) as session:
                     check_remote_host(config, options, session, relay_tree, reporter)
 
-        print(reporter.render())
-        return reporter.exit_code()
+        return _finish(reporter, json=args.json)
     except (ConfigError, PlanningError, ProxnixWorkstationError) as exc:
-        print(f"error: {exc}")
+        if args.json:
+            print_json(json_error("validation.failed", str(exc)))
+        else:
+            print(f"error: {exc}")
         return 2
 
 

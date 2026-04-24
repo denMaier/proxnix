@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from proxnix_workstation.config import WorkstationConfig
 from proxnix_workstation.doctor_cli import DoctorReporter, lint_site_repo
+from proxnix_workstation.doctor_cli import main as doctor_main
 from proxnix_workstation.paths import SitePaths
 from proxnix_workstation.publish_cli import PublishOptions
 
@@ -60,6 +64,38 @@ class DoctorCliTests(unittest.TestCase):
             rendered = reporter.render()
             self.assertNotIn("no private site dir yet", rendered)
             self.assertNotIn("private site dir present", rendered)
+
+    def test_doctor_json_reports_structured_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_dir = Path(temp_dir) / "site"
+            (site_dir / "containers").mkdir(parents=True)
+            config_path = Path(temp_dir) / "config"
+            config_path.write_text(
+                f"PROXNIX_SITE_DIR='{site_dir}'\nPROXNIX_SECRET_PROVIDER='pykeepass'\n",
+                encoding="utf-8",
+            )
+
+            def fake_build_tree(_config, _site_paths, _options, root: Path) -> None:
+                (root / "containers").mkdir(parents=True)
+
+            output = StringIO()
+            with patch(
+                "proxnix_workstation.doctor_cli.need_publish_tools",
+                return_value=SitePaths(site_dir=site_dir),
+            ), patch(
+                "proxnix_workstation.doctor_cli.load_secret_provider",
+                return_value=_FakeNamedProvider(),
+            ), patch(
+                "proxnix_workstation.doctor_cli.build_publish_tree",
+                side_effect=fake_build_tree,
+            ), redirect_stdout(output):
+                exit_code = doctor_main(["--config", str(config_path), "--site-only", "--config-only", "--json"])
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["data"]["exitCode"], 0)
+            self.assertEqual(payload["data"]["sections"][0]["heading"], "site")
 
 
 if __name__ == "__main__":
