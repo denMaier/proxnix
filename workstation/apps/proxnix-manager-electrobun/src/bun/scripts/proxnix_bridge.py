@@ -5,12 +5,15 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
 
 ASSIGNMENT_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 SECRET_GROUP_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+DOCTOR_HEADING_RE = re.compile(r"^\[(.+)\]$")
+DOCTOR_LINE_RE = re.compile(r"^\s+(OK|WARN|FAIL|INFO)\s+(.+)$")
 
 KNOWN_KEYS = (
     "PROXNIX_SITE_DIR",
@@ -28,7 +31,7 @@ KNOWN_KEYS = (
 
 DEFAULT_CONFIG = {
     "siteDir": "",
-    "sopsMasterIdentity": "~/.ssh/id_ed25519",
+    "sopsMasterIdentity": "",
     "hosts": "",
     "sshIdentity": "",
     "remoteDir": "/var/lib/proxnix",
@@ -45,12 +48,20 @@ def default_config_path() -> Path:
     return base / "proxnix" / "config"
 
 
+def sidebar_metadata_path() -> Path:
+    return default_config_path().parent / "manager-sidebar-state.json"
+
+
 def _expand_home_string(value: str, home: Path) -> str:
     if value == "~":
         return str(home)
     if value.startswith("~/"):
         return str(home / value[2:])
     return value
+
+
+def _normalized_site_key(site_dir: str) -> str:
+    return str(Path(site_dir).expanduser().resolve(strict=False))
 
 
 def _parse_shell_value(raw_value: str, line_number: int) -> str:
@@ -85,6 +96,32 @@ def shell_single_quoted(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def _normalize_sidebar_metadata(raw_value: object) -> dict[str, object]:
+    metadata = raw_value if isinstance(raw_value, dict) else {}
+    labels = metadata.get("labels")
+    normalized_labels: list[str] = []
+    seen: set[str] = set()
+
+    if isinstance(labels, list):
+        for label in labels:
+            if not isinstance(label, str):
+                continue
+            trimmed = label.strip()
+            if not trimmed:
+                continue
+            key = trimmed.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_labels.append(trimmed)
+
+    return {
+        "displayName": str(metadata.get("displayName", "")).strip(),
+        "group": str(metadata.get("group", "")).strip(),
+        "labels": normalized_labels,
+    }
+
+
 def trim_blank_edges(lines: list[str]) -> list[str]:
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -106,6 +143,120 @@ def preserved_config_lines(config_path: Path) -> list[str]:
         preserved.append(raw_line)
 
     return trim_blank_edges(preserved)
+
+
+def load_sidebar_state() -> dict[str, object]:
+    metadata_path = sidebar_metadata_path()
+    if not metadata_path.is_file():
+        return {"sites": {}}
+
+    try:
+        raw_state = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"sites": {}}
+
+    if not isinstance(raw_state, dict):
+        return {"sites": {}}
+
+    raw_sites = raw_state.get("sites")
+    if not isinstance(raw_sites, dict):
+        return {"sites": {}}
+
+    normalized_sites: dict[str, object] = {}
+    for site_key, raw_site_state in raw_sites.items():
+        if not isinstance(site_key, str) or not isinstance(raw_site_state, dict):
+            continue
+        raw_containers = raw_site_state.get("containers")
+        if not isinstance(raw_containers, dict):
+            continue
+        containers: dict[str, object] = {}
+        for vmid, raw_metadata in raw_containers.items():
+            if not isinstance(vmid, str):
+                continue
+            normalized = _normalize_sidebar_metadata(raw_metadata)
+            if (
+                normalized["displayName"]
+                or normalized["group"]
+                or normalized["labels"]
+            ):
+                containers[vmid] = normalized
+        if containers:
+            normalized_sites[site_key] = {"containers": containers}
+
+    return {"sites": normalized_sites}
+
+
+def read_sidebar_metadata(site_dir: str) -> dict[str, dict[str, object]]:
+    if not site_dir:
+        return {}
+
+    state = load_sidebar_state()
+    sites = state.get("sites")
+    if not isinstance(sites, dict):
+        return {}
+
+    site_state = sites.get(_normalized_site_key(site_dir))
+    if not isinstance(site_state, dict):
+        return {}
+
+    containers = site_state.get("containers")
+    if not isinstance(containers, dict):
+        return {}
+
+    return {
+        vmid: _normalize_sidebar_metadata(raw_metadata)
+        for vmid, raw_metadata in containers.items()
+        if isinstance(vmid, str)
+    }
+
+
+def save_sidebar_metadata(payload: dict[str, object]) -> dict[str, object]:
+    vmid = str(payload.get("vmid", "")).strip()
+    raw_metadata = payload.get("metadata")
+
+    if not vmid:
+        raise ValueError("save-sidebar-metadata requires a vmid")
+    if not isinstance(raw_metadata, dict):
+        raise ValueError("save-sidebar-metadata requires a metadata object")
+
+    config, _preserved_keys, _config_path = read_config_payload()
+    site_dir = config["siteDir"]
+    if not site_dir:
+        raise ValueError("set PROXNIX_SITE_DIR before saving sidebar metadata")
+
+    state = load_sidebar_state()
+    sites = state.setdefault("sites", {})
+    if not isinstance(sites, dict):
+        state["sites"] = {}
+        sites = state["sites"]
+
+    site_key = _normalized_site_key(site_dir)
+    site_state = sites.get(site_key)
+    if not isinstance(site_state, dict):
+        site_state = {"containers": {}}
+        sites[site_key] = site_state
+
+    containers = site_state.get("containers")
+    if not isinstance(containers, dict):
+        containers = {}
+        site_state["containers"] = containers
+
+    normalized = _normalize_sidebar_metadata(raw_metadata)
+    if normalized["displayName"] or normalized["group"] or normalized["labels"]:
+        containers[vmid] = normalized
+    else:
+        containers.pop(vmid, None)
+
+    if not containers:
+        sites.pop(site_key, None)
+
+    metadata_path = sidebar_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return snapshot()
 
 
 def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
@@ -134,7 +285,6 @@ def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
             value_for(
                 "PROXNIX_SOPS_MASTER_IDENTITY",
                 "PROXNIX_MASTER_IDENTITY",
-                default=str(home / ".ssh" / "id_ed25519"),
             ),
             home,
         ).strip(),
@@ -178,6 +328,78 @@ def read_container_secret_groups(secret_groups_file: Path) -> list[str]:
     return groups
 
 
+def _load_provider_context() -> tuple[object, object, object] | None:
+    """Try to load the workstation config and secret provider.
+
+    Returns (config, site_paths, provider) or None on failure.
+    """
+    try:
+        from proxnix_workstation.config import load_workstation_config
+        from proxnix_workstation.paths import SitePaths
+        from proxnix_workstation.secret_provider import load_secret_provider
+
+        config = load_workstation_config()
+        site_paths = SitePaths.from_config(config)
+        provider = load_secret_provider(config, site_paths)
+        return config, site_paths, provider
+    except Exception:
+        return None
+
+
+def _check_container_identity(ctx: tuple[object, object, object], vmid: str) -> bool:
+    config, site_paths, provider = ctx
+    try:
+        from proxnix_workstation.provider_keys import have_container_private_key
+
+        return have_container_private_key(config, provider, site_paths, vmid)
+    except Exception:
+        return False
+
+
+def _check_defined_groups(
+    ctx: tuple[object, object, object],
+    attached_group_names: set[str],
+    site_dir: Path,
+) -> list[str]:
+    config, site_paths, provider = ctx
+    try:
+        from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
+        from proxnix_workstation.secret_provider_types import group_scope
+
+        is_embedded = isinstance(provider, EmbeddedSopsProvider)
+    except ImportError:
+        return []
+
+    defined: list[str] = []
+
+    if is_embedded:
+        # For embedded-sops: check if the group store file exists (fast, no decryption).
+        # Also discover groups that have a directory but aren't attached yet.
+        groups_dir = site_dir / "private" / "groups"
+        if groups_dir.is_dir():
+            all_group_names = {
+                entry.name
+                for entry in groups_dir.iterdir()
+                if entry.is_dir() and valid_secret_group_name(entry.name)
+            }
+        else:
+            all_group_names = set()
+        defined = sorted(all_group_names | {
+            g for g in attached_group_names
+            if (site_dir / "private" / "groups" / g / "secrets.sops.yaml").is_file()
+        })
+    else:
+        # For other providers: ask the provider which groups it knows about.
+        for group in sorted(attached_group_names):
+            try:
+                if provider.has_any(group_scope(group)):
+                    defined.append(group)
+            except Exception:
+                pass
+
+    return defined
+
+
 def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], list[str], list[str], list[str]]:
     site_dir_raw = config["siteDir"]
     warnings: list[str] = []
@@ -209,6 +431,8 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
             if entry.is_dir() and entry.name.isdigit():
                 vmids.add(entry.name)
 
+    ctx = _load_provider_context()
+
     attached_group_names: set[str] = set()
     for vmid in sorted(vmids, key=int):
         public_dir = containers_dir / vmid
@@ -226,6 +450,12 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
 
         attached_group_names.update(secret_groups)
 
+        has_identity = (
+            _check_container_identity(ctx, vmid)
+            if ctx is not None
+            else (private_container_dir / "age_identity.sops.yaml").is_file()
+        )
+
         containers.append(
             {
                 "vmid": vmid,
@@ -233,19 +463,22 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
                 "privateContainerPath": str(private_container_dir),
                 "dropins": dropins,
                 "hasConfig": public_dir.is_dir(),
-                "hasSecretStore": (private_container_dir / "secrets.sops.yaml").is_file(),
-                "hasIdentity": (private_container_dir / "age_identity.sops.yaml").is_file(),
+                "hasIdentity": has_identity,
                 "secretGroups": secret_groups,
             }
         )
 
-    groups_dir = private_dir / "groups"
-    if groups_dir.is_dir():
-        defined_groups = sorted(
-            entry.name
-            for entry in groups_dir.iterdir()
-            if entry.is_dir() and valid_secret_group_name(entry.name)
-        )
+    if ctx is not None:
+        defined_groups = _check_defined_groups(ctx, attached_group_names, site_dir)
+    else:
+        # Fallback: scan private/groups/ directories (only correct for embedded-sops)
+        groups_dir = private_dir / "groups"
+        if groups_dir.is_dir():
+            defined_groups = sorted(
+                entry.name
+                for entry in groups_dir.iterdir()
+                if entry.is_dir() and valid_secret_group_name(entry.name)
+            )
 
     attached_groups = sorted(attached_group_names)
     return True, containers, defined_groups, attached_groups, warnings
@@ -254,6 +487,7 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
 def snapshot() -> dict[str, object]:
     config, preserved_keys, config_path = read_config_payload()
     site_dir_exists, containers, defined_groups, attached_groups, warnings = scan_state(config)
+    sidebar_metadata = read_sidebar_metadata(config["siteDir"])
 
     return {
         "configPath": str(config_path),
@@ -265,6 +499,7 @@ def snapshot() -> dict[str, object]:
         "containers": containers,
         "definedSecretGroups": defined_groups,
         "attachedSecretGroups": attached_groups,
+        "sidebarMetadata": sidebar_metadata,
     }
 
 
@@ -304,6 +539,163 @@ def save_config(payload: dict[str, object]) -> dict[str, object]:
     return snapshot()
 
 
+def _run_cli(args: list[str], timeout: int = 120) -> tuple[str, str, int]:
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    return result.stdout, result.stderr, result.returncode
+
+
+def _parse_doctor_output(output: str) -> dict[str, object]:
+    sections: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for line in output.splitlines():
+        heading_match = DOCTOR_HEADING_RE.match(line.strip())
+        if heading_match:
+            current = {"heading": heading_match.group(1), "entries": []}
+            sections.append(current)
+            continue
+        entry_match = DOCTOR_LINE_RE.match(line)
+        if entry_match and current is not None:
+            entries = current["entries"]
+            assert isinstance(entries, list)
+            entries.append({
+                "level": entry_match.group(1).lower(),
+                "text": entry_match.group(2),
+            })
+
+    oks = sum(1 for s in sections for e in s["entries"] if isinstance(e, dict) and e.get("level") == "ok")  # type: ignore[union-attr]
+    warns = sum(1 for s in sections for e in s["entries"] if isinstance(e, dict) and e.get("level") == "warn")  # type: ignore[union-attr]
+    fails = sum(1 for s in sections for e in s["entries"] if isinstance(e, dict) and e.get("level") == "fail")  # type: ignore[union-attr]
+
+    return {"sections": sections, "oks": oks, "warns": warns, "fails": fails}
+
+
+def run_doctor(payload: object) -> dict[str, object]:
+    config, _, _ = read_config_payload()
+    site_dir = config["siteDir"]
+    if not site_dir:
+        return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": "Set site directory first."}
+
+    args = [sys.executable, "-m", "proxnix_workstation.doctor_cli", "--site-only"]
+    opts = payload if isinstance(payload, dict) else {}
+    if opts.get("configOnly"):
+        args.append("--config-only")
+    vmid = opts.get("vmid")
+    if vmid:
+        args.extend(["--vmid", str(vmid)])
+
+    try:
+        stdout, stderr, exit_code = _run_cli(args)
+    except subprocess.TimeoutExpired:
+        return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": "Doctor check timed out."}
+    except Exception as exc:
+        return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": str(exc)}
+
+    result = _parse_doctor_output(stdout)
+    result["exitCode"] = exit_code
+    if not result["sections"] and stderr.strip():
+        result["error"] = stderr.strip()
+    return result
+
+
+def run_publish(payload: object) -> dict[str, object]:
+    config, _, _ = read_config_payload()
+    site_dir = config["siteDir"]
+    if not site_dir:
+        return {"output": "", "exitCode": 1, "error": "Set site directory first."}
+
+    args = [sys.executable, "-m", "proxnix_workstation.publish_cli"]
+    opts = payload if isinstance(payload, dict) else {}
+    if opts.get("dryRun"):
+        args.extend(["--dry-run", "--report-changes"])
+    if opts.get("configOnly"):
+        args.append("--config-only")
+    vmid = opts.get("vmid")
+    if vmid:
+        args.extend(["--vmid", str(vmid)])
+    for host in opts.get("hosts") or []:
+        args.append(str(host))
+
+    try:
+        stdout, stderr, exit_code = _run_cli(args, timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"output": "", "exitCode": 1, "error": "Publish timed out after 5 minutes."}
+    except Exception as exc:
+        return {"output": "", "exitCode": 1, "error": str(exc)}
+
+    return {
+        "output": stdout.strip(),
+        "exitCode": exit_code,
+        "error": stderr.strip() if exit_code != 0 and stderr.strip() else "",
+    }
+
+
+def git_status(_payload: object) -> dict[str, object]:
+    config, _, _ = read_config_payload()
+    site_dir = config["siteDir"]
+    empty: dict[str, object] = {"branch": "", "clean": True, "files": [], "log": [], "error": ""}
+    if not site_dir:
+        empty["error"] = "Set site directory first."
+        return empty
+
+    site_path = Path(site_dir).expanduser()
+    if not site_path.is_dir():
+        empty["error"] = f"Site directory not found: {site_dir}"
+        return empty
+
+    def git(*args: str) -> tuple[str, int]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(site_path), *args],
+                capture_output=True, text=True, timeout=15,
+            )
+            return result.stdout.strip(), result.returncode
+        except Exception:
+            return "", 1
+
+    _, rc = git("rev-parse", "--is-inside-work-tree")
+    if rc != 0:
+        empty["error"] = "Site directory is not a git repository."
+        return empty
+
+    branch_out, _ = git("branch", "--show-current")
+    status_out, _ = git("status", "--porcelain")
+    log_out, _ = git("log", "--oneline", "-15")
+
+    files: list[dict[str, str]] = []
+    for line in status_out.splitlines():
+        if len(line) >= 3:
+            files.append({"status": line[:2].strip() or "?", "path": line[3:]})
+
+    log_entries: list[dict[str, str]] = []
+    for line in log_out.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2:
+            log_entries.append({"hash": parts[0], "message": parts[1]})
+
+    return {
+        "branch": branch_out,
+        "clean": len(files) == 0,
+        "files": files,
+        "log": log_entries,
+        "error": "",
+    }
+
+
+def open_in_editor(payload: object) -> dict[str, object]:
+    editor = os.environ.get("EDITOR", os.environ.get("VISUAL", ""))
+    if not editor:
+        return {"opened": False, "error": "$EDITOR is not set. Export EDITOR in your shell profile."}
+
+    opts = payload if isinstance(payload, dict) else {}
+    path = str(opts.get("path", "")).strip()
+    if not path:
+        return {"opened": False, "error": "No path provided."}
+
+    parts = shlex.split(editor)
+    subprocess.Popen([*parts, path], start_new_session=True)
+    return {"opened": True, "editor": parts[0]}
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(json.dumps({"ok": False, "error": "missing bridge command"}))
@@ -317,6 +709,20 @@ def main(argv: list[str]) -> int:
         elif command == "save-config":
             payload = json.load(sys.stdin)
             result = save_config(payload)
+        elif command == "save-sidebar-metadata":
+            payload = json.load(sys.stdin)
+            result = save_sidebar_metadata(payload)
+        elif command == "run-doctor":
+            payload = json.load(sys.stdin)
+            result = run_doctor(payload)
+        elif command == "run-publish":
+            payload = json.load(sys.stdin)
+            result = run_publish(payload)
+        elif command == "git-status":
+            result = git_status(None)
+        elif command == "open-in-editor":
+            payload = json.load(sys.stdin)
+            result = open_in_editor(payload)
         else:
             raise ValueError(f"unsupported bridge command: {command}")
     except Exception as exc:

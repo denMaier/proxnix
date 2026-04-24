@@ -24,6 +24,9 @@ from typing import Callable
 from proxnix_workstation.config import load_workstation_config as load_python_config
 from proxnix_workstation.git_ops import GitStatus, git_init, git_status, git_diff_summary, git_stage_all, git_commit, git_push
 from proxnix_workstation.paths import SitePaths
+from proxnix_workstation.provider_keys import have_container_private_key
+from proxnix_workstation.secret_provider import load_secret_provider
+from proxnix_workstation.secret_provider_types import group_scope
 from proxnix_workstation.site import collect_site_vmids, read_container_secret_groups
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -226,11 +229,44 @@ printf 'PROXNIX_REMOTE_HOST_RELAY_IDENTITY=%s\\n' "$PROXNIX_REMOTE_HOST_RELAY_ID
 # ─── Site Scanning ──────────────────────────────────────────────
 
 
+def _load_tui_provider(site_dir: str) -> tuple[object, SitePaths, object] | None:
+    """Try to load the workstation config and secret provider for identity/group checks."""
+    try:
+        config = load_python_config()
+        site_paths = SitePaths.from_config(config)
+        provider = load_secret_provider(config, site_paths)
+        return config, site_paths, provider
+    except Exception:
+        return None
+
+
+def _container_has_identity(ctx: tuple[object, SitePaths, object] | None, vmid: str, private_container: Path) -> bool:
+    if ctx is not None:
+        try:
+            config, site_paths, provider = ctx
+            return have_container_private_key(config, provider, site_paths, vmid)
+        except Exception:
+            pass
+    return (private_container / "age_identity.sops.yaml").is_file()
+
+
+def _container_has_secrets(ctx: tuple[object, SitePaths, object] | None, groups: list[str], private_container: Path) -> bool:
+    if ctx is not None and groups:
+        try:
+            _, _, provider = ctx
+            return any(provider.has_any(group_scope(g)) for g in groups)
+        except Exception:
+            pass
+    return (private_container / "secrets.sops.yaml").is_file()
+
+
 def scan_site(site_dir: str) -> list[ContainerInfo]:
     if not site_dir:
         return []
 
     root = Path(site_dir).expanduser()
+    ctx = _load_tui_provider(site_dir)
+
     try:
         site_paths = SitePaths(root)
         vmids = collect_site_vmids(site_paths)
@@ -246,8 +282,8 @@ def scan_site(site_dir: str) -> list[ContainerInfo]:
                 has_config=public_dir.exists(),
                 dropins=dropins,
                 groups=groups,
-                has_secret_store=(private_container / "secrets.sops.yaml").is_file(),
-                has_identity=(private_container / "age_identity.sops.yaml").is_file(),
+                has_secret_store=_container_has_secrets(ctx, groups, private_container),
+                has_identity=_container_has_identity(ctx, vmid, private_container),
             )
 
         return [build(vmid) for vmid in vmids]
@@ -283,8 +319,8 @@ def scan_site(site_dir: str) -> list[ContainerInfo]:
             has_config=public_dir.exists(),
             dropins=dropins,
             groups=groups,
-            has_secret_store=(private_container / "secrets.sops.yaml").is_file(),
-            has_identity=(private_container / "age_identity.sops.yaml").is_file(),
+            has_secret_store=_container_has_secrets(ctx, groups, private_container),
+            has_identity=_container_has_identity(ctx, vmid, private_container),
         )
 
     return [build(vmid) for vmid in sorted(vmids, key=int)]
