@@ -964,6 +964,7 @@ function renderContainerPage(container: ContainerSummary): string {
   const metadata = snapshot ? sidebarMetadataFor(snapshot, container.vmid) : defaultSidebarMetadata();
   const title = metadata.displayName || `VMID ${container.vmid}`;
   const subtitle = metadata.displayName ? `VMID ${container.vmid}` : "Container workspace";
+  const isEmbeddedSops = usesEmbeddedSops(snapshot?.config.secretProvider ?? "");
   const labels =
     metadata.labels.length > 0
       ? `<div class="pill-row">${metadata.labels
@@ -1000,10 +1001,12 @@ function renderContainerPage(container: ContainerSummary): string {
             ${icon("folder")}
             <span>Open Container Dir</span>
           </button>
-          <button class="secondary-button" data-action="open-path" data-path="${escapeHtml(container.privateContainerPath)}">
-            ${icon("folder")}
-            <span>Open Private Dir</span>
-          </button>
+          ${isEmbeddedSops ? `
+            <button class="secondary-button" data-action="open-path" data-path="${escapeHtml(container.privateContainerPath)}">
+              ${icon("folder")}
+              <span>Open Private Dir</span>
+            </button>
+          ` : ""}
         </div>
       </section>
 
@@ -1017,8 +1020,8 @@ function renderContainerPage(container: ContainerSummary): string {
           </div>
         </div>
         <div class="meta-grid">
-          ${renderMetaCard("Public path", container.containerPath)}
-          ${renderMetaCard("Private path", container.privateContainerPath)}
+          ${renderMetaCard("Container path", container.containerPath)}
+          ${isEmbeddedSops ? renderMetaCard("Private path", container.privateContainerPath) : ""}
         </div>
       </section>
 
