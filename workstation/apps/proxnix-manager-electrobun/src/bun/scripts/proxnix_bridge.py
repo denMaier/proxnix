@@ -273,12 +273,12 @@ def _configured_cli(script_name: str) -> Path | None:
 
 
 def _proxnix_command() -> tuple[list[str], dict[str, str]]:
-    bundled_cli = _bundled_cli("proxnix")
-    if bundled_cli is not None:
-        return [str(bundled_cli)], _subprocess_env()
     configured_cli = _configured_cli("proxnix")
     if configured_cli is not None:
         return [str(configured_cli)], _subprocess_env()
+    bundled_cli = _bundled_cli("proxnix")
+    if bundled_cli is not None:
+        return [str(bundled_cli)], _subprocess_env()
     repo_cli = _repo_cli("proxnix")
     if repo_cli is not None:
         return [str(repo_cli)], _subprocess_env()
