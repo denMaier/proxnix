@@ -12,10 +12,24 @@ cask "proxnix-manager" do
   depends_on macos: ">= :ventura"
 
   app "Proxnix Manager.app"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix-publish"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix-secrets"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix-doctor"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix-lxc-exercise"
+  binary "#{appdir}/Proxnix Manager.app/Contents/Resources/bin/proxnix-tui"
 
   caveats do
     <<~EOS
-      ProxnixManager expects these system tools to be available:
+      Installed commands:
+        proxnix
+        proxnix-publish
+        proxnix-secrets
+        proxnix-doctor
+        proxnix-lxc-exercise
+        proxnix-tui
+
+      Runtime tools still expected from the system:
         ssh
         rsync
     EOS

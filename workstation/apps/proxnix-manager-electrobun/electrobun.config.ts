@@ -1,10 +1,12 @@
 import type { ElectrobunConfig } from "electrobun";
 
+const appVersion = process.env.VERSION ?? "0.0.0-dev";
+
 export default {
   app: {
     name: "Proxnix Manager",
     identifier: "org.proxnix.manager",
-    version: "0.0.0-dev",
+    version: appVersion,
     description: "Cross-platform workstation UI for proxnix",
   },
   runtime: {
@@ -26,5 +28,9 @@ export default {
       "src/mainview/index.css": "views/mainview/index.css",
       "src/bun/scripts": "bun/scripts",
     },
+  },
+  scripts: {
+    postBuild: "scripts/postbuild-cli-runtime.ts",
+    postWrap: "scripts/postwrap-cli-runtime.ts",
   },
 } satisfies ElectrobunConfig;

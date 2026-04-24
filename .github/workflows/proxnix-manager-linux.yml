@@ -1,4 +1,4 @@
-name: proxnix-manager-dmg
+name: proxnix-manager-linux
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional Git tag to attach DMG assets to, for example v0.1.0"
+        description: "Optional Git tag to attach Linux app assets to, for example v0.1.0"
         required: false
         type: string
       package_version:
@@ -19,8 +19,8 @@ on:
         type: string
 
 jobs:
-  dmg:
-    runs-on: macos-14
+  linux:
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -56,18 +56,18 @@ jobs:
         working-directory: workstation/apps/proxnix-manager-electrobun
         run: bun install --frozen-lockfile
 
-      - name: Build ProxnixManager DMG
+      - name: Build ProxnixManager Linux archive
         run: |
-          VERSION="$PACKAGE_VERSION" ARCH="arm64" ./workstation/packaging/package-macos.sh
+          VERSION="$PACKAGE_VERSION" ARCH="x64" ./workstation/packaging/package-linux.sh
 
-      - name: Upload DMG artifact
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proxnix-manager-dmg-${{ env.PACKAGE_VERSION }}-arm64
-          path: dist/proxnix-manager-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
+          name: proxnix-manager-linux-${{ env.PACKAGE_VERSION }}-x64
+          path: dist/proxnix-manager-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz
           if-no-files-found: error
 
-      - name: Publish DMG release asset
+      - name: Publish Linux release asset
         if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,4 +76,4 @@ jobs:
           tag="${RELEASE_TAG:-${GITHUB_REF_NAME}}"
           gh release view "$tag" >/dev/null 2>&1 || \
             gh release create "$tag" --title "Release ${tag}" --generate-notes
-          gh release upload "$tag" dist/proxnix-manager-${PACKAGE_VERSION}-macos-arm64.dmg --clobber
+          gh release upload "$tag" dist/proxnix-manager-${PACKAGE_VERSION}-linux-x64.tar.gz --clobber
