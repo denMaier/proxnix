@@ -416,7 +416,7 @@ class PyKeePassAdapter(_BaseNamedAdapter):
         try:
             module = importlib.import_module("pykeepass")
         except ImportError as exc:
-            raise AdapterError("pykeepass is not installed") from exc
+            raise AdapterError(f"pykeepass is not installed for {sys.executable}") from exc
         pykeepass_class = getattr(module, "PyKeePass", None)
         if pykeepass_class is None:
             raise AdapterError("pykeepass module does not expose PyKeePass")
@@ -523,6 +523,7 @@ class PyKeePassAdapter(_BaseNamedAdapter):
             if isinstance(entry.title, str) and entry.title and isinstance(entry.password, str):
                 data[entry.title] = entry.password
         return data
+
 
 class KeePassXCCliAdapter(_BaseNamedAdapter):
     name = "keepassxc"
