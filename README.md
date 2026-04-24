@@ -17,7 +17,7 @@ upgrade and uninstall path.
 ## Repo layout
 
 - `host/` contains the Proxmox-host install/runtime code: hooks, installers, inventory, helper scripts, and the shared managed Nix modules.
-- `workstation/` contains the workstation-authoritative CLI, TUI, Swift app, Nix flake, packaging scripts, and workstation module exports.
+- `workstation/` contains the workstation-authoritative CLI, TUI, Electrobun manager app, Nix flake, packaging scripts, and workstation module exports.
 - `docs/` contains shared human-facing documentation.
 
 ## What you get

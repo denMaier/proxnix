@@ -45,11 +45,12 @@ This page maps every important proxnix path by role.
 | `workstation/nix/` | Workstation package definitions and shared NixOS/nix-darwin module |
 | `workstation/packaging/` | Workstation packaging scripts used by CI and release builds |
 | `workstation/src/` | Publishable Python package source |
-| `workstation/apps/ProxnixManager/` | SwiftUI macOS app |
+| `workstation/apps/proxnix-manager-electrobun/` | Electrobun ProxnixManager app |
 | `packaging/homebrew/` | Homebrew tap scaffolds for the `proxnix-workstation` formula and `ProxnixManager` cask |
 | `.github/workflows/host-packages.yml` | GitHub Actions workflow for host Debian package builds and GitHub release assets |
 | `.github/workflows/pypi-publish.yml` | GitHub Actions workflow for workstation Python package builds and PyPI publishing |
 | `.github/workflows/proxnix-manager-dmg.yml` | GitHub Actions workflow for ProxnixManager DMG builds and release assets |
+| `.github/workflows/proxnix-manager-linux.yml` | GitHub Actions workflow for ProxnixManager Linux archive builds and release assets |
 | `.githooks/` | Repo-managed git hooks, currently release-tag validation on push |
 | `docs/ai/` | AI-agent-focused reference notes and evaluations |
 | `docs/` | Human-facing documentation site |
@@ -78,7 +79,7 @@ Current top-level layout:
 │   └── configuration.nix
 ├── workstation/
 │   ├── flake.nix
-│   ├── apps/ProxnixManager/
+│   ├── apps/proxnix-manager-electrobun/
 │   ├── bin/
 │   ├── legacy/
 │   ├── nix/

@@ -4,7 +4,7 @@ The ergonomic release path is:
 
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
-3. let GitHub Actions publish the host package, the workstation Python package, and the ProxnixManager DMG assets from the pushed tag
+3. let GitHub Actions publish the host package, the workstation Python package, and the ProxnixManager app assets from the pushed tag
 4. render and update the Homebrew tap formula for `proxnix-workstation` and the cask for `ProxnixManager`
 
 ## Install the git hooks
@@ -108,6 +108,11 @@ Pushing a matching `v*` tag triggers:
 - [ProxnixManager](proxnix-manager.md)
 
 Those workflows publish artifacts using the tag as the package version.
+
+The macOS app workflow signs and notarizes the DMG only when the Apple
+Developer ID and notarization secrets are configured. Unsigned CI artifacts are
+acceptable for test builds, but a public cask release should use a signed and
+notarized DMG.
 
 The Homebrew tap remains a separate repo. After tagging a release here, render
 the matching formula and cask with:

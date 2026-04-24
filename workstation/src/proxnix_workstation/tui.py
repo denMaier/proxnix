@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Terminal UI for proxnix workstation workflows.
 
-Mirrors the structure and interaction model of the ProxnixManager SwiftUI app:
-sidebar with sections (Actions / Containers / App), container detail view with
-status tiles, Doctor screen, Settings editor, and color-coded output.
+Mirrors the structure and interaction model of the ProxnixManager GUI: sidebar
+with sections (Actions / Containers / App), container detail view with status
+tiles, Doctor screen, Settings editor, and color-coded output.
 """
 
 from __future__ import annotations
@@ -777,7 +777,7 @@ def selectable_indices(items: list[SidebarItem]) -> list[int]:
 
 
 def render_container_detail(win: curses.window, app: AppState, vmid: str) -> None:
-    """Render the container detail view matching ContainerDetailView.swift."""
+    """Render the container detail view."""
     h, w = win.getmaxyx()
     container = next((c for c in app.containers if c.vmid == vmid), None)
     if container is None:
@@ -1267,7 +1267,7 @@ def activate_git(stdscr: curses.window, app: AppState) -> bool:
 
 
 def render_doctor(win: curses.window, app: AppState) -> None:
-    """Render the Doctor screen matching DoctorView.swift."""
+    """Render the Doctor screen."""
     h, w = win.getmaxyx()
     ds = app.doctor
 
@@ -1469,7 +1469,7 @@ def _parse_doctor_output(raw: str) -> list[DoctorSection]:
 
 
 def render_publish(win: curses.window, app: AppState) -> None:
-    """Render the Publish screen matching PublishOptionsView.swift."""
+    """Render the Publish screen."""
     h, w = win.getmaxyx()
     draw_header_bar(win, "Publish All", "Enter to configure and run")
 
@@ -1625,7 +1625,7 @@ def _run_publish(stdscr: curses.window, app: AppState) -> None:
 
 
 def render_secrets(win: curses.window, app: AppState) -> None:
-    """Render the Secrets screen matching SecretsView.swift."""
+    """Render the Secrets screen."""
     h, w = win.getmaxyx()
     ss = app.secrets
     draw_header_bar(win, "Secrets", "Enter to open actions")
@@ -1926,7 +1926,7 @@ def _perform_secret_action(stdscr: curses.window, app: AppState, action: str) ->
 
 
 def render_settings(win: curses.window, app: AppState) -> None:
-    """Render the Settings screen matching SettingsView.swift."""
+    """Render the Settings screen."""
     h, w = win.getmaxyx()
     draw_header_bar(win, "Settings", "Enter to edit fields")
 
