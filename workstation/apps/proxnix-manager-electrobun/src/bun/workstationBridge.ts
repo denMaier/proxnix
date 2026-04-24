@@ -42,7 +42,8 @@ const cache: {
 };
 
 function resolvePythonCommand(): string[] {
-  const explicit = process.env.PROXNIX_MANAGER_PYTHON?.trim();
+  const configValues = managerConfigValues();
+  const explicit = (process.env.PROXNIX_MANAGER_PYTHON ?? configValues.PROXNIX_MANAGER_PYTHON ?? "").trim();
   if (explicit) {
     return explicit.split(/\s+/).filter(Boolean);
   }
@@ -96,7 +97,14 @@ function resolvePythonCommand(): string[] {
 
 function findNearestVenvPython(): string | null {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const starts = [moduleDir, process.cwd(), dirname(process.argv0)];
+  const scriptsDir = managerConfigValues().PROXNIX_SCRIPTS_DIR?.trim();
+  const starts = [
+    moduleDir,
+    dirname(bridgeScriptPath()),
+    ...(scriptsDir ? [scriptsDir] : []),
+    process.cwd(),
+    dirname(process.argv0),
+  ];
   const seen = new Set<string>();
 
   for (const start of starts) {
@@ -117,6 +125,41 @@ function findNearestVenvPython(): string | null {
   }
 
   return null;
+}
+
+function managerConfigValues(): Record<string, string> {
+  const configPath = resolve(
+    process.env.XDG_CONFIG_HOME?.trim() || resolve(process.env.HOME || "", ".config"),
+    "proxnix",
+    "config",
+  );
+  if (!existsSync(configPath)) {
+    return {};
+  }
+
+  const values: Record<string, string> = {};
+  for (const rawLine of readFileSync(configPath, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    values[match[1]] = unquoteConfigValue(match[2].trim());
+  }
+  return values;
+}
+
+function unquoteConfigValue(value: string): string {
+  if (
+    (value.startsWith("'") && value.endsWith("'")) ||
+    (value.startsWith('"') && value.endsWith('"'))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function bundledResourceCandidates(): string[] {
