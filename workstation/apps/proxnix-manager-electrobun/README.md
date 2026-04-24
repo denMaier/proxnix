@@ -36,7 +36,7 @@ before testing secret providers:
 
 ```bash
 ../../../ci/bootstrap-workstation-venv.sh
-../../../workstation/.venv/bin/python -m pip install -e "../../../workstation[manager]"
+../../../workstation/.venv/bin/python -m pip install pykeepass
 ```
 
 Use a disposable config home to test onboarding without touching your real
@@ -104,8 +104,9 @@ Python resolution order:
 4. Homebrew `python@3.12`
 5. `python3`, `python`, or `py -3`
 
-Packaged builds bundle the workstation source and Manager Python dependencies,
-including `pykeepass`, under the app resources directory.
+Packaged builds bundle the workstation source and core Python dependencies
+under the app resources directory. Optional provider packages such as
+`pykeepass` are not bundled.
 
 Set `PROXNIX_MANAGER_PYTHONPATH` in the app settings or process environment to
 add extra import paths for Manager-only Python integrations. The value uses the

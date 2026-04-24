@@ -149,10 +149,11 @@ repo version of `proxnix-workstation` into that repo-local virtualenv.
 ./ci/bootstrap-workstation-venv.sh
 ```
 
-For local Proxnix Manager work, install the Manager extra after bootstrapping:
+For local Proxnix Manager work with the `pykeepass` provider, install
+`pykeepass` after bootstrapping:
 
 ```bash
-workstation/.venv/bin/python -m pip install -e "workstation[manager]"
+workstation/.venv/bin/python -m pip install pykeepass
 ```
 
 If a Manager-only integration needs extra import paths, set

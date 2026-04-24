@@ -50,7 +50,7 @@ jobs:
         run: |
           python -m venv workstation/.venv
           workstation/.venv/bin/python -m pip install --upgrade pip
-          workstation/.venv/bin/python -m pip install -e "workstation[manager]"
+          workstation/.venv/bin/python -m pip install "cryptography>=44"
 
       - name: Install Electrobun app dependencies
         working-directory: workstation/apps/proxnix-manager-electrobun

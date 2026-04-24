@@ -249,9 +249,6 @@ python3 -m twine upload dist/*
   SDK-backed providers expect their Python packages plus SDK authentication:
   `onepassword` expects `onepassword-sdk`,
   and `bitwarden` expects `bitwarden-sdk`.
-- The `manager` optional dependency extra installs Python packages used by the
-  packaged Proxnix Manager secret-provider workflows:
-  `python -m pip install "proxnix-workstation[manager]"`.
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.
