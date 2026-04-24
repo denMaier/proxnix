@@ -26,6 +26,7 @@ KNOWN_KEYS = (
     "PROXNIX_SECRET_PROVIDER",
     "PROXNIX_SECRET_PROVIDER_COMMAND",
     "PROXNIX_SCRIPTS_DIR",
+    "PROXNIX_MANAGER_PYTHONPATH",
 )
 
 DEFAULT_CONFIG = {
@@ -39,6 +40,7 @@ DEFAULT_CONFIG = {
     "secretProvider": "embedded-sops",
     "secretProviderCommand": "",
     "scriptsDir": "",
+    "managerPythonPath": "",
 }
 
 SITE_NIX_SCAFFOLD = """\
@@ -95,6 +97,8 @@ def _pythonpath_entries() -> list[str]:
         venv_site_packages = _repo_venv_site_packages(repo_root)
         entries.extend(venv_site_packages)
 
+    entries.extend(_manager_pythonpath_entries())
+
     deduped: list[str] = []
     seen: set[str] = set()
     for entry in entries:
@@ -102,6 +106,26 @@ def _pythonpath_entries() -> list[str]:
             seen.add(entry)
             deduped.append(entry)
     return deduped
+
+
+def _manager_pythonpath_entries() -> list[str]:
+    raw_value = os.environ.get("PROXNIX_MANAGER_PYTHONPATH", "").strip()
+    config_path = default_config_path()
+    if config_path.is_file():
+        try:
+            raw_value = parse_config_lines(config_path.read_text(encoding="utf-8")).get(
+                "PROXNIX_MANAGER_PYTHONPATH", raw_value
+            )
+        except ValueError:
+            pass
+
+    home = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+    entries: list[str] = []
+    for raw_entry in raw_value.split(os.pathsep):
+        entry = _expand_home_string(raw_entry.strip(), home)
+        if entry:
+            entries.append(entry)
+    return entries
 
 
 def _ensure_pythonpath_bootstrap() -> None:
@@ -412,6 +436,7 @@ def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
         or "embedded-sops",
         "secretProviderCommand": value_for("PROXNIX_SECRET_PROVIDER_COMMAND").strip(),
         "scriptsDir": _expand_home_string(value_for("PROXNIX_SCRIPTS_DIR"), home).strip(),
+        "managerPythonPath": value_for("PROXNIX_MANAGER_PYTHONPATH").strip(),
     }
 
     return payload, preserved_keys, config_path

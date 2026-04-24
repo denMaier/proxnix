@@ -264,6 +264,8 @@ Packaged Manager builds include the workstation CLI wrappers and Manager Python
 dependencies inside the app bundle. Development builds prefer
 `workstation/.venv/bin/python`, so optional Python providers such as
 `pykeepass` should be installed into that venv rather than the system Python.
+For custom Manager-only Python modules, set `PROXNIX_MANAGER_PYTHONPATH` in the
+Manager settings or config file.
 
 See [Proxnix Manager](../operations/proxnix-manager.md).
 

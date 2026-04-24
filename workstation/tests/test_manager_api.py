@@ -120,6 +120,25 @@ class ManagerApiTests(unittest.TestCase):
             self.assertIn("PROXNIX_SITE_DIR='/new/site'", text)
             self.assertIn("PROXNIX_PYKEEPASS_DATABASE='~/secrets/proxnix.kdbx'", text)
 
+    def test_config_state_and_save_manage_manager_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Path(temp_dir) / "config"
+            config.write_text("PROXNIX_MANAGER_PYTHONPATH='~/src/provider:/opt/provider'\n", encoding="utf-8")
+
+            state = build_config_state(config)
+            self.assertEqual(
+                state["config"]["managerPythonPath"],
+                f"{Path.home()}/src/provider:/opt/provider",
+            )
+            self.assertNotIn("PROXNIX_MANAGER_PYTHONPATH", state["preservedKeys"])
+
+            state = save_config(config, {"managerPythonPath": "/tmp/provider"})
+
+            self.assertEqual(state["config"]["managerPythonPath"], "/tmp/provider")
+            self.assertNotIn("PROXNIX_MANAGER_PYTHONPATH", state["preservedKeys"])
+            text = config.read_text(encoding="utf-8")
+            self.assertIn("PROXNIX_MANAGER_PYTHONPATH='/tmp/provider'", text)
+
     def test_set_config_value_rejects_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = Path(temp_dir) / "config"

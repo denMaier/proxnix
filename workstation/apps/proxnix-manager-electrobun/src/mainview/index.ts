@@ -213,6 +213,7 @@ function defaultConfig(): ProxnixConfig {
     secretProvider: "embedded-sops",
     secretProviderCommand: "",
     scriptsDir: "",
+    managerPythonPath: "",
   };
 }
 
@@ -277,6 +278,7 @@ function normalizeConfig(config: Partial<ProxnixConfig> | null | undefined): Pro
     secretProvider: normalizeString(config?.secretProvider ?? base.secretProvider) || base.secretProvider,
     secretProviderCommand: normalizeString(config?.secretProviderCommand ?? base.secretProviderCommand),
     scriptsDir: normalizeString(config?.scriptsDir ?? base.scriptsDir),
+    managerPythonPath: normalizeString(config?.managerPythonPath ?? base.managerPythonPath),
   };
 }
 
@@ -1372,6 +1374,7 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
             )
           : ""}
         ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix command wrappers.", undefined, true)}
+        ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Advanced: extra Python import paths for the Manager bridge, separated like PYTHONPATH.", undefined, true)}
       </div>
     </section>
   `;

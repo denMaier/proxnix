@@ -11,6 +11,7 @@ export interface ProxnixConfig {
   secretProvider: string;
   secretProviderCommand: string;
   scriptsDir: string;
+  managerPythonPath: string;
 }
 
 export interface ContainerSummary {

@@ -25,6 +25,7 @@ CONFIG_FIELDS = {
     "secretProvider": "PROXNIX_SECRET_PROVIDER",
     "secretProviderCommand": "PROXNIX_SECRET_PROVIDER_COMMAND",
     "scriptsDir": "PROXNIX_SCRIPTS_DIR",
+    "managerPythonPath": "PROXNIX_MANAGER_PYTHONPATH",
 }
 
 DEFAULT_CONFIG = {
@@ -38,6 +39,7 @@ DEFAULT_CONFIG = {
     "secretProvider": "embedded-sops",
     "secretProviderCommand": "",
     "scriptsDir": "",
+    "managerPythonPath": "",
 }
 
 SITE_NIX_SCAFFOLD = """\
@@ -84,17 +86,19 @@ def _config_payload(config: WorkstationConfig) -> dict[str, object]:
         "secretProvider": config.secret_provider,
         "secretProviderCommand": config.secret_provider_command or "",
         "scriptsDir": "" if config.scripts_dir is None else str(config.scripts_dir),
+        "managerPythonPath": provider_env.get("PROXNIX_MANAGER_PYTHONPATH", ""),
     }
 
 
 def build_config_state(config_file: Path | None = None) -> dict[str, object]:
     config = load_workstation_config(config_file)
     provider_env = config.provider_environment_map()
+    managed_keys = set(CONFIG_FIELDS.values())
     return {
         "path": str(config.config_file),
         "exists": config.config_file.is_file(),
         "config": _config_payload(config),
-        "preservedKeys": sorted(provider_env),
+        "preservedKeys": sorted(key for key in provider_env if key not in managed_keys),
     }
 
 

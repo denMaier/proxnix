@@ -155,6 +155,10 @@ For local Proxnix Manager work, install the Manager extra after bootstrapping:
 workstation/.venv/bin/python -m pip install -e "workstation[manager]"
 ```
 
+If a Manager-only integration needs extra import paths, set
+`PROXNIX_MANAGER_PYTHONPATH` through the app settings or in
+`~/.config/proxnix/config`.
+
 ### `ci/release.sh`
 
 One-command release flow:

@@ -102,6 +102,12 @@ Interpreter selection is:
 4. Homebrew `python@3.12`
 5. `python3`, `python`, or Windows `py -3` from `PATH`
 
+Advanced imports can be added with `PROXNIX_MANAGER_PYTHONPATH`, either in the
+shared proxnix config or in the Manager process environment. This is scoped to
+the Manager bridge and its workstation CLI subprocesses. Use it for local or
+third-party provider modules that are not bundled with the app; do not use it
+as the normal way to find `proxnix_workstation` or `pykeepass`.
+
 For local development, prepare the repo-local environment before running the
 app:
 
