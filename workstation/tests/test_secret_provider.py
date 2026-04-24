@@ -19,6 +19,7 @@ from proxnix_workstation.secret_provider import ExecSecretProvider, NamedSecretP
 from proxnix_workstation.paths import SitePaths
 from proxnix_workstation.errors import ProxnixWorkstationError
 from proxnix_workstation.secret_provider_adapters import (
+    AdapterError,
     BitwardenSecretsAdapter,
     BitwardenSdkAdapter,
     GoPassAdapter,
@@ -543,6 +544,41 @@ class NamedAdapterTests(unittest.TestCase):
         self.assertIn("entry.delete()", calls[4][10])
         self.assertEqual(inputs, ["db-password\n"] * 5)
 
+    def test_passhole_adapter_defaults_password_cache_to_ten_minutes(self) -> None:
+        adapter = PassholeAdapter()
+        calls: list[list[str]] = []
+
+        def fake_run_command(args, **kwargs):
+            calls.append(list(args))
+            return CompletedProcess(args=args, returncode=0, stdout="[]\n", stderr="")
+
+        with patch.dict("os.environ", {"PROXNIX_PASSHOLE_DATABASE": "/tmp/proxnix.kdbx"}, clear=True):
+            with patch("proxnix_workstation.secret_provider_adapters.run_command", side_effect=fake_run_command):
+                adapter.list(scope="shared", vmid=None, group=None)
+
+        self.assertIn("--cache-timeout", calls[0])
+        cache_timeout_index = calls[0].index("--cache-timeout")
+        self.assertEqual(calls[0][cache_timeout_index + 1], "600")
+
+    def test_passhole_adapter_can_disable_password_cache(self) -> None:
+        adapter = PassholeAdapter()
+        calls: list[list[str]] = []
+
+        def fake_run_command(args, **kwargs):
+            calls.append(list(args))
+            return CompletedProcess(args=args, returncode=0, stdout="[]\n", stderr="")
+
+        with patch.dict(
+            "os.environ",
+            {"PROXNIX_PASSHOLE_DATABASE": "/tmp/proxnix.kdbx", "PROXNIX_PASSHOLE_NO_CACHE": "1"},
+            clear=True,
+        ):
+            with patch("proxnix_workstation.secret_provider_adapters.run_command", side_effect=fake_run_command):
+                adapter.list(scope="shared", vmid=None, group=None)
+
+        self.assertIn("--no-cache", calls[0])
+        self.assertNotIn("--cache-timeout", calls[0])
+
     def test_pykeepass_adapter_reads_and_writes_database(self) -> None:
         adapter = PyKeePassAdapter()
         fake_kp = self._FakePyKeePass()
@@ -568,21 +604,95 @@ class NamedAdapterTests(unittest.TestCase):
 
     def test_pykeepass_adapter_uses_agent_derived_password_when_configured(self) -> None:
         adapter = PyKeePassAdapter()
+        with tempfile.TemporaryDirectory(prefix="proxnix-test.") as temp_dir:
+            env = {
+                "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
+                "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+                "XDG_CACHE_HOME": temp_dir,
+            }
+            with patch.dict("os.environ", env, clear=True):
+                with patch(
+                    "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
+                    return_value="derived-password",
+                ) as derive_mock:
+                    self.assertEqual(adapter._password(), "derived-password")
+
+        derive_mock.assert_called_once_with("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAagentkey")
+
+    def test_pykeepass_adapter_caches_agent_password_for_ten_minutes(self) -> None:
+        adapter = PyKeePassAdapter()
+        with tempfile.TemporaryDirectory(prefix="proxnix-test.") as temp_dir:
+            env = {
+                "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
+                "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+                "XDG_CACHE_HOME": temp_dir,
+            }
+            with patch.dict("os.environ", env, clear=True):
+                with patch(
+                    "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
+                    return_value="derived-password",
+                ) as derive_mock:
+                    self.assertEqual(adapter._password(), "derived-password")
+                    self.assertEqual(adapter._password(), "derived-password")
+
+        derive_mock.assert_called_once_with("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAagentkey")
+
+    def test_pykeepass_adapter_can_disable_agent_password_cache(self) -> None:
+        adapter = PyKeePassAdapter()
+        with tempfile.TemporaryDirectory(prefix="proxnix-test.") as temp_dir:
+            env = {
+                "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
+                "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+                "PROXNIX_PYKEEPASS_NO_CACHE": "1",
+                "XDG_CACHE_HOME": temp_dir,
+            }
+            with patch.dict("os.environ", env, clear=True):
+                with patch(
+                    "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
+                    side_effect=["first-password", "second-password"],
+                ) as derive_mock:
+                    self.assertEqual(adapter._password(), "first-password")
+                    self.assertEqual(adapter._password(), "second-password")
+
+        self.assertEqual(derive_mock.call_count, 2)
+
+    def test_pykeepass_agent_password_cache_expires(self) -> None:
+        adapter = PyKeePassAdapter()
+        with tempfile.TemporaryDirectory(prefix="proxnix-test.") as temp_dir:
+            env = {
+                "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
+                "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+                "PROXNIX_PYKEEPASS_CACHE_TIMEOUT": "1",
+                "XDG_CACHE_HOME": temp_dir,
+            }
+            with patch.dict("os.environ", env, clear=True):
+                with patch("proxnix_workstation.secret_provider_adapters.time.time", side_effect=[100, 102, 102]):
+                    with patch(
+                        "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
+                        side_effect=["first-password", "second-password"],
+                    ) as derive_mock:
+                        self.assertEqual(adapter._password(), "first-password")
+                        self.assertEqual(adapter._password(), "second-password")
+
+        self.assertEqual(derive_mock.call_count, 2)
+
+    def test_pykeepass_adapter_rejects_invalid_cache_timeout(self) -> None:
+        adapter = PyKeePassAdapter()
         with patch.dict(
             "os.environ",
             {
                 "PROXNIX_PYKEEPASS_DATABASE": "/tmp/proxnix.kdbx",
                 "PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY": "ssh-ed25519 AAAAagentkey",
+                "PROXNIX_PYKEEPASS_CACHE_TIMEOUT": "ten",
             },
-            clear=False,
+            clear=True,
         ):
             with patch(
                 "proxnix_workstation.secret_provider_adapters.derive_pykeepass_agent_password",
                 return_value="derived-password",
-            ) as derive_mock:
-                self.assertEqual(adapter._password(), "derived-password")
-
-        derive_mock.assert_called_once_with("/tmp/proxnix.kdbx", "ssh-ed25519 AAAAagentkey")
+            ):
+                with self.assertRaises(AdapterError):
+                    adapter._password()
 
     def test_pykeepass_adapter_opens_database_once_per_instance(self) -> None:
         adapter = PyKeePassAdapter()

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import hashlib
 import importlib
 import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from .errors import ProxnixWorkstationError
@@ -168,6 +170,7 @@ class GoPassAdapter(_PasswordStoreAdapter):
 
 class PassholeAdapter(_BaseNamedAdapter):
     name = "passhole"
+    default_cache_timeout_seconds = "600"
 
     def _database_args(self) -> list[str]:
         args: list[str] = []
@@ -192,8 +195,11 @@ class PassholeAdapter(_BaseNamedAdapter):
         no_cache = os.environ.get("PROXNIX_PASSHOLE_NO_CACHE", "").strip().lower()
         if no_cache in {"1", "true", "yes"}:
             args.append("--no-cache")
-        cache_timeout = os.environ.get("PROXNIX_PASSHOLE_CACHE_TIMEOUT", "").strip()
-        if cache_timeout:
+        else:
+            cache_timeout = (
+                os.environ.get("PROXNIX_PASSHOLE_CACHE_TIMEOUT", "").strip()
+                or self.default_cache_timeout_seconds
+            )
             args.extend(["--cache-timeout", cache_timeout])
         return args
 
@@ -302,10 +308,84 @@ class PassholeAdapter(_BaseNamedAdapter):
 
 class PyKeePassAdapter(_BaseNamedAdapter):
     name = "pykeepass"
+    default_cache_timeout_seconds = 600
 
     def __init__(self) -> None:
         super().__init__()
         self._database = None
+
+    def _cache_timeout_seconds(self) -> int:
+        raw_value = os.environ.get("PROXNIX_PYKEEPASS_CACHE_TIMEOUT", "").strip()
+        if not raw_value:
+            return self.default_cache_timeout_seconds
+        try:
+            return max(0, int(raw_value))
+        except ValueError as exc:
+            raise AdapterError("PROXNIX_PYKEEPASS_CACHE_TIMEOUT must be an integer number of seconds") from exc
+
+    def _cache_enabled(self) -> bool:
+        no_cache = os.environ.get("PROXNIX_PYKEEPASS_NO_CACHE", "").strip().lower()
+        return no_cache not in {"1", "true", "yes"} and self._cache_timeout_seconds() > 0
+
+    def _password_cache_path(self, database_path: str, agent_public_key: str) -> Path:
+        cache_base = (
+            os.environ.get("XDG_RUNTIME_DIR", "").strip()
+            or os.environ.get("XDG_CACHE_HOME", "").strip()
+            or str(Path.home() / ".cache")
+        )
+        context = os.environ.get("PROXNIX_PYKEEPASS_AGENT_CONTEXT", "").strip() or Path(database_path).name
+        cache_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "database": str(Path(database_path).expanduser()),
+                    "publicKey": agent_public_key.strip(),
+                    "context": context,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return Path(cache_base).expanduser() / "proxnix" / "pykeepass-agent-passwords" / f"{cache_key}.json"
+
+    def _cached_agent_password(self, database_path: str, agent_public_key: str) -> str | None:
+        if not self._cache_enabled():
+            return None
+        cache_path = self._password_cache_path(database_path, agent_public_key)
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        password = payload.get("password")
+        cached_at = payload.get("cachedAt")
+        if not isinstance(password, str) or not isinstance(cached_at, (int, float)):
+            return None
+        if time.time() - float(cached_at) > self._cache_timeout_seconds():
+            return None
+        return password
+
+    def _write_agent_password_cache(self, database_path: str, agent_public_key: str, password: str) -> None:
+        if not self._cache_enabled():
+            return
+        cache_path = self._password_cache_path(database_path, agent_public_key)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.parent.chmod(0o700)
+            cache_path.write_text(
+                json.dumps({"cachedAt": time.time(), "password": password}) + "\n",
+                encoding="utf-8",
+            )
+            cache_path.chmod(0o600)
+        except OSError:
+            pass
+
+    def _agent_password(self, database_path: str, agent_public_key: str) -> str:
+        cached = self._cached_agent_password(database_path, agent_public_key)
+        if cached is not None:
+            return cached
+        password = derive_pykeepass_agent_password(database_path, agent_public_key)
+        self._write_agent_password_cache(database_path, agent_public_key, password)
+        return password
 
     def _database_path(self) -> str:
         path = _env_path("PROXNIX_PYKEEPASS_DATABASE")
@@ -329,7 +409,7 @@ class PyKeePassAdapter(_BaseNamedAdapter):
             agent_public_key = os.environ.get("PROXNIX_PYKEEPASS_AGENT_PUBLIC_KEY", "").strip()
             if not agent_public_key:
                 return None
-            return derive_pykeepass_agent_password(self._database_path(), agent_public_key)
+            return self._agent_password(self._database_path(), agent_public_key)
         return Path(password_file).expanduser().read_text(encoding="utf-8").rstrip("\n")
 
     def _pykeepass_class(self):
