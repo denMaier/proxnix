@@ -8,6 +8,53 @@ from .paths import SitePaths
 from .site import collect_site_vmids, read_container_secret_groups, valid_secret_group_name
 
 
+CONFIG_FIELDS = {
+    "siteDir": "PROXNIX_SITE_DIR",
+    "sopsMasterIdentity": "PROXNIX_SOPS_MASTER_IDENTITY",
+    "hosts": "PROXNIX_HOSTS",
+    "sshIdentity": "PROXNIX_SSH_IDENTITY",
+    "remoteDir": "PROXNIX_REMOTE_DIR",
+    "remotePrivDir": "PROXNIX_REMOTE_PRIV_DIR",
+    "remoteHostRelayIdentity": "PROXNIX_REMOTE_HOST_RELAY_IDENTITY",
+    "secretProvider": "PROXNIX_SECRET_PROVIDER",
+    "secretProviderCommand": "PROXNIX_SECRET_PROVIDER_COMMAND",
+    "scriptsDir": "PROXNIX_SCRIPTS_DIR",
+}
+
+DEFAULT_CONFIG = {
+    "siteDir": "",
+    "sopsMasterIdentity": "",
+    "hosts": "",
+    "sshIdentity": "",
+    "remoteDir": "/var/lib/proxnix",
+    "remotePrivDir": "/var/lib/proxnix/private",
+    "remoteHostRelayIdentity": "/etc/proxnix/host_relay_identity",
+    "secretProvider": "embedded-sops",
+    "secretProviderCommand": "",
+    "scriptsDir": "",
+}
+
+
+def _shell_single_quoted(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _preserved_config_lines(config_path: Path) -> list[str]:
+    if not config_path.is_file():
+        return []
+
+    managed_keys = set(CONFIG_FIELDS.values())
+    preserved: list[str] = []
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key = stripped.removeprefix("export ").split("=", 1)[0].strip()
+        if key.startswith("PROXNIX_") and key not in managed_keys:
+            preserved.append(raw_line)
+    return preserved
+
+
 def _config_payload(config: WorkstationConfig) -> dict[str, object]:
     provider_env = config.provider_environment_map()
     sops_master_identity = (
@@ -27,6 +74,57 @@ def _config_payload(config: WorkstationConfig) -> dict[str, object]:
         "secretProviderCommand": config.secret_provider_command or "",
         "scriptsDir": "" if config.scripts_dir is None else str(config.scripts_dir),
     }
+
+
+def build_config_state(config_file: Path | None = None) -> dict[str, object]:
+    config = load_workstation_config(config_file)
+    provider_env = config.provider_environment_map()
+    return {
+        "path": str(config.config_file),
+        "exists": config.config_file.is_file(),
+        "config": _config_payload(config),
+        "preservedKeys": sorted(provider_env),
+    }
+
+
+def save_config(config_file: Path | None, values: dict[str, object]) -> dict[str, object]:
+    current = build_config_state(config_file)
+    raw_config = current["config"]
+    assert isinstance(raw_config, dict)
+    config = {
+        **DEFAULT_CONFIG,
+        **{str(key): str(value) for key, value in raw_config.items()},
+        **{str(key): str(value) for key, value in values.items()},
+    }
+
+    unknown = sorted(set(config) - set(CONFIG_FIELDS))
+    if unknown:
+        raise ValueError(f"unsupported config field(s): {', '.join(unknown)}")
+
+    config_path = Path(str(current["path"]))
+    preserved_lines = _preserved_config_lines(config_path)
+    lines = ["# proxnix workstation config"]
+    for field, env_key in CONFIG_FIELDS.items():
+        value = str(config[field]).strip()
+        if value:
+            lines.append(f"{env_key}={_shell_single_quoted(value)}")
+    if preserved_lines:
+        lines.append("")
+        lines.extend(preserved_lines)
+
+    before = config_path.read_text(encoding="utf-8") if config_path.is_file() else None
+    next_text = "\n".join(lines) + "\n"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(next_text, encoding="utf-8")
+    state = build_config_state(config_path)
+    state["changed"] = before != next_text
+    return state
+
+
+def set_config_value(config_file: Path | None, key: str, value: str) -> dict[str, object]:
+    if key not in CONFIG_FIELDS:
+        raise ValueError(f"unsupported config field: {key}")
+    return save_config(config_file, {key: value})
 
 
 def _defined_secret_groups(site_paths: SitePaths) -> list[str]:

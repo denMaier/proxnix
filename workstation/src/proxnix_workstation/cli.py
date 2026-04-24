@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import tempfile
 from pathlib import Path
 
 from .config import load_workstation_config
 from .errors import ProxnixWorkstationError
 from .json_api import ok, print_json
-from .manager_api import build_status
+from .manager_api import build_config_state, build_status, save_config, set_config_value
 from .planning import PlanRunner
 from .publish_tree import build_desired_config_tree
 from .resources import MirrorTree
@@ -88,10 +89,65 @@ def _run_show_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_get_config(args: argparse.Namespace) -> int:
+    state = build_config_state(args.config)
+    if args.key:
+        config = state["config"]
+        assert isinstance(config, dict)
+        if args.key not in config:
+            raise ProxnixWorkstationError(f"unsupported config field: {args.key}")
+        state = {
+            "path": state["path"],
+            "exists": state["exists"],
+            "key": args.key,
+            "value": config[args.key],
+        }
+    print_json(ok(state))
+    return 0
+
+
+def _run_set_config(args: argparse.Namespace) -> int:
+    if args.stdin_json:
+        raw = json.load(args.stdin)
+        if not isinstance(raw, dict):
+            raise ProxnixWorkstationError("config set --stdin-json requires a JSON object")
+        raw_config = raw.get("config", raw)
+        if not isinstance(raw_config, dict):
+            raise ProxnixWorkstationError("config set --stdin-json requires a config object")
+        try:
+            state = save_config(args.config, raw_config)
+        except ValueError as exc:
+            raise ProxnixWorkstationError(str(exc)) from exc
+    else:
+        if args.key is None or args.value is None:
+            raise ProxnixWorkstationError("config set requires KEY VALUE or --stdin-json")
+        try:
+            state = set_config_value(args.config, args.key, args.value)
+        except ValueError as exc:
+            raise ProxnixWorkstationError(str(exc)) from exc
+
+    if args.json:
+        print_json(ok(state))
+    else:
+        changed = "changed" if state.get("changed") else "unchanged"
+        print(f"config {changed}: {state['path']}")
+    return 0
+
+
 def _build_config_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="proxnix config", description="Inspect or plan workstation config state")
     subparsers = parser.add_subparsers(dest="config_command", required=True)
     subparsers.add_parser("show", help="Print normalized workstation config")
+
+    get_parser = subparsers.add_parser("get", help="Print manager-facing workstation config")
+    get_parser.add_argument("key", nargs="?", help="Optional config field to read")
+    get_parser.add_argument("--json", action="store_true", default=True, help=argparse.SUPPRESS)
+
+    set_parser = subparsers.add_parser("set", help="Update manager-facing workstation config")
+    set_parser.add_argument("key", nargs="?")
+    set_parser.add_argument("value", nargs="?")
+    set_parser.add_argument("--stdin-json", action="store_true", help="Read a config object from stdin")
+    set_parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope")
 
     plan_parser = subparsers.add_parser(
         "plan-tree",
@@ -159,8 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "config":
             config_args = _build_config_parser().parse_args(_strip_remainder_prefix(args.args))
             config_args.config = args.config
+            config_args.stdin = getattr(args, "stdin", None)
             if config_args.config_command == "show":
                 return _run_show_config(config_args)
+            if config_args.config_command == "get":
+                return _run_get_config(config_args)
+            if config_args.config_command == "set":
+                import sys
+
+                config_args.stdin = sys.stdin
+                return _run_set_config(config_args)
             if config_args.config_command == "plan-tree":
                 return _run_plan_config_tree(config_args)
 
