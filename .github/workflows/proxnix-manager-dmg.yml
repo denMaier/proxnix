@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional Git tag to attach DMG assets to, for example v0.1.0"
+        description: "Optional Git tag to attach app assets to, for example v0.1.0"
         required: false
         type: string
       package_version:
@@ -56,7 +56,47 @@ jobs:
         working-directory: workstation/apps/proxnix-manager-electrobun
         run: bun install --frozen-lockfile
 
+      - name: Import Apple Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.ELECTROBUN_APPLEAPIKEY }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "PROXNIX_MANAGER_MACOS_CODESIGN=0" >> "$GITHUB_ENV"
+            echo "PROXNIX_MANAGER_MACOS_NOTARIZE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          keychain_path="$RUNNER_TEMP/proxnix-signing.keychain-db"
+          certificate_path="$RUNNER_TEMP/proxnix-developer-id.p12"
+
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security list-keychain -d user -s "$keychain_path" "$HOME/Library/Keychains/login.keychain-db"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          echo "PROXNIX_MANAGER_MACOS_CODESIGN=1" >> "$GITHUB_ENV"
+          if [ -n "$ELECTROBUN_TEAMID" ] && { [ -n "$ELECTROBUN_APPLEIDPASS" ] || [ -n "$ELECTROBUN_APPLEAPIKEY" ]; }; then
+            echo "PROXNIX_MANAGER_MACOS_NOTARIZE=1" >> "$GITHUB_ENV"
+          else
+            echo "PROXNIX_MANAGER_MACOS_NOTARIZE=0" >> "$GITHUB_ENV"
+          fi
+
       - name: Build ProxnixManager DMG
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ secrets.ELECTROBUN_APPLEAPIISSUER }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.ELECTROBUN_APPLEAPIKEY }}
+          ELECTROBUN_APPLEAPIKEYPATH: ${{ secrets.ELECTROBUN_APPLEAPIKEYPATH }}
         run: |
           VERSION="$PACKAGE_VERSION" ARCH="arm64" ./workstation/packaging/package-macos.sh
 

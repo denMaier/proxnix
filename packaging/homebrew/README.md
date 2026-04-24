@@ -76,11 +76,15 @@ denMaier/homebrew-tap
 The simplest flow is:
 
 1. tag a release in this repo
-2. let GitHub Actions upload the DMG assets to the release
+2. let GitHub Actions upload the app assets to the release
 3. render the matching workstation formula with `ci/render-homebrew-formula.sh`
 4. render the matching app cask with `ci/render-homebrew-cask.sh`
 5. commit the rendered files into the tap repo
 6. users install with `brew install denMaier/tap/proxnix-workstation` or `brew install --cask denMaier/tap/proxnix-manager`
+
+Public macOS cask releases should use a Developer ID signed and notarized DMG.
+Unsigned test casks can still be installed, but macOS may require quarantine to
+be removed from the installed app before it opens.
 
 If you want the shortest possible Homebrew syntax and easy ecosystem
 integration, keep the tap on GitHub.

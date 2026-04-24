@@ -32,6 +32,15 @@ cask "proxnix-manager" do
       Runtime tools still expected from the system:
         ssh
         rsync
+
+      Unsigned test builds are ad-hoc signed so they usually reach the
+      Privacy & Security "Open Anyway" approval path. If this cask is rendered
+      from an unsigned test build and macOS still refuses to open it, remove
+      quarantine for the installed app:
+        xattr -dr com.apple.quarantine "#{appdir}/Proxnix Manager.app"
+
+      Release builds should be Developer ID signed and notarized before the
+      cask is published for general use.
     EOS
   end
 end
