@@ -1992,13 +1992,38 @@ function renderMain(snapshot: AppSnapshot): string {
 }
 
 function renderStatusbar(snapshot: AppSnapshot): string {
+  const activityLabel =
+    state.saving
+      ? "Saving config"
+      : state.metadataSaving
+        ? "Saving sidebar"
+        : state.loading
+          ? "Refreshing state"
+          : state.publishRunning
+            ? "Publishing"
+            : state.doctorRunning
+              ? "Running doctor"
+              : state.gitRunning
+                ? "Updating git"
+                : state.gitLoading
+                  ? "Loading git"
+                  : state.secretScopeRunning
+                    ? "Updating secrets"
+                    : state.secretScopeLoading || state.secretsProviderLoading
+                      ? "Refreshing secrets"
+                      : null;
+
   return `
     <footer class="statusbar">
       <div class="statusbar-meta">
         <span>Config: <code>${escapeHtml(snapshot.configPath)}</code></span>
       </div>
-      <div class="statusbar-meta">
-        <span>Bridge: embedded python script</span>
+      <div class="statusbar-meta statusbar-activity-slot">
+        ${
+          activityLabel
+            ? `<span class="statusbar-activity">${icon("refresh")}<span>${escapeHtml(activityLabel)}</span></span>`
+            : ""
+        }
       </div>
     </footer>
   `;
