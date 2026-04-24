@@ -4,9 +4,11 @@ import type {
   CommandResult,
   ContainerSummary,
   DoctorResult,
+  GitFile,
   GitStatusResult,
   ProxnixConfig,
   ProxnixManagerRPC,
+  SecretsProviderStatus,
   SidebarMetadata,
 } from "../shared/types";
 
@@ -85,6 +87,15 @@ const state: {
   publishVmid: string;
   gitResult: GitStatusResult | null;
   gitLoading: boolean;
+  gitRunning: boolean;
+  gitCommandResult: CommandResult | null;
+  gitCommitMessage: string;
+  secretsProviderStatus: SecretsProviderStatus | null;
+  secretsProviderLoading: boolean;
+  secretsProviderError: string | null;
+  secretsProviderLoadedKey: string | null;
+  secretsProviderLoadingKey: string | null;
+  secretsProviderLoadPromise: Promise<void> | null;
 } = {
   snapshot: null,
   draft: null,
@@ -106,7 +117,22 @@ const state: {
   publishVmid: "",
   gitResult: null,
   gitLoading: false,
+  gitRunning: false,
+  gitCommandResult: null,
+  gitCommitMessage: "",
+  secretsProviderStatus: null,
+  secretsProviderLoading: false,
+  secretsProviderError: null,
+  secretsProviderLoadedKey: null,
+  secretsProviderLoadingKey: null,
+  secretsProviderLoadPromise: null,
 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
 
 function defaultConfig(): ProxnixConfig {
   return {
@@ -233,6 +259,23 @@ function normalizeSnapshot(snapshot: AppSnapshot): AppSnapshot {
   };
 }
 
+function normalizeSecretsProviderStatus(status: SecretsProviderStatus): SecretsProviderStatus {
+  const containerIdentities: Record<string, boolean> = {};
+  for (const [vmid, hasIdentity] of Object.entries(status.containerIdentities ?? {})) {
+    const normalizedVmid = normalizeString(vmid).trim();
+    if (normalizedVmid) {
+      containerIdentities[normalizedVmid] = Boolean(hasIdentity);
+    }
+  }
+
+  return {
+    provider: normalizeString(status.provider),
+    definedSecretGroups: normalizeStringList(status.definedSecretGroups),
+    containerIdentities,
+    warnings: normalizeStringList(status.warnings),
+  };
+}
+
 function isDirty(): boolean {
   if (!state.snapshot || !state.draft) {
     return false;
@@ -272,6 +315,68 @@ function syncContainerMetadataDraft(snapshot: AppSnapshot): void {
     : null;
 }
 
+function secretsProviderCacheKey(snapshot: AppSnapshot): string {
+  return JSON.stringify({
+    siteDir: snapshot.config.siteDir,
+    provider: snapshot.config.secretProvider,
+    providerCommand: snapshot.config.secretProviderCommand,
+    containers: snapshot.containers.map((container) => container.vmid),
+    attachedGroups: snapshot.attachedSecretGroups,
+  });
+}
+
+function clearSecretsProviderStatus(): void {
+  state.secretsProviderStatus = null;
+  state.secretsProviderError = null;
+  state.secretsProviderLoadedKey = null;
+  state.secretsProviderLoadingKey = null;
+  state.secretsProviderLoadPromise = null;
+  state.secretsProviderLoading = false;
+}
+
+function ensureSecretsProviderStatus(): Promise<void> | null {
+  const snapshot = state.snapshot;
+  if (!snapshot || snapshot.config.siteDir.length === 0) {
+    return null;
+  }
+
+  const key = secretsProviderCacheKey(snapshot);
+  if (state.secretsProviderLoadedKey === key && state.secretsProviderStatus) {
+    return null;
+  }
+  if (state.secretsProviderLoadPromise && state.secretsProviderLoadingKey === key) {
+    return state.secretsProviderLoadPromise;
+  }
+
+  state.secretsProviderLoading = true;
+  state.secretsProviderLoadingKey = key;
+  state.secretsProviderError = null;
+  render();
+
+  state.secretsProviderLoadPromise = (async () => {
+    try {
+      const status = normalizeSecretsProviderStatus(await proxnixRpc.request.loadSecretsProviderStatus());
+      if (state.snapshot && secretsProviderCacheKey(state.snapshot) === key) {
+        state.secretsProviderStatus = status;
+        state.secretsProviderLoadedKey = key;
+      }
+    } catch (error) {
+      if (state.snapshot && secretsProviderCacheKey(state.snapshot) === key) {
+        state.secretsProviderError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (state.snapshot && secretsProviderCacheKey(state.snapshot) === key) {
+        state.secretsProviderLoading = false;
+        state.secretsProviderLoadingKey = null;
+        state.secretsProviderLoadPromise = null;
+      }
+      render();
+    }
+  })();
+
+  return state.secretsProviderLoadPromise;
+}
+
 function setSelection(next: ViewSelection): void {
   state.selection = next;
   if (state.snapshot) {
@@ -280,6 +385,9 @@ function setSelection(next: ViewSelection): void {
   render();
   if (next === "git" && !state.gitResult && !state.gitLoading) {
     void handleRefreshGit();
+  }
+  if (next === "secrets") {
+    void ensureSecretsProviderStatus();
   }
 }
 
@@ -477,14 +585,6 @@ function renderSidebar(snapshot: AppSnapshot): string {
                 const selection = `container:${container.vmid}` as ViewSelection;
                 const active = state.selection === selection ? " active" : "";
                 const statusClass = container.secretGroups.length > 0 || container.hasIdentity ? "ok" : "info";
-                const badges = [
-                  container.hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : "",
-                  container.secretGroups.length > 0
-                    ? `<span class="nav-badge" title="${escapeHtml(container.secretGroups.join(", "))}">${container.secretGroups.length}</span>`
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join("");
                 const detail = sidebarContainerDetail(snapshot, container);
 
                 return `
@@ -498,7 +598,6 @@ function renderSidebar(snapshot: AppSnapshot): string {
                           : ""
                       }
                     </span>
-                    <span class="nav-meta">${badges}</span>
                   </button>
                 `;
               })
@@ -549,7 +648,6 @@ function renderSidebar(snapshot: AppSnapshot): string {
       <section class="nav-section">
         <div class="nav-heading">
           <span>Containers</span>
-          <span class="nav-count">${snapshot.containers.length}</span>
         </div>
         <div class="nav-list nav-list-groups">${containerButtons}</div>
       </section>
@@ -565,44 +663,13 @@ function renderSidebar(snapshot: AppSnapshot): string {
 
       <div class="sidebar-footer">
         <div class="sidebar-footer-copy">
-          ${escapeHtml(snapshot.config.secretProvider)} &bull; ${snapshot.containers.length} container${snapshot.containers.length === 1 ? "" : "s"}
+          ${escapeHtml(snapshot.config.secretProvider)}
         </div>
       </div>
     </aside>
   `;
 }
 
-function renderStatTile(
-  iconName: IconName,
-  tone: "accent" | "blue" | "amber" | "magenta",
-  value: string,
-  label: string,
-): string {
-  return `
-    <div class="stat-tile">
-      <div class="stat-icon ${tone}">${icon(iconName)}</div>
-      <div>
-        <div class="stat-value">${escapeHtml(value)}</div>
-        <div class="stat-label">${escapeHtml(label)}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderSummary(snapshot: AppSnapshot): string {
-  const containersWithGroups = snapshot.containers.filter((container) => container.secretGroups.length > 0).length;
-  const withIdentity = snapshot.containers.filter((container) => container.hasIdentity).length;
-  const dropins = snapshot.containers.reduce((sum, container) => sum + container.dropins.length, 0);
-
-  return `
-    <section class="summary-band">
-      ${renderStatTile("box", "accent", String(snapshot.containers.length), "Containers")}
-      ${renderStatTile("lock", "blue", String(containersWithGroups), "With secrets")}
-      ${renderStatTile("key", "amber", String(withIdentity), "With identity")}
-      ${renderStatTile("spark", "magenta", String(dropins), "Drop-ins")}
-    </section>
-  `;
-}
 
 function renderWarnings(snapshot: AppSnapshot): string {
   if (snapshot.warnings.length === 0 && !state.error) {
@@ -695,11 +762,26 @@ function pill(label: string, tone: "good" | "warn" | "info" | "magenta", iconNam
   return `<span class="pill ${tone}">${iconName ? icon(iconName) : ""}<span>${escapeHtml(label)}</span></span>`;
 }
 
-function renderMetaCard(label: string, value: string): string {
+function renderOpenDropdown(path: string, extraItems?: { label: string; action: string; path: string }[]): string {
+  const items = [
+    { label: "Directory", action: "open-path", path },
+    { label: "Editor", action: "open-in-editor", path },
+    ...(extraItems ?? []),
+  ];
   return `
-    <div class="meta-card">
-      <div class="meta-label">${escapeHtml(label)}</div>
-      <div class="meta-value"><code>${escapeHtml(value)}</code></div>
+    <div class="dropdown">
+      <button class="secondary-button dropdown-toggle" data-dropdown-toggle>
+        ${icon("open")}
+        <span>Open</span>
+        <span class="dropdown-caret">${icon("chevron")}</span>
+      </button>
+      <div class="dropdown-menu">
+        ${items.map((item) => `
+          <button class="dropdown-item" data-action="${item.action}" data-path="${escapeHtml(item.path)}">
+            <span>${escapeHtml(item.label)}</span>
+          </button>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -851,11 +933,6 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
           : ""}
         ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix command wrappers.", undefined, true)}
       </div>
-
-      <div class="meta-grid">
-        ${renderMetaCard("Config path", snapshot.configPath)}
-        ${renderMetaCard("Current site dir", snapshot.config.siteDir || "(unset)")}
-      </div>
     </section>
   `;
 }
@@ -962,8 +1039,6 @@ function renderSidebarMetadataForm(container: ContainerSummary, snapshot: AppSna
 function renderContainerPage(container: ContainerSummary): string {
   const snapshot = state.snapshot;
   const metadata = snapshot ? sidebarMetadataFor(snapshot, container.vmid) : defaultSidebarMetadata();
-  const title = metadata.displayName || `VMID ${container.vmid}`;
-  const subtitle = metadata.displayName ? `VMID ${container.vmid}` : "Container workspace";
   const isEmbeddedSops = usesEmbeddedSops(snapshot?.config.secretProvider ?? "");
   const labels =
     metadata.labels.length > 0
@@ -974,54 +1049,20 @@ function renderContainerPage(container: ContainerSummary): string {
 
   return `
     <div class="page-stack">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <div class="eyebrow">${escapeHtml(subtitle)}</div>
-          <div class="hero-title">${escapeHtml(title)}</div>
-          <div class="hero-text">
-            Config, secrets, identity, and drop-in overlays for this container.
-          </div>
-        </div>
-
-        <div class="pill-row">
+      <section class="page-controls">
+        <div class="controls-start">
           ${pill(container.hasConfig ? "Config found" : "No config dir", container.hasConfig ? "good" : "warn", "box")}
           ${pill(`${container.secretGroups.length} secret group${container.secretGroups.length === 1 ? "" : "s"}`, container.secretGroups.length > 0 ? "magenta" : "info", "lock")}
           ${pill(container.hasIdentity ? "Identity present" : "No identity", container.hasIdentity ? "good" : "warn", "key")}
-          ${pill(`Secrets via ${snapshot?.config.secretProvider ?? "unknown"}`, "info", "spark")}
+          ${labels}
         </div>
-
-        ${labels}
-
-        <div class="action-row">
-          <button class="secondary-button" data-action="open-in-editor" data-path="${escapeHtml(container.containerPath)}">
-            ${icon("edit")}
-            <span>Open in Editor</span>
-          </button>
-          <button class="secondary-button" data-action="open-path" data-path="${escapeHtml(container.containerPath)}">
-            ${icon("folder")}
-            <span>Open Container Dir</span>
-          </button>
-          ${isEmbeddedSops ? `
-            <button class="secondary-button" data-action="open-path" data-path="${escapeHtml(container.privateContainerPath)}">
-              ${icon("folder")}
-              <span>Open Private Dir</span>
-            </button>
-          ` : ""}
-        </div>
-      </section>
-
-      <section class="page-band">
-        <div class="section-header">
-          <div>
-            <div class="section-title">${icon("spark")}<span>Paths</span></div>
-            <div class="section-copy">
-              Resolved from site directory and VMID.
-            </div>
-          </div>
-        </div>
-        <div class="meta-grid">
-          ${renderMetaCard("Container path", container.containerPath)}
-          ${isEmbeddedSops ? renderMetaCard("Private path", container.privateContainerPath) : ""}
+        <div class="controls-end">
+          ${renderOpenDropdown(
+            container.containerPath,
+            isEmbeddedSops
+              ? [{ label: "Private Directory", action: "open-path", path: container.privateContainerPath }]
+              : undefined,
+          )}
         </div>
       </section>
 
@@ -1087,6 +1128,21 @@ function fileStatusClass(status: string): string {
   return "modified";
 }
 
+function gitFilesFor(result: GitStatusResult, key: "staged" | "unstaged" | "untracked"): GitFile[] {
+  const explicit = result[key];
+  if (explicit) {
+    return explicit;
+  }
+
+  if (key === "untracked") {
+    return result.files.filter((file) => file.status.includes("?"));
+  }
+  if (key === "staged") {
+    return result.files.filter((file) => !file.status.includes("?") && file.status.length === 1);
+  }
+  return result.files.filter((file) => !file.status.includes("?") && file.status.length > 1);
+}
+
 function renderDoctorPage(snapshot: AppSnapshot): string {
   const result = state.doctorResult;
   const running = state.doctorRunning;
@@ -1136,15 +1192,8 @@ function renderDoctorPage(snapshot: AppSnapshot): string {
 
   return `
     <div class="page-stack">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <div class="eyebrow">Diagnostics</div>
-          <div class="hero-title">Health Check</div>
-          <div class="hero-text">
-            Checks site structure, secrets, and publish trees for problems.
-          </div>
-        </div>
-        <div class="option-row">
+      <section class="page-controls">
+        <div class="controls-start">
           <label class="option-toggle">
             <input type="checkbox" data-option="doctorConfigOnly" ${state.doctorConfigOnly ? "checked" : ""} />
             <span>Config only</span>
@@ -1154,7 +1203,7 @@ function renderDoctorPage(snapshot: AppSnapshot): string {
             <input type="text" data-option="doctorVmid" value="${escapeHtml(state.doctorVmid)}" placeholder="All" spellcheck="false" />
           </div>
         </div>
-        <div class="hero-actions">
+        <div class="controls-end">
           <button class="primary-button" data-action="run-doctor" ${running ? "disabled" : ""}>
             ${icon("health")}
             <span>${running ? "Running..." : "Run Health Check"}</span>
@@ -1193,19 +1242,9 @@ function renderPublishPage(snapshot: AppSnapshot): string {
 
   return `
     <div class="page-stack">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <div class="eyebrow">Deployment</div>
-          <div class="hero-title">Publish</div>
-          <div class="hero-text">
-            Compiles and pushes config, secrets, and identities to your target hosts over SSH.
-          </div>
-        </div>
-        <div class="pill-row">
+      <section class="page-controls">
+        <div class="controls-start">
           ${pill(hasHosts ? `Hosts: ${snapshot.config.hosts}` : "No hosts configured", hasHosts ? "info" : "warn", "spark")}
-          ${pill(snapshot.config.secretProvider, "magenta", "lock")}
-        </div>
-        <div class="option-row">
           <label class="option-toggle">
             <input type="checkbox" data-option="publishConfigOnly" ${state.publishConfigOnly ? "checked" : ""} />
             <span>Config only</span>
@@ -1215,7 +1254,7 @@ function renderPublishPage(snapshot: AppSnapshot): string {
             <input type="text" data-option="publishVmid" value="${escapeHtml(state.publishVmid)}" placeholder="All" spellcheck="false" />
           </div>
         </div>
-        <div class="hero-actions">
+        <div class="controls-end">
           <button class="secondary-button" data-action="publish-preview" ${running || !hasHosts ? "disabled" : ""}>
             ${icon("refresh")}
             <span>Preview Changes</span>
@@ -1236,12 +1275,12 @@ function renderPublishPage(snapshot: AppSnapshot): string {
 
 function renderGitPage(snapshot: AppSnapshot): string {
   const result = state.gitResult;
-  const loading = state.gitLoading;
+  const loading = state.gitLoading || state.gitRunning;
 
   if (loading && !result) {
     return `
       <div class="page-stack">
-        <section class="hero-band">
+        <section class="page-band">
           <div class="running-band">${icon("refresh")}<span>Loading repository status...</span></div>
         </section>
       </div>
@@ -1251,15 +1290,9 @@ function renderGitPage(snapshot: AppSnapshot): string {
   if (!result || result.error) {
     return `
       <div class="page-stack">
-        <section class="hero-band">
-          <div class="hero-copy">
-            <div class="eyebrow">Version control</div>
-            <div class="hero-title">Repository</div>
-            <div class="hero-text">
-              ${result?.error ? escapeHtml(result.error) : "Could not load repository status."}
-            </div>
-          </div>
-          <div class="hero-actions">
+        <section class="page-band">
+          <div class="error-band">${result?.error ? escapeHtml(result.error) : "Could not load repository status."}</div>
+          <div class="action-row">
             <button class="secondary-button" data-action="refresh-git" ${loading ? "disabled" : ""}>
               ${icon("refresh")}
               <span>Retry</span>
@@ -1270,20 +1303,46 @@ function renderGitPage(snapshot: AppSnapshot): string {
     `;
   }
 
+  const stagedFiles = gitFilesFor(result, "staged");
+  const unstagedFiles = gitFilesFor(result, "unstaged");
+  const untrackedFiles = gitFilesFor(result, "untracked");
+  const unstagedTotal = unstagedFiles.length + untrackedFiles.length;
+  const ahead = result.ahead ?? 0;
+  const hasRemote = Boolean(result.hasRemote);
+
+  const gitFileRow = (file: GitFile, canAdd: boolean): string => `
+    <div class="list-item git-file-row">
+      <div class="list-item-copy" style="flex-direction:row;align-items:center;gap:10px;">
+        <span class="file-status-code ${fileStatusClass(file.status)}">${escapeHtml(file.status)}</span>
+        <code class="list-item-title">${escapeHtml(file.path)}</code>
+      </div>
+      ${
+        canAdd
+          ? `<button class="secondary-button compact-button" data-action="git-add-file" data-git-path="${escapeHtml(file.path)}" ${loading ? "disabled" : ""}>Add</button>`
+          : ""
+      }
+    </div>
+  `;
+
   const filesHtml =
     result.files.length > 0
-      ? result.files
-          .map(
-            (file) => `
-              <div class="list-item">
-                <div class="list-item-copy" style="flex-direction:row;align-items:center;gap:10px;">
-                  <span class="file-status-code ${fileStatusClass(file.status)}">${escapeHtml(file.status)}</span>
-                  <code class="list-item-title">${escapeHtml(file.path)}</code>
-                </div>
-              </div>
-            `,
-          )
-          .join("")
+      ? `
+          ${
+            stagedFiles.length > 0
+              ? `<div class="git-file-group"><div class="git-file-heading">Staged</div>${stagedFiles.map((file) => gitFileRow(file, false)).join("")}</div>`
+              : ""
+          }
+          ${
+            unstagedFiles.length > 0
+              ? `<div class="git-file-group"><div class="git-file-heading">Modified</div>${unstagedFiles.map((file) => gitFileRow(file, true)).join("")}</div>`
+              : ""
+          }
+          ${
+            untrackedFiles.length > 0
+              ? `<div class="git-file-group"><div class="git-file-heading">Untracked</div>${untrackedFiles.map((file) => gitFileRow(file, true)).join("")}</div>`
+              : ""
+          }
+        `
       : `<div class="list-item"><div class="list-item-copy"><div class="list-item-title">Working tree is clean.</div></div></div>`;
 
   const logHtml =
@@ -1304,32 +1363,42 @@ function renderGitPage(snapshot: AppSnapshot): string {
 
   return `
     <div class="page-stack">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <div class="eyebrow">Version control</div>
-          <div class="hero-title">Repository</div>
-          <div class="hero-text">
-            Uncommitted changes and recent commits in the site repo.
-          </div>
-        </div>
-        <div class="pill-row">
+      <section class="page-controls">
+        <div class="controls-start">
           ${pill(result.branch ? `Branch: ${result.branch}` : "Detached HEAD", "info", "branch")}
           ${pill(result.clean ? "Clean" : `${result.files.length} changed file${result.files.length === 1 ? "" : "s"}`, result.clean ? "good" : "warn", result.clean ? "spark" : "refresh")}
+          ${hasRemote ? pill(ahead > 0 ? `${ahead} ahead` : "Up to date", ahead > 0 ? "warn" : "good", "publish") : pill("No upstream", "info", "branch")}
         </div>
-        <div class="hero-actions">
+        <div class="controls-end">
           <button class="secondary-button" data-action="refresh-git" ${loading ? "disabled" : ""}>
             ${icon("refresh")}
             <span>${loading ? "Loading..." : "Refresh"}</span>
           </button>
-          <button class="secondary-button" data-action="open-in-editor" data-path="${escapeHtml(snapshot.config.siteDir)}">
-            ${icon("edit")}
-            <span>Open in Editor</span>
+          ${renderOpenDropdown(snapshot.config.siteDir)}
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="git-action-row">
+          <button class="secondary-button" data-action="git-add-all" ${loading || unstagedTotal === 0 ? "disabled" : ""}>
+            ${icon("publish")}
+            <span>Add all</span>
           </button>
-          <button class="secondary-button" data-action="open-site">
-            ${icon("folder")}
-            <span>Open in Finder</span>
+          <input class="git-commit-input" type="text" data-option="gitCommitMessage" value="${escapeHtml(state.gitCommitMessage)}" placeholder="Commit message" spellcheck="false" />
+          <button class="primary-button" data-action="git-commit" ${loading || stagedFiles.length === 0 || state.gitCommitMessage.trim().length === 0 ? "disabled" : ""}>
+            ${icon("spark")}
+            <span>Commit</span>
+          </button>
+          <button class="secondary-button" data-action="git-push" ${loading || !hasRemote || ahead === 0 ? "disabled" : ""}>
+            ${icon("publish")}
+            <span>Push${ahead > 0 ? ` ${ahead}` : ""}</span>
           </button>
         </div>
+        ${
+          state.gitCommandResult
+            ? `<div class="${state.gitCommandResult.exitCode === 0 ? "success-band" : "error-band"}">${escapeHtml(state.gitCommandResult.output || state.gitCommandResult.error || "")}</div>`
+            : ""
+        }
       </section>
 
       <section class="page-band">
@@ -1349,7 +1418,9 @@ function renderGitPage(snapshot: AppSnapshot): string {
 }
 
 function renderSecretsPage(snapshot: AppSnapshot): string {
-  const defined = new Set(snapshot.definedSecretGroups);
+  const providerStatus = state.secretsProviderStatus;
+  const providerDefinedGroups = providerStatus?.definedSecretGroups ?? [];
+  const defined = new Set([...snapshot.definedSecretGroups, ...providerDefinedGroups]);
   const attached = new Set(snapshot.attachedSecretGroups);
   const allGroups = [...new Set([...defined, ...attached])].sort();
 
@@ -1396,26 +1467,30 @@ function renderSecretsPage(snapshot: AppSnapshot): string {
 
   const orphanedAttached = [...attached].filter((g) => !defined.has(g));
   const unusedDefined = [...defined].filter((g) => !attached.has(g));
+  const providerWarnings = [
+    ...(state.secretsProviderError ? [state.secretsProviderError] : []),
+    ...(providerStatus?.warnings ?? []),
+  ];
+  const providerStatusHtml = state.secretsProviderLoading
+    ? `<div class="running-band">${icon("refresh")}<span>Loading provider-backed secret status...</span></div>`
+    : providerWarnings.length > 0
+      ? `<div class="error-band">${providerWarnings.map((warning) => escapeHtml(warning)).join("<br />")}</div>`
+      : providerStatus
+        ? `<div class="running-band">${icon("spark")}<span>Provider status loaded from <code>${escapeHtml(providerStatus.provider)}</code>.</span></div>`
+        : "";
 
   return `
     <div class="page-stack">
-      <section class="hero-band">
-        <div class="hero-copy">
-          <div class="eyebrow">Secret management</div>
-          <div class="hero-title">Secret Groups</div>
-          <div class="hero-text">
-            Containers declare group membership in <code>secret-groups.list</code>.
-            Secrets are managed by ${escapeHtml(snapshot.config.secretProvider)}.
-          </div>
-        </div>
-        <div class="pill-row">
-          ${pill(snapshot.config.secretProvider, "info", "spark")}
-          ${pill(`${snapshot.definedSecretGroups.length} defined`, "magenta", "lock")}
+      <section class="page-controls">
+        <div class="controls-start">
+          ${pill(`${defined.size} defined`, "magenta", "lock")}
           ${pill(`${snapshot.attachedSecretGroups.length} in use`, "good", "key")}
           ${orphanedAttached.length > 0 ? pill(`${orphanedAttached.length} missing`, "warn", "health") : ""}
           ${unusedDefined.length > 0 ? pill(`${unusedDefined.length} unused`, "info", "box") : ""}
         </div>
       </section>
+
+      ${providerStatusHtml}
 
       ${
         allGroups.length > 0
@@ -1425,7 +1500,7 @@ function renderSecretsPage(snapshot: AppSnapshot): string {
                 <div>
                   <div class="section-title">${icon("lock")}<span>All Groups</span></div>
                   <div class="section-copy">
-                    Groups referenced by containers and their status in ${escapeHtml(snapshot.config.secretProvider)}.
+                    Groups referenced by containers and their configuration status.
                   </div>
                 </div>
               </div>
@@ -1436,7 +1511,7 @@ function renderSecretsPage(snapshot: AppSnapshot): string {
             <section class="page-band">
               <div class="empty-state">
                 No secret groups yet. Add group names to a container's
-                <code>secret-groups.list</code> and set them up in ${escapeHtml(snapshot.config.secretProvider)}.
+                <code>secret-groups.list</code> to get started.
               </div>
             </section>
           `
@@ -1458,17 +1533,19 @@ function renderSecretsPage(snapshot: AppSnapshot): string {
                   .map((container) => {
                     const title = sidebarTitleFor(snapshot, container);
                     const groups = container.secretGroups;
+                    const hasProviderIdentity = providerStatus?.containerIdentities[container.vmid];
+                    const hasIdentity = hasProviderIdentity ?? container.hasIdentity;
                     return `
                       <div class="list-item">
                         <div class="list-item-copy">
                           <div class="list-item-title">${escapeHtml(title)}</div>
                           <div class="list-item-meta">
                             ${groups.length > 0 ? `Groups: ${groups.map((g) => escapeHtml(g)).join(", ")}` : "No groups attached"}
-                            ${container.hasIdentity ? " &bull; Identity present" : ""}
+                            ${hasIdentity ? " &bull; Identity present" : ""}
                           </div>
                         </div>
                         <div class="nav-meta">
-                          ${container.hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
+                          ${hasIdentity ? `<span class="nav-badge" title="Has age identity">K</span>` : ""}
                           ${groups.length > 0 ? `<span class="nav-badge" title="${escapeHtml(groups.join(", "))}">${groups.length}</span>` : ""}
                         </div>
                       </div>
@@ -1549,7 +1626,22 @@ function render(): void {
 
   const snapshot = state.snapshot;
   if (!snapshot) {
-    root.innerHTML = `<div class="loading-state">No proxnix state available.</div>`;
+    root.innerHTML = `
+      <div class="loading-state">
+        <div>No proxnix state available.</div>
+        ${
+          state.error
+            ? `<div class="error-band">${escapeHtml(state.error)}</div>`
+            : ""
+        }
+        <div class="hero-actions">
+          <button class="primary-button" data-action="retry-load">
+            ${icon("refresh")}
+            <span>Retry</span>
+          </button>
+        </div>
+      </div>
+    `;
     return;
   }
 
@@ -1558,7 +1650,6 @@ function render(): void {
       ${renderSidebar(snapshot)}
       <main class="main">
         ${renderToolbar(snapshot)}
-        ${renderSummary(snapshot)}
         ${renderWarnings(snapshot)}
         <div class="page-scroll">
           ${renderMain(snapshot)}
@@ -1571,20 +1662,39 @@ function render(): void {
   syncSidebarMetadataIndicators();
 }
 
-async function refreshSnapshot(): Promise<void> {
+async function refreshSnapshot(attempt = 0): Promise<void> {
   state.loading = true;
-  state.error = null;
+  if (attempt === 0) {
+    state.error = null;
+  }
   render();
 
   try {
     const snapshot = normalizeSnapshot(await proxnixRpc.request.loadSnapshot());
+    const nextSecretsKey = secretsProviderCacheKey(snapshot);
+    if (
+      state.secretsProviderLoadedKey !== nextSecretsKey &&
+      state.secretsProviderLoadingKey !== nextSecretsKey
+    ) {
+      clearSecretsProviderStatus();
+    }
     syncExpandedGroups(snapshot);
     state.snapshot = snapshot;
     state.draft = cloneConfig(snapshot.config);
     ensureSelection(snapshot);
     syncContainerMetadataDraft(snapshot);
+    if (state.selection === "secrets") {
+      void ensureSecretsProviderStatus();
+    }
   } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    if (!state.snapshot && attempt < 4) {
+      state.error = `Initial load failed (${attempt + 1}/5): ${message}`;
+      render();
+      await sleep(250 * (attempt + 1));
+      return refreshSnapshot(attempt + 1);
+    }
+    state.error = message;
   } finally {
     state.loading = false;
     render();
@@ -1658,7 +1768,82 @@ async function handleRefreshGit(): Promise<void> {
   }
 }
 
+async function handleGitAdd(path?: string): Promise<void> {
+  state.gitRunning = true;
+  state.gitCommandResult = null;
+  render();
+
+  try {
+    state.gitCommandResult = await proxnixRpc.request.gitAdd(
+      path ? { file: path } : { all: true },
+    );
+    await handleRefreshGit();
+  } catch (error) {
+    state.gitCommandResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.gitRunning = false;
+    render();
+  }
+}
+
+async function handleGitCommit(): Promise<void> {
+  const message = state.gitCommitMessage.trim();
+  if (!message) {
+    return;
+  }
+
+  state.gitRunning = true;
+  state.gitCommandResult = null;
+  render();
+
+  try {
+    state.gitCommandResult = await proxnixRpc.request.gitCommit({ message });
+    if (state.gitCommandResult.exitCode === 0) {
+      state.gitCommitMessage = "";
+    }
+    await handleRefreshGit();
+  } catch (error) {
+    state.gitCommandResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.gitRunning = false;
+    render();
+  }
+}
+
+async function handleGitPush(): Promise<void> {
+  state.gitRunning = true;
+  state.gitCommandResult = null;
+  render();
+
+  try {
+    state.gitCommandResult = await proxnixRpc.request.gitPush();
+    await handleRefreshGit();
+  } catch (error) {
+    state.gitCommandResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.gitRunning = false;
+    render();
+  }
+}
+
 async function handleAction(action: string, element: HTMLElement): Promise<void> {
+  if (action === "retry-load") {
+    await refreshSnapshot();
+    return;
+  }
+
   if (!state.snapshot) {
     return;
   }
@@ -1685,6 +1870,29 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 
   if (action === "refresh-git") {
     await handleRefreshGit();
+    return;
+  }
+
+  if (action === "git-add-all") {
+    await handleGitAdd();
+    return;
+  }
+
+  if (action === "git-add-file") {
+    const path = element.dataset.gitPath;
+    if (path) {
+      await handleGitAdd(path);
+    }
+    return;
+  }
+
+  if (action === "git-commit") {
+    await handleGitCommit();
+    return;
+  }
+
+  if (action === "git-push") {
+    await handleGitPush();
     return;
   }
 
@@ -1756,11 +1964,21 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 
     try {
       const snapshot = normalizeSnapshot(await proxnixRpc.request.saveConfig({ config: state.draft }));
+      const nextSecretsKey = secretsProviderCacheKey(snapshot);
+      if (
+        state.secretsProviderLoadedKey !== nextSecretsKey &&
+        state.secretsProviderLoadingKey !== nextSecretsKey
+      ) {
+        clearSecretsProviderStatus();
+      }
       syncExpandedGroups(snapshot);
       state.snapshot = snapshot;
       state.draft = cloneConfig(snapshot.config);
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
+      if (state.selection === "secrets") {
+        void ensureSecretsProviderStatus();
+      }
     } catch (error) {
       state.error = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1803,11 +2021,21 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
           metadata: state.containerMetadataDraft,
         }),
       );
+      const nextSecretsKey = secretsProviderCacheKey(snapshot);
+      if (
+        state.secretsProviderLoadedKey !== nextSecretsKey &&
+        state.secretsProviderLoadingKey !== nextSecretsKey
+      ) {
+        clearSecretsProviderStatus();
+      }
       syncExpandedGroups(snapshot);
       state.snapshot = snapshot;
       state.draft = cloneConfig(snapshot.config);
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
+      if (state.selection === "secrets") {
+        void ensureSecretsProviderStatus();
+      }
     } catch (error) {
       state.error = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1817,8 +2045,32 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
   }
 }
 
+function closeAllDropdowns(): void {
+  for (const menu of root.querySelectorAll<HTMLElement>(".dropdown.open")) {
+    menu.classList.remove("open");
+  }
+}
+
 root.addEventListener("click", (event) => {
   const target = event.target as HTMLElement | null;
+
+  const dropdownToggle = target?.closest<HTMLElement>("[data-dropdown-toggle]");
+  if (dropdownToggle) {
+    const dropdown = dropdownToggle.closest<HTMLElement>(".dropdown");
+    if (dropdown) {
+      const wasOpen = dropdown.classList.contains("open");
+      closeAllDropdowns();
+      if (!wasOpen) {
+        dropdown.classList.add("open");
+      }
+      return;
+    }
+  }
+
+  if (!target?.closest(".dropdown-menu")) {
+    closeAllDropdowns();
+  }
+
   const groupToggle = target?.closest<HTMLElement>("[data-group-toggle]");
   if (groupToggle?.dataset.groupToggle) {
     const groupId = groupToggle.dataset.groupToggle;
@@ -1839,6 +2091,7 @@ root.addEventListener("click", (event) => {
 
   const actionButton = target?.closest<HTMLElement>("[data-action]");
   if (actionButton?.dataset.action) {
+    closeAllDropdowns();
     void handleAction(actionButton.dataset.action, actionButton);
   }
 });
@@ -1885,6 +2138,7 @@ function updateOptionFromField(target: HTMLInputElement): void {
   } else {
     if (option === "doctorVmid") state.doctorVmid = target.value;
     if (option === "publishVmid") state.publishVmid = target.value;
+    if (option === "gitCommitMessage") state.gitCommitMessage = target.value;
   }
 }
 

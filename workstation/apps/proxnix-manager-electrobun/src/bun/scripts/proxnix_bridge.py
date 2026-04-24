@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import glob
 import re
 import shlex
 import subprocess
@@ -42,10 +43,166 @@ DEFAULT_CONFIG = {
     "scriptsDir": "",
 }
 
+INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS = 60 * 60
+
+_PYTHONPATH_BOOTSTRAPPED = False
+
 
 def default_config_path() -> Path:
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "proxnix" / "config"
+
+
+def _resource_dir() -> Path | None:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
+        if parent.name == "Resources" and parent.parent.name == "Contents":
+            return parent
+    return None
+
+
+def _repo_root() -> Path | None:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
+        if (parent / "workstation" / "src" / "proxnix_workstation").is_dir():
+            return parent
+    return None
+
+
+def _pythonpath_entries() -> list[str]:
+    entries: list[str] = []
+
+    resources_dir = _resource_dir()
+    if resources_dir is not None:
+        bundled_python = resources_dir / "lib" / "python"
+        if (bundled_python / "proxnix_workstation").is_dir():
+            entries.append(str(bundled_python))
+
+    repo_root = _repo_root()
+    if repo_root is not None:
+        repo_python = repo_root / "workstation" / "src"
+        if (repo_python / "proxnix_workstation").is_dir():
+            entries.append(str(repo_python))
+        venv_site_packages = _repo_venv_site_packages(repo_root)
+        entries.extend(venv_site_packages)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry not in seen:
+            seen.add(entry)
+            deduped.append(entry)
+    return deduped
+
+
+def _ensure_pythonpath_bootstrap() -> None:
+    global _PYTHONPATH_BOOTSTRAPPED
+
+    if _PYTHONPATH_BOOTSTRAPPED:
+        return
+
+    for entry in reversed(_pythonpath_entries()):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+
+    _PYTHONPATH_BOOTSTRAPPED = True
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    extra_entries = _pythonpath_entries()
+    if extra_entries:
+        existing = env.get("PYTHONPATH", "").strip()
+        combined = extra_entries.copy()
+        if existing:
+            combined.append(existing)
+        env["PYTHONPATH"] = os.pathsep.join(combined)
+    return env
+
+
+def _command_output(stdout: str, stderr: str) -> str:
+    parts = [part.strip() for part in (stdout, stderr) if part.strip()]
+    return "\n".join(parts)
+
+
+def _git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    existing = [part for part in env.get("PATH", "").split(os.pathsep) if part]
+    merged: list[str] = []
+    for path in [*extra_paths, *existing]:
+        if path not in merged:
+            merged.append(path)
+    env["PATH"] = os.pathsep.join(merged)
+    env["HOME"] = os.environ.get("HOME", str(Path.home()))
+    return env
+
+
+def _repo_workstation_dir() -> Path | None:
+    repo_root = _repo_root()
+    if repo_root is None:
+        return None
+
+    workstation_dir = repo_root / "workstation"
+    if workstation_dir.is_dir():
+        return workstation_dir
+    return None
+
+
+def _repo_venv_site_packages(repo_root: Path) -> list[str]:
+    patterns = [
+        repo_root / "workstation" / ".venv" / "lib" / "python*" / "site-packages",
+        repo_root / "workstation" / ".venv" / "Lib" / "site-packages",
+    ]
+
+    paths: list[str] = []
+    for pattern in patterns:
+        for match in glob.glob(str(pattern)):
+            if Path(match).is_dir():
+                paths.append(match)
+    return sorted(set(paths))
+
+
+def _bundled_cli(script_name: str) -> Path | None:
+    resources_dir = _resource_dir()
+    if resources_dir is None:
+        return None
+
+    cli_path = resources_dir / "bin" / script_name
+    if cli_path.is_file():
+        return cli_path
+    return None
+
+
+def _repo_cli(script_name: str) -> Path | None:
+    workstation_dir = _repo_workstation_dir()
+    if workstation_dir is None:
+        return None
+
+    cli_path = workstation_dir / "bin" / script_name
+    if cli_path.is_file():
+        return cli_path
+    return None
+
+
+def _doctor_command() -> tuple[list[str], dict[str, str]]:
+    bundled_cli = _bundled_cli("proxnix-doctor")
+    if bundled_cli is not None:
+        return [str(bundled_cli)], _subprocess_env()
+    repo_cli = _repo_cli("proxnix-doctor")
+    if repo_cli is not None:
+        return [str(repo_cli)], _subprocess_env()
+    return [sys.executable, "-m", "proxnix_workstation.doctor_cli"], _subprocess_env()
+
+
+def _publish_command() -> tuple[list[str], dict[str, str]]:
+    bundled_cli = _bundled_cli("proxnix-publish")
+    if bundled_cli is not None:
+        return [str(bundled_cli)], _subprocess_env()
+    repo_cli = _repo_cli("proxnix-publish")
+    if repo_cli is not None:
+        return [str(repo_cli)], _subprocess_env()
+    return [sys.executable, "-m", "proxnix_workstation.publish_cli"], _subprocess_env()
 
 
 def sidebar_metadata_path() -> Path:
@@ -328,12 +485,13 @@ def read_container_secret_groups(secret_groups_file: Path) -> list[str]:
     return groups
 
 
-def _load_provider_context() -> tuple[object, object, object] | None:
+def _load_provider_context() -> tuple[tuple[object, object, object] | None, str | None]:
     """Try to load the workstation config and secret provider.
 
-    Returns (config, site_paths, provider) or None on failure.
+    Returns ((config, site_paths, provider), None) on success, or (None, error) on failure.
     """
     try:
+        _ensure_pythonpath_bootstrap()
         from proxnix_workstation.config import load_workstation_config
         from proxnix_workstation.paths import SitePaths
         from proxnix_workstation.secret_provider import load_secret_provider
@@ -341,9 +499,9 @@ def _load_provider_context() -> tuple[object, object, object] | None:
         config = load_workstation_config()
         site_paths = SitePaths.from_config(config)
         provider = load_secret_provider(config, site_paths)
-        return config, site_paths, provider
-    except Exception:
-        return None
+        return (config, site_paths, provider), None
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _check_container_identity(ctx: tuple[object, object, object], vmid: str) -> bool:
@@ -400,6 +558,17 @@ def _check_defined_groups(
     return defined
 
 
+def _scan_local_defined_groups(site_dir: Path) -> list[str]:
+    groups_dir = site_dir / "private" / "groups"
+    if not groups_dir.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in groups_dir.iterdir()
+        if entry.is_dir() and valid_secret_group_name(entry.name)
+    )
+
+
 def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], list[str], list[str], list[str]]:
     site_dir_raw = config["siteDir"]
     warnings: list[str] = []
@@ -431,8 +600,6 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
             if entry.is_dir() and entry.name.isdigit():
                 vmids.add(entry.name)
 
-    ctx = _load_provider_context()
-
     attached_group_names: set[str] = set()
     for vmid in sorted(vmids, key=int):
         public_dir = containers_dir / vmid
@@ -450,12 +617,6 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
 
         attached_group_names.update(secret_groups)
 
-        has_identity = (
-            _check_container_identity(ctx, vmid)
-            if ctx is not None
-            else (private_container_dir / "age_identity.sops.yaml").is_file()
-        )
-
         containers.append(
             {
                 "vmid": vmid,
@@ -463,25 +624,68 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
                 "privateContainerPath": str(private_container_dir),
                 "dropins": dropins,
                 "hasConfig": public_dir.is_dir(),
-                "hasIdentity": has_identity,
+                "hasIdentity": (private_container_dir / "age_identity.sops.yaml").is_file(),
                 "secretGroups": secret_groups,
             }
         )
 
-    if ctx is not None:
-        defined_groups = _check_defined_groups(ctx, attached_group_names, site_dir)
-    else:
-        # Fallback: scan private/groups/ directories (only correct for embedded-sops)
-        groups_dir = private_dir / "groups"
-        if groups_dir.is_dir():
-            defined_groups = sorted(
-                entry.name
-                for entry in groups_dir.iterdir()
-                if entry.is_dir() and valid_secret_group_name(entry.name)
-            )
-
+    defined_groups = _scan_local_defined_groups(site_dir)
     attached_groups = sorted(attached_group_names)
     return True, containers, defined_groups, attached_groups, warnings
+
+
+def secrets_provider_status() -> dict[str, object]:
+    config, _preserved_keys, _config_path = read_config_payload()
+    site_dir_raw = config["siteDir"]
+    warnings: list[str] = []
+    container_identities: dict[str, bool] = {}
+    defined_groups: list[str] = []
+
+    if not site_dir_raw:
+        return {
+            "provider": config["secretProvider"],
+            "definedSecretGroups": defined_groups,
+            "containerIdentities": container_identities,
+            "warnings": ["Set PROXNIX_SITE_DIR to scan your site repo."],
+        }
+
+    site_dir = Path(site_dir_raw).expanduser()
+    if not site_dir.is_dir():
+        return {
+            "provider": config["secretProvider"],
+            "definedSecretGroups": defined_groups,
+            "containerIdentities": container_identities,
+            "warnings": [f"Site path is not a directory: {site_dir}"],
+        }
+
+    _site_dir_exists, containers, _local_defined, attached_groups, scan_warnings = scan_state(config)
+    warnings.extend(scan_warnings)
+
+    ctx, provider_error = _load_provider_context()
+    if provider_error:
+        warnings.append(f"Secret backend unavailable: {provider_error}")
+        return {
+            "provider": config["secretProvider"],
+            "definedSecretGroups": defined_groups,
+            "containerIdentities": container_identities,
+            "warnings": warnings,
+        }
+
+    assert ctx is not None
+    for container in containers:
+        vmid = str(container.get("vmid", "")).strip()
+        if not vmid:
+            continue
+        container_identities[vmid] = _check_container_identity(ctx, vmid)
+
+    defined_groups = _check_defined_groups(ctx, set(attached_groups), site_dir)
+
+    return {
+        "provider": config["secretProvider"],
+        "definedSecretGroups": defined_groups,
+        "containerIdentities": container_identities,
+        "warnings": warnings,
+    }
 
 
 def snapshot() -> dict[str, object]:
@@ -539,8 +743,19 @@ def save_config(payload: dict[str, object]) -> dict[str, object]:
     return snapshot()
 
 
-def _run_cli(args: list[str], timeout: int = 120) -> tuple[str, str, int]:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def _run_cli(
+    args: list[str],
+    *,
+    timeout: int = 120,
+    env: dict[str, str] | None = None,
+) -> tuple[str, str, int]:
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
     return result.stdout, result.stderr, result.returncode
 
 
@@ -575,7 +790,8 @@ def run_doctor(payload: object) -> dict[str, object]:
     if not site_dir:
         return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": "Set site directory first."}
 
-    args = [sys.executable, "-m", "proxnix_workstation.doctor_cli", "--site-only"]
+    args, env = _doctor_command()
+    args.append("--site-only")
     opts = payload if isinstance(payload, dict) else {}
     if opts.get("configOnly"):
         args.append("--config-only")
@@ -584,16 +800,30 @@ def run_doctor(payload: object) -> dict[str, object]:
         args.extend(["--vmid", str(vmid)])
 
     try:
-        stdout, stderr, exit_code = _run_cli(args)
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
     except subprocess.TimeoutExpired:
-        return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": "Doctor check timed out."}
+        return {
+            "sections": [],
+            "oks": 0,
+            "warns": 0,
+            "fails": 0,
+            "exitCode": 1,
+            "error": "Doctor check timed out after 60 minutes.",
+        }
     except Exception as exc:
         return {"sections": [], "oks": 0, "warns": 0, "fails": 0, "exitCode": 1, "error": str(exc)}
 
     result = _parse_doctor_output(stdout)
     result["exitCode"] = exit_code
-    if not result["sections"] and stderr.strip():
-        result["error"] = stderr.strip()
+    combined_error = stderr.strip() or stdout.strip()
+    if exit_code != 0 and combined_error:
+        result["error"] = combined_error
+    elif not result["sections"] and combined_error:
+        result["error"] = combined_error
     return result
 
 
@@ -603,7 +833,7 @@ def run_publish(payload: object) -> dict[str, object]:
     if not site_dir:
         return {"output": "", "exitCode": 1, "error": "Set site directory first."}
 
-    args = [sys.executable, "-m", "proxnix_workstation.publish_cli"]
+    args, env = _publish_command()
     opts = payload if isinstance(payload, dict) else {}
     if opts.get("dryRun"):
         args.extend(["--dry-run", "--report-changes"])
@@ -616,23 +846,46 @@ def run_publish(payload: object) -> dict[str, object]:
         args.append(str(host))
 
     try:
-        stdout, stderr, exit_code = _run_cli(args, timeout=300)
+        stdout, stderr, exit_code = _run_cli(
+            args,
+            timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
     except subprocess.TimeoutExpired:
-        return {"output": "", "exitCode": 1, "error": "Publish timed out after 5 minutes."}
+        return {"output": "", "exitCode": 1, "error": "Publish timed out after 60 minutes."}
     except Exception as exc:
         return {"output": "", "exitCode": 1, "error": str(exc)}
 
+    output = _command_output(stdout, stderr)
     return {
-        "output": stdout.strip(),
+        "output": output,
         "exitCode": exit_code,
-        "error": stderr.strip() if exit_code != 0 and stderr.strip() else "",
+        "error": (
+            stderr.strip()
+            if stderr.strip()
+            else (stdout.strip() if exit_code != 0 and stdout.strip() else "")
+        ),
     }
 
 
 def git_status(_payload: object) -> dict[str, object]:
     config, _, _ = read_config_payload()
     site_dir = config["siteDir"]
-    empty: dict[str, object] = {"branch": "", "clean": True, "files": [], "log": [], "error": ""}
+    empty: dict[str, object] = {
+        "isRepo": False,
+        "branch": "",
+        "clean": True,
+        "staged": [],
+        "unstaged": [],
+        "untracked": [],
+        "files": [],
+        "log": [],
+        "ahead": 0,
+        "behind": 0,
+        "hasRemote": False,
+        "upstream": "",
+        "error": "",
+    }
     if not site_dir:
         empty["error"] = "Set site directory first."
         return empty
@@ -646,9 +899,9 @@ def git_status(_payload: object) -> dict[str, object]:
         try:
             result = subprocess.run(
                 ["git", "-C", str(site_path), *args],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=30, env=_git_env(),
             )
-            return result.stdout.strip(), result.returncode
+            return _command_output(result.stdout, result.stderr), result.returncode
         except Exception:
             return "", 1
 
@@ -658,13 +911,29 @@ def git_status(_payload: object) -> dict[str, object]:
         return empty
 
     branch_out, _ = git("branch", "--show-current")
-    status_out, _ = git("status", "--porcelain")
+    status_out, _ = git("status", "--porcelain=v1", "-u")
     log_out, _ = git("log", "--oneline", "-15")
+    upstream_out, upstream_rc = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 
     files: list[dict[str, str]] = []
+    staged: list[dict[str, str]] = []
+    unstaged: list[dict[str, str]] = []
+    untracked: list[dict[str, str]] = []
     for line in status_out.splitlines():
         if len(line) >= 3:
-            files.append({"status": line[:2].strip() or "?", "path": line[3:]})
+            index_flag = line[0]
+            worktree_flag = line[1]
+            path = line[3:]
+            status = line[:2].strip() or "?"
+            entry = {"status": status, "path": path}
+            files.append(entry)
+            if index_flag == "?":
+                untracked.append({"status": "?", "path": path})
+            else:
+                if index_flag != " ":
+                    staged.append({"status": index_flag, "path": path})
+                if worktree_flag != " ":
+                    unstaged.append({"status": worktree_flag, "path": path})
 
     log_entries: list[dict[str, str]] = []
     for line in log_out.splitlines():
@@ -672,13 +941,133 @@ def git_status(_payload: object) -> dict[str, object]:
         if len(parts) == 2:
             log_entries.append({"hash": parts[0], "message": parts[1]})
 
+    ahead = 0
+    behind = 0
+    has_remote = upstream_rc == 0 and bool(upstream_out)
+    if has_remote:
+        count_out, count_rc = git("rev-list", "--left-right", "--count", f"HEAD...{upstream_out}")
+        if count_rc == 0:
+            counts = count_out.split()
+            if len(counts) >= 2:
+                try:
+                    ahead = int(counts[0])
+                    behind = int(counts[1])
+                except ValueError:
+                    ahead = 0
+                    behind = 0
+
     return {
+        "isRepo": True,
         "branch": branch_out,
         "clean": len(files) == 0,
+        "staged": staged,
+        "unstaged": unstaged,
+        "untracked": untracked,
         "files": files,
         "log": log_entries,
+        "ahead": ahead,
+        "behind": behind,
+        "hasRemote": has_remote,
+        "upstream": upstream_out if has_remote else "",
         "error": "",
     }
+
+
+def _git_site_path() -> tuple[Path | None, dict[str, object] | None]:
+    config, _, _ = read_config_payload()
+    site_dir = config["siteDir"]
+    if not site_dir:
+        return None, {"output": "", "exitCode": 1, "error": "Set site directory first."}
+
+    site_path = Path(site_dir).expanduser()
+    if not site_path.is_dir():
+        return None, {"output": "", "exitCode": 1, "error": f"Site directory not found: {site_dir}"}
+
+    return site_path, None
+
+
+def _run_git(site_path: Path, *args: str, timeout: int = 120) -> tuple[str, int]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(site_path), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_git_env(),
+        )
+        return _command_output(result.stdout, result.stderr), result.returncode
+    except subprocess.TimeoutExpired:
+        return f"git {' '.join(args)} timed out.", 124
+    except Exception as exc:
+        return str(exc), 1
+
+
+def _command_result(output: str, exit_code: int, fallback_success: str = "") -> dict[str, object]:
+    cleaned = output.strip() or (fallback_success if exit_code == 0 else "")
+    return {
+        "output": cleaned,
+        "exitCode": exit_code,
+        "error": "" if exit_code == 0 else cleaned,
+    }
+
+
+def _ensure_git_repo(site_path: Path) -> dict[str, object] | None:
+    _, repo_rc = _run_git(site_path, "rev-parse", "--is-inside-work-tree")
+    if repo_rc != 0:
+        return {"output": "", "exitCode": 1, "error": "Site directory is not a git repository."}
+    return None
+
+
+def git_add(payload: object) -> dict[str, object]:
+    site_path, error = _git_site_path()
+    if error is not None:
+        return error
+    assert site_path is not None
+    repo_error = _ensure_git_repo(site_path)
+    if repo_error is not None:
+        return repo_error
+
+    opts = payload if isinstance(payload, dict) else {}
+    if opts.get("all"):
+        output, exit_code = _run_git(site_path, "add", "-A")
+        return _command_result(output, exit_code, "All changes staged.")
+
+    path = str(opts.get("file", "")).strip()
+    if not path:
+        return {"output": "", "exitCode": 1, "error": "Choose a file to add."}
+    output, exit_code = _run_git(site_path, "add", "--", path)
+    return _command_result(output, exit_code, f"Staged {path}.")
+
+
+def git_commit(payload: object) -> dict[str, object]:
+    site_path, error = _git_site_path()
+    if error is not None:
+        return error
+    assert site_path is not None
+    repo_error = _ensure_git_repo(site_path)
+    if repo_error is not None:
+        return repo_error
+
+    opts = payload if isinstance(payload, dict) else {}
+    message = str(opts.get("message", "")).strip()
+    if not message:
+        return {"output": "", "exitCode": 1, "error": "Commit message cannot be empty."}
+
+    output, exit_code = _run_git(site_path, "commit", "-m", message)
+    return _command_result(output, exit_code)
+
+
+def git_push(_payload: object) -> dict[str, object]:
+    site_path, error = _git_site_path()
+    if error is not None:
+        return error
+    assert site_path is not None
+    repo_error = _ensure_git_repo(site_path)
+    if repo_error is not None:
+        return repo_error
+
+    output, exit_code = _run_git(site_path, "push", timeout=180)
+    return _command_result(output, exit_code, "Pushed successfully.")
 
 
 def open_in_editor(payload: object) -> dict[str, object]:
@@ -706,6 +1095,8 @@ def main(argv: list[str]) -> int:
     try:
         if command == "snapshot":
             result = snapshot()
+        elif command == "secrets-provider-status":
+            result = secrets_provider_status()
         elif command == "save-config":
             payload = json.load(sys.stdin)
             result = save_config(payload)
@@ -720,6 +1111,14 @@ def main(argv: list[str]) -> int:
             result = run_publish(payload)
         elif command == "git-status":
             result = git_status(None)
+        elif command == "git-add":
+            payload = json.load(sys.stdin)
+            result = git_add(payload)
+        elif command == "git-commit":
+            payload = json.load(sys.stdin)
+            result = git_commit(payload)
+        elif command == "git-push":
+            result = git_push(None)
         elif command == "open-in-editor":
             payload = json.load(sys.stdin)
             result = open_in_editor(payload)
