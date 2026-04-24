@@ -27,7 +27,8 @@ You will need these tools installed on your **workstation** (the machine you man
 - `ssh` — to reach the Proxmox host
 - `ssh-keygen` — to generate SSH keys that `age` can use as recipients
 - `sops` — to encrypt and decrypt secret stores
-- `python3` — used by the secrets helper
+- `rsync` — to sync the relay cache to host nodes
+- `python3` — used by the workstation CLI
 
 ## Mental model
 
@@ -135,6 +136,6 @@ Common tasks:
 - run the host helper-script installer when bootstrapping a Proxmox node
 - use the raw host `.deb` when you want manual or offline package control
 - cut annotated `v*` release tags to publish host and workstation artifacts
-- refresh the Homebrew tap formula when releasing `ProxnixManager`
+- refresh the Homebrew tap formula and cask when releasing `ProxnixManager`
 
 See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [ProxnixManager](operations/proxnix-manager.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
