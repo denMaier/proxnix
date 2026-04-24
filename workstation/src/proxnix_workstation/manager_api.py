@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .config import WorkstationConfig, load_workstation_config
@@ -127,6 +128,64 @@ def set_config_value(config_file: Path | None, key: str, value: str) -> dict[str
     return save_config(config_file, {key: value})
 
 
+def sidebar_metadata_path(config_file: Path | None = None) -> Path:
+    config = load_workstation_config(config_file)
+    return config.config_file.parent / "manager-sidebar-state.json"
+
+
+def _normalized_site_key(site_dir: Path | None) -> str:
+    if site_dir is None:
+        return ""
+    return str(site_dir.expanduser().resolve(strict=False))
+
+
+def _normalize_sidebar_metadata(raw_value: object) -> dict[str, object]:
+    raw = raw_value if isinstance(raw_value, dict) else {}
+
+    display_name = str(raw.get("displayName", "")).strip()
+    group = str(raw.get("group", "")).strip()
+    labels_raw = raw.get("labels", [])
+    labels: list[str] = []
+    if isinstance(labels_raw, list):
+        labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+
+    return {
+        "displayName": display_name,
+        "group": group,
+        "labels": labels,
+    }
+
+
+def read_sidebar_metadata(config_file: Path | None = None) -> dict[str, dict[str, object]]:
+    config = load_workstation_config(config_file)
+    if config.site_dir is None:
+        return {}
+    metadata_path = sidebar_metadata_path(config_file)
+    if not metadata_path.is_file():
+        return {}
+    try:
+        raw_state = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw_state, dict):
+        return {}
+    sites = raw_state.get("sites")
+    if not isinstance(sites, dict):
+        return {}
+    site_state = sites.get(_normalized_site_key(config.site_dir))
+    if not isinstance(site_state, dict):
+        return {}
+    containers = site_state.get("containers")
+    if not isinstance(containers, dict):
+        return {}
+
+    return {
+        str(vmid): _normalize_sidebar_metadata(metadata)
+        for vmid, metadata in containers.items()
+        if str(vmid).isdigit()
+    }
+
+
 def _defined_secret_groups(site_paths: SitePaths) -> list[str]:
     groups_dir = site_paths.private_dir / "groups"
     if not groups_dir.is_dir():
@@ -207,5 +266,5 @@ def build_status(config_file: Path | None = None) -> dict[str, object]:
         "containers": containers,
         "definedSecretGroups": defined_groups,
         "attachedSecretGroups": attached_groups,
-        "sidebarMetadata": {},
+        "sidebarMetadata": read_sidebar_metadata(config_file),
     }

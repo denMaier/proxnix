@@ -233,6 +233,16 @@ def _secrets_command() -> tuple[list[str], dict[str, str]]:
     return [sys.executable, "-m", "proxnix_workstation.secrets_cli"], _subprocess_env()
 
 
+def _proxnix_command() -> tuple[list[str], dict[str, str]]:
+    bundled_cli = _bundled_cli("proxnix")
+    if bundled_cli is not None:
+        return [str(bundled_cli)], _subprocess_env()
+    repo_cli = _repo_cli("proxnix")
+    if repo_cli is not None:
+        return [str(repo_cli)], _subprocess_env()
+    return [sys.executable, "-m", "proxnix_workstation.cli"], _subprocess_env()
+
+
 def sidebar_metadata_path() -> Path:
     return default_config_path().parent / "manager-sidebar-state.json"
 
@@ -961,6 +971,10 @@ def secrets_provider_status() -> dict[str, object]:
 
 
 def snapshot() -> dict[str, object]:
+    cli_snapshot = _cli_status()
+    if cli_snapshot is not None:
+        return cli_snapshot
+
     config, preserved_keys, config_path = read_config_payload()
     site_dir_exists, containers, defined_groups, attached_groups, warnings = scan_state(config)
     sidebar_metadata = read_sidebar_metadata(config["siteDir"])
@@ -995,6 +1009,10 @@ def create_site_nix(_payload: object) -> dict[str, object]:
 
 
 def save_config(payload: dict[str, object]) -> dict[str, object]:
+    cli_snapshot = _cli_save_config(payload)
+    if cli_snapshot is not None:
+        return cli_snapshot
+
     raw_config = payload.get("config")
     if not isinstance(raw_config, dict):
         raise ValueError("save-config requires a config object")
@@ -1159,6 +1177,75 @@ def _run_cli(
     return result.stdout, result.stderr, result.returncode
 
 
+def _run_json_cli(
+    args: list[str],
+    *,
+    timeout: int = 120,
+    stdin_payload: object | None = None,
+) -> tuple[dict[str, object] | None, str, int]:
+    command, env = _proxnix_command()
+    stdin_text = None if stdin_payload is None else json.dumps(stdin_payload)
+    try:
+        stdout, stderr, exit_code = _run_cli(
+            [*command, *args],
+            timeout=timeout,
+            env=env,
+            stdin_text=stdin_text,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"proxnix {' '.join(args)} timed out.", 124
+    except Exception as exc:
+        return None, str(exc), 1
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None, _command_output(stdout, stderr) or "proxnix returned invalid JSON.", exit_code or 1
+    if not isinstance(payload, dict):
+        return None, "proxnix returned invalid JSON shape.", exit_code or 1
+    return payload, stderr.strip(), exit_code
+
+
+def _json_cli_data(
+    args: list[str],
+    *,
+    timeout: int = 120,
+    stdin_payload: object | None = None,
+) -> tuple[dict[str, object] | None, str, int]:
+    payload, stderr, exit_code = _run_json_cli(args, timeout=timeout, stdin_payload=stdin_payload)
+    if payload is None:
+        return None, stderr, exit_code
+    if payload.get("ok") is not True:
+        error = payload.get("error")
+        if isinstance(error, dict):
+            return None, str(error.get("message", "proxnix command failed")), exit_code or 1
+        return None, stderr or "proxnix command failed", exit_code or 1
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None, "proxnix returned non-object data.", exit_code or 1
+    return data, stderr, exit_code
+
+
+def _cli_status() -> dict[str, object] | None:
+    data, _error, exit_code = _json_cli_data(["status", "--json"])
+    if data is None or exit_code not in {0, 1, 2}:
+        return None
+    return data
+
+
+def _cli_save_config(payload: dict[str, object]) -> dict[str, object] | None:
+    raw_config = payload.get("config")
+    if not isinstance(raw_config, dict):
+        return None
+    data, _error, exit_code = _json_cli_data(
+        ["config", "set", "--stdin-json", "--json"],
+        stdin_payload={"config": raw_config},
+    )
+    if data is None or exit_code != 0:
+        return None
+    return _cli_status()
+
+
 def _parse_doctor_output(output: str) -> dict[str, object]:
     sections: list[dict[str, object]] = []
     current: dict[str, object] | None = None
@@ -1185,6 +1272,10 @@ def _parse_doctor_output(output: str) -> dict[str, object]:
 
 
 def run_doctor(payload: object) -> dict[str, object]:
+    cli_result = _cli_run_validation(payload)
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     site_dir = config["siteDir"]
     if not site_dir:
@@ -1225,6 +1316,34 @@ def run_doctor(payload: object) -> dict[str, object]:
     elif not result["sections"] and combined_error:
         result["error"] = combined_error
     return result
+
+
+def _cli_run_validation(payload: object) -> dict[str, object] | None:
+    args = ["validation", "--site-only", "--json"]
+    opts = payload if isinstance(payload, dict) else {}
+    if opts.get("configOnly"):
+        args.append("--config-only")
+    vmid = opts.get("vmid")
+    if vmid:
+        args.extend(["--vmid", str(vmid)])
+
+    data, error, exit_code = _json_cli_data(
+        args,
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+    )
+    if data is None:
+        return {
+            "sections": [],
+            "oks": 0,
+            "warns": 0,
+            "fails": 0,
+            "exitCode": exit_code or 1,
+            "error": error,
+        }
+    data["exitCode"] = data.get("exitCode", exit_code)
+    if exit_code not in {0, int(data.get("exitCode", 0) or 0)} and error:
+        data["error"] = error
+    return data
 
 
 def run_publish(payload: object) -> dict[str, object]:

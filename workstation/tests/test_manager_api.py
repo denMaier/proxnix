@@ -25,6 +25,7 @@ class ManagerApiTests(unittest.TestCase):
             (site / "private" / "containers" / "120" / "age_identity.sops.yaml").write_text("x\n", encoding="utf-8")
             (site / "site.nix").write_text("{ ... }: {}\n", encoding="utf-8")
             config = root / "config"
+            sidebar_state = root / "manager-sidebar-state.json"
             config.write_text(
                 "\n".join(
                     [
@@ -35,6 +36,24 @@ class ManagerApiTests(unittest.TestCase):
                     ]
                 )
                 + "\n",
+                encoding="utf-8",
+            )
+            sidebar_state.write_text(
+                json.dumps(
+                    {
+                        "sites": {
+                            str(site.resolve()): {
+                                "containers": {
+                                    "120": {
+                                        "displayName": "web",
+                                        "group": "apps",
+                                        "labels": ["prod", ""],
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
                 encoding="utf-8",
             )
 
@@ -50,6 +69,10 @@ class ManagerApiTests(unittest.TestCase):
             self.assertEqual(status["containers"][0]["vmid"], "120")
             self.assertEqual(status["containers"][0]["dropins"], ["web.nix"])
             self.assertTrue(status["containers"][0]["hasIdentity"])
+            self.assertEqual(
+                status["sidebarMetadata"],
+                {"120": {"displayName": "web", "group": "apps", "labels": ["prod"]}},
+            )
 
     def test_status_json_cli_uses_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
