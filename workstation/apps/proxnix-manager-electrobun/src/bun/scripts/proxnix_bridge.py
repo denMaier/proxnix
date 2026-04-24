@@ -1752,124 +1752,6 @@ def init_container_identity(payload: object) -> dict[str, object]:
     return _command_result(output, exit_code, f"Initialized identity for {vmid}.")
 
 
-def git_status(_payload: object) -> dict[str, object]:
-    config, _, _ = read_config_payload()
-    site_dir = config["siteDir"]
-    empty: dict[str, object] = {
-        "isRepo": False,
-        "branch": "",
-        "clean": True,
-        "staged": [],
-        "unstaged": [],
-        "untracked": [],
-        "files": [],
-        "log": [],
-        "ahead": 0,
-        "behind": 0,
-        "hasRemote": False,
-        "upstream": "",
-        "error": "",
-    }
-    if not site_dir:
-        empty["error"] = "Set site directory first."
-        return empty
-
-    site_path = Path(site_dir).expanduser()
-    if not site_path.is_dir():
-        empty["error"] = f"Site directory not found: {site_dir}"
-        return empty
-
-    def git(*args: str) -> tuple[str, int]:
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(site_path), *args],
-                capture_output=True, text=True, timeout=30, env=_git_env(),
-            )
-            return _command_output(result.stdout, result.stderr), result.returncode
-        except Exception:
-            return "", 1
-
-    _, rc = git("rev-parse", "--is-inside-work-tree")
-    if rc != 0:
-        empty["error"] = "Site directory is not a git repository."
-        return empty
-
-    branch_out, _ = git("branch", "--show-current")
-    status_out, _ = git("status", "--porcelain=v1", "-u")
-    log_out, _ = git("log", "--oneline", "-15")
-    upstream_out, upstream_rc = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-
-    files: list[dict[str, str]] = []
-    staged: list[dict[str, str]] = []
-    unstaged: list[dict[str, str]] = []
-    untracked: list[dict[str, str]] = []
-    for line in status_out.splitlines():
-        if len(line) >= 3:
-            index_flag = line[0]
-            worktree_flag = line[1]
-            path = line[3:]
-            status = line[:2].strip() or "?"
-            entry = {"status": status, "path": path}
-            files.append(entry)
-            if index_flag == "?":
-                untracked.append({"status": "?", "path": path})
-            else:
-                if index_flag != " ":
-                    staged.append({"status": index_flag, "path": path})
-                if worktree_flag != " ":
-                    unstaged.append({"status": worktree_flag, "path": path})
-
-    log_entries: list[dict[str, str]] = []
-    for line in log_out.splitlines():
-        parts = line.split(" ", 1)
-        if len(parts) == 2:
-            log_entries.append({"hash": parts[0], "message": parts[1]})
-
-    ahead = 0
-    behind = 0
-    has_remote = upstream_rc == 0 and bool(upstream_out)
-    if has_remote:
-        count_out, count_rc = git("rev-list", "--left-right", "--count", f"HEAD...{upstream_out}")
-        if count_rc == 0:
-            counts = count_out.split()
-            if len(counts) >= 2:
-                try:
-                    ahead = int(counts[0])
-                    behind = int(counts[1])
-                except ValueError:
-                    ahead = 0
-                    behind = 0
-
-    return {
-        "isRepo": True,
-        "branch": branch_out,
-        "clean": len(files) == 0,
-        "staged": staged,
-        "unstaged": unstaged,
-        "untracked": untracked,
-        "files": files,
-        "log": log_entries,
-        "ahead": ahead,
-        "behind": behind,
-        "hasRemote": has_remote,
-        "upstream": upstream_out if has_remote else "",
-        "error": "",
-    }
-
-
-def _git_site_path() -> tuple[Path | None, dict[str, object] | None]:
-    config, _, _ = read_config_payload()
-    site_dir = config["siteDir"]
-    if not site_dir:
-        return None, {"output": "", "exitCode": 1, "error": "Set site directory first."}
-
-    site_path = Path(site_dir).expanduser()
-    if not site_path.is_dir():
-        return None, {"output": "", "exitCode": 1, "error": f"Site directory not found: {site_dir}"}
-
-    return site_path, None
-
-
 def _run_git(site_path: Path, *args: str, timeout: int = 120) -> tuple[str, int]:
     try:
         result = subprocess.run(
@@ -1893,65 +1775,6 @@ def _command_result(output: str, exit_code: int, fallback_success: str = "") -> 
         "exitCode": exit_code,
         "error": "" if exit_code == 0 else cleaned,
     }
-
-
-def _ensure_git_repo(site_path: Path) -> dict[str, object] | None:
-    _, repo_rc = _run_git(site_path, "rev-parse", "--is-inside-work-tree")
-    if repo_rc != 0:
-        return {"output": "", "exitCode": 1, "error": "Site directory is not a git repository."}
-    return None
-
-
-def git_add(payload: object) -> dict[str, object]:
-    site_path, error = _git_site_path()
-    if error is not None:
-        return error
-    assert site_path is not None
-    repo_error = _ensure_git_repo(site_path)
-    if repo_error is not None:
-        return repo_error
-
-    opts = payload if isinstance(payload, dict) else {}
-    if opts.get("all"):
-        output, exit_code = _run_git(site_path, "add", "-A")
-        return _command_result(output, exit_code, "All changes staged.")
-
-    path = str(opts.get("file", "")).strip()
-    if not path:
-        return {"output": "", "exitCode": 1, "error": "Choose a file to add."}
-    output, exit_code = _run_git(site_path, "add", "--", path)
-    return _command_result(output, exit_code, f"Staged {path}.")
-
-
-def git_commit(payload: object) -> dict[str, object]:
-    site_path, error = _git_site_path()
-    if error is not None:
-        return error
-    assert site_path is not None
-    repo_error = _ensure_git_repo(site_path)
-    if repo_error is not None:
-        return repo_error
-
-    opts = payload if isinstance(payload, dict) else {}
-    message = str(opts.get("message", "")).strip()
-    if not message:
-        return {"output": "", "exitCode": 1, "error": "Commit message cannot be empty."}
-
-    output, exit_code = _run_git(site_path, "commit", "-m", message)
-    return _command_result(output, exit_code)
-
-
-def git_push(_payload: object) -> dict[str, object]:
-    site_path, error = _git_site_path()
-    if error is not None:
-        return error
-    assert site_path is not None
-    repo_error = _ensure_git_repo(site_path)
-    if repo_error is not None:
-        return repo_error
-
-    output, exit_code = _run_git(site_path, "push", timeout=180)
-    return _command_result(output, exit_code, "Pushed successfully.")
 
 
 def open_in_editor(payload: object) -> dict[str, object]:
@@ -2031,16 +1854,6 @@ def main(argv: list[str]) -> int:
         elif command == "run-publish":
             payload = json.load(sys.stdin)
             result = run_publish(payload)
-        elif command == "git-status":
-            result = git_status(None)
-        elif command == "git-add":
-            payload = json.load(sys.stdin)
-            result = git_add(payload)
-        elif command == "git-commit":
-            payload = json.load(sys.stdin)
-            result = git_commit(payload)
-        elif command == "git-push":
-            result = git_push(None)
         elif command == "open-in-editor":
             payload = json.load(sys.stdin)
             result = open_in_editor(payload)
