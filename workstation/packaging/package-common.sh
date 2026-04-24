@@ -112,49 +112,61 @@ print(os.path.relpath(python_dir, bin_dir))
 PY
 )"
 
+  cat > "${bin_dir}/proxnix-python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -x /opt/homebrew/opt/python@3.12/bin/python3.12 ]]; then
+  exec /opt/homebrew/opt/python@3.12/bin/python3.12 "$@"
+fi
+if [[ -x /usr/local/opt/python@3.12/bin/python3.12 ]]; then
+  exec /usr/local/opt/python@3.12/bin/python3.12 "$@"
+fi
+exec python3 "$@"
+EOF
+
   cat > "${bin_dir}/proxnix" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.cli "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.cli "\$@"
 EOF
 
   cat > "${bin_dir}/proxnix-secrets" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.secrets_cli "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.secrets_cli "\$@"
 EOF
 
   cat > "${bin_dir}/proxnix-publish" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.publish_cli "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.publish_cli "\$@"
 EOF
 
   cat > "${bin_dir}/proxnix-doctor" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.doctor_cli "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.doctor_cli "\$@"
 EOF
 
   cat > "${bin_dir}/proxnix-lxc-exercise" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.exercise_cli "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.exercise_cli "\$@"
 EOF
 
   cat > "${bin_dir}/proxnix-tui" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" python3 -m proxnix_workstation.tui "\$@"
+exec env PYTHONPATH="\$SCRIPT_DIR/${relative_python}" "\$SCRIPT_DIR/proxnix-python" -m proxnix_workstation.tui "\$@"
 EOF
 
-  chmod 755 "${bin_dir}/proxnix" "${bin_dir}/proxnix-secrets" "${bin_dir}/proxnix-publish" "${bin_dir}/proxnix-doctor" "${bin_dir}/proxnix-lxc-exercise" "${bin_dir}/proxnix-tui"
+  chmod 755 "${bin_dir}/proxnix-python" "${bin_dir}/proxnix" "${bin_dir}/proxnix-secrets" "${bin_dir}/proxnix-publish" "${bin_dir}/proxnix-doctor" "${bin_dir}/proxnix-lxc-exercise" "${bin_dir}/proxnix-tui"
 }
 
 write_runtime_readme() {
@@ -174,7 +186,7 @@ Included CLI tools:
 
 Runtime dependencies:
   - bash
-  - python3
+  - python 3.12
   - ssh
   - rsync
   - sops

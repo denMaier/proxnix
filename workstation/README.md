@@ -252,5 +252,5 @@ python3 -m twine upload dist/*
 - Secret-store mutation and SSH key handling are implemented in Python, with
   `sops` retained at the encryption boundary for wire-format compatibility.
 - Release tags are expected to match `[project].version` in `pyproject.toml`.
-- `ProxnixManager` is the Electrobun GUI and ships separately from a Homebrew
+- `Proxnix Manager` is the Electrobun GUI and ships separately from a Homebrew
   tap; see `../docs/operations/proxnix-manager.md`.

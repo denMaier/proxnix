@@ -47,6 +47,16 @@ function resolvePythonCommand(): string[] {
     return explicit.split(/\s+/).filter(Boolean);
   }
 
+  const preferredPaths = [
+    "/opt/homebrew/opt/python@3.12/bin/python3.12",
+    "/usr/local/opt/python@3.12/bin/python3.12",
+  ];
+  for (const candidate of preferredPaths) {
+    if (existsSync(candidate)) {
+      return [candidate];
+    }
+  }
+
   const python3 = Bun.which("python3");
   if (python3) {
     return [python3];

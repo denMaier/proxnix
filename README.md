@@ -1,8 +1,12 @@
-# proxnix
+<p align="center">
+  <img src="docs/assets/proxnix-icon.png" alt="Proxnix icon" width="128" height="128">
+</p>
+
+# Proxnix
 
 Host-managed NixOS LXC containers for Proxmox.
 
-proxnix turns Proxmox container metadata and host-side Nix modules into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
+Proxnix turns Proxmox container metadata and host-side Nix modules into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
 
 This repository is the install/bootstrap layer. It owns the shared hooks,
 helpers, and baseline Nix modules. Site-specific data is meant to live in a
@@ -17,7 +21,7 @@ upgrade and uninstall path.
 ## Repo layout
 
 - `host/` contains the Proxmox-host install/runtime code: hooks, installers, inventory, helper scripts, and the shared managed Nix modules.
-- `workstation/` contains the workstation-authoritative CLI, TUI, Electrobun manager app, Nix flake, packaging scripts, and workstation module exports.
+- `workstation/` contains the workstation-authoritative CLI, TUI, Proxnix Manager app, Nix flake, packaging scripts, and workstation module exports.
 - `docs/` contains shared human-facing documentation.
 
 ## What you get

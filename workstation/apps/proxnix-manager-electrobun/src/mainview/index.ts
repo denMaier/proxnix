@@ -841,7 +841,7 @@ function renderSidebar(snapshot: AppSnapshot): string {
   return `
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">${icon("spark")}</div>
+        <div class="brand-mark"><img class="brand-icon" src="assets/proxnix-icon.png" alt="" /></div>
         <div class="brand-copy">
           <div class="eyebrow">Workstation</div>
           <div class="brand-title">Proxnix Manager</div>

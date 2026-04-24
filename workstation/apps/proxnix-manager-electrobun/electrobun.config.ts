@@ -17,6 +17,7 @@ export default {
   build: {
     mac: {
       codesign: enableMacCodesign,
+      icons: "assets/proxnix.iconset",
       notarize: enableMacCodesign && enableMacNotarize,
     },
     bun: {
@@ -32,6 +33,7 @@ export default {
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
       "src/mainview/index.css": "views/mainview/index.css",
+      "src/mainview/assets": "views/mainview/assets",
       "src/bun/scripts": "bun/scripts",
     },
   },

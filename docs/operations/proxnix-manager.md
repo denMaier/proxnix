@@ -1,6 +1,10 @@
-# ProxnixManager
+<p align="center">
+  <img src="../assets/proxnix-icon.png" alt="Proxnix icon" width="96" height="96">
+</p>
 
-`ProxnixManager` is the Electrobun GUI for proxnix. It provides a graphical
+# Proxnix Manager
+
+`Proxnix Manager` is the Electrobun GUI for Proxnix. It provides a graphical
 interface for the most common workstation workflows:
 
 - first-run onboarding and site scaffolding

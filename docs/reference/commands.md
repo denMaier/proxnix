@@ -122,7 +122,7 @@ That installs both:
 
 ### `ci/render-homebrew-cask.sh`
 
-Render the Homebrew tap cask for `ProxnixManager`:
+Render the Homebrew tap cask for Proxnix Manager:
 
 ```bash
 ./ci/render-homebrew-cask.sh --version 0.1.0

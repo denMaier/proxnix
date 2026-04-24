@@ -1,6 +1,10 @@
-# proxnix-manager-electrobun
+<p align="center">
+  <img src="assets/proxnix-icon.png" alt="Proxnix icon" width="128" height="128">
+</p>
 
-This is the supported `ProxnixManager` GUI. It replaces the retired macOS-only
+# Proxnix Manager
+
+This is the supported `Proxnix Manager` GUI. It replaces the retired macOS-only
 Swift app with a cross-platform Electrobun app.
 
 Current scope:

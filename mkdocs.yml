@@ -1,6 +1,6 @@
-site_name: proxnix
+site_name: Proxnix
 site_description: Host-managed NixOS LXC containers on Proxmox
-repo_name: proxnix
+repo_name: Proxnix
 
 theme:
   name: mkdocs
@@ -21,7 +21,7 @@ nav:
   - Operations:
       - Day 2 Operations: operations/day-2.md
       - Host Packages: operations/host-packages.md
-      - ProxnixManager: operations/proxnix-manager.md
+      - Proxnix Manager: operations/proxnix-manager.md
       - Releases: operations/releases.md
       - Workstation Packages: operations/workstation-packages.md
       - Troubleshooting: operations/troubleshooting.md

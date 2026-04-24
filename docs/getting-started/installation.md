@@ -246,14 +246,14 @@ On Apple Silicon macOS, the Homebrew tap can also ship the same terminal tools a
 brew install denMaier/tap/proxnix-workstation
 ```
 
-### ProxnixManager on macOS
+### Proxnix Manager on macOS
 
-`ProxnixManager` is the Electrobun workstation GUI. It is intended to ship from
+`Proxnix Manager` is the Electrobun workstation GUI. It is intended to ship from
 a Homebrew tap so the macOS app can be installed with a single
 `brew install --cask` command. This repo includes the tap cask scaffold under
 `packaging/homebrew/`.
 
-See [ProxnixManager](../operations/proxnix-manager.md).
+See [Proxnix Manager](../operations/proxnix-manager.md).
 
 If you prefer Nix-managed installs on `nixos` or `nix-darwin`, this repo now
 exports `./workstation#proxnix-workstation` and

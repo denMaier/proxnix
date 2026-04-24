@@ -4,8 +4,8 @@ The ergonomic release path is:
 
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
-3. let GitHub Actions publish the host package, the workstation Python package, and the ProxnixManager app assets from the pushed tag
-4. render and update the Homebrew tap formula for `proxnix-workstation` and the cask for `ProxnixManager`
+3. let GitHub Actions publish the host package, the workstation Python package, and the Proxnix Manager app assets from the pushed tag
+4. render and update the Homebrew tap formula for `proxnix-workstation` and the cask for Proxnix Manager
 
 ## Install the git hooks
 
@@ -105,7 +105,7 @@ Pushing a matching `v*` tag triggers:
 
 - [Host Packages](host-packages.md)
 - [Workstation Packages](workstation-packages.md)
-- [ProxnixManager](proxnix-manager.md)
+- [Proxnix Manager](proxnix-manager.md)
 
 Those workflows publish artifacts using the tag as the package version.
 

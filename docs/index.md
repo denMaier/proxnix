@@ -1,6 +1,10 @@
-# proxnix
+<p align="center">
+  <img src="assets/proxnix-icon.png" alt="Proxnix icon" width="128" height="128">
+</p>
 
-proxnix manages NixOS LXC containers from the Proxmox host.
+# Proxnix
+
+Proxnix manages NixOS LXC containers from the Proxmox host.
 
 Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, copies and binds the managed pieces into the guest root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
 
@@ -136,6 +140,6 @@ Common tasks:
 - run the host helper-script installer when bootstrapping a Proxmox node
 - use the raw host `.deb` when you want manual or offline package control
 - cut annotated `v*` release tags to publish host and workstation artifacts
-- refresh the Homebrew tap formula and cask when releasing `ProxnixManager`
+- refresh the Homebrew tap formula and cask when releasing Proxnix Manager
 
-See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [ProxnixManager](operations/proxnix-manager.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
+See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [Proxnix Manager](operations/proxnix-manager.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
