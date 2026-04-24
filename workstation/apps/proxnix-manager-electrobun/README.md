@@ -31,6 +31,14 @@ The usual runtime command is:
 bun start
 ```
 
+The dev bridge prefers the repo-local workstation virtualenv, so prepare it
+before testing secret providers:
+
+```bash
+../../../ci/bootstrap-workstation-venv.sh
+../../../workstation/.venv/bin/python -m pip install -e "../../../workstation[manager]"
+```
+
 Use a disposable config home to test onboarding without touching your real
 workstation config:
 
@@ -79,9 +87,22 @@ Set `PROXNIX_MANAGER_MACOS_ADHOC_SIGN=0` to disable the ad-hoc fallback.
 
 ## Bridge design
 
-The app ships a Python bridge script alongside the Bun process. The bridge can:
+The app is CLI-first from the UI boundary. Bun invokes a Python bridge process
+by subprocess and receives JSON envelopes; it does not import workstation
+Python internals directly. The bridge can:
 
 - read and write `~/.config/proxnix/config`
 - preserve unknown `PROXNIX_*` assignments
 - scan the site repo for containers, drop-ins, secret groups, and identities
 - call the workstation Python package for secrets, doctor, and publish actions
+
+Python resolution order:
+
+1. `PROXNIX_MANAGER_PYTHON`
+2. packaged `bin/proxnix-python` under the app resources directory
+3. repo-local `workstation/.venv/bin/python`
+4. Homebrew `python@3.12`
+5. `python3`, `python`, or `py -3`
+
+Packaged builds bundle the workstation source and Manager Python dependencies,
+including `pykeepass`, under the app resources directory.

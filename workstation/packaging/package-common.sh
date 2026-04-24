@@ -60,16 +60,25 @@ from importlib.util import find_spec
 from pathlib import Path
 
 module_names = [
+    "argon2",
+    "_argon2_cffi_bindings",
+    "construct",
     "cryptography",
     "cffi",
-    "pycparser",
+    "Cryptodome",
     "_cffi_backend",
+    "lxml",
+    "pycparser",
+    "pykeepass",
+    "pyotp",
 ]
 
 paths = []
+missing = []
 for name in module_names:
     spec = find_spec(name)
     if spec is None:
+        missing.append(name)
         continue
     if spec.submodule_search_locations:
         for location in spec.submodule_search_locations:
@@ -77,13 +86,20 @@ for name in module_names:
     elif spec.origin:
         paths.append(Path(spec.origin))
 
+if missing:
+    raise SystemExit(
+        "missing Python modules for packaged Manager runtime: "
+        + ", ".join(missing)
+        + "; install workstation[manager] into the packaging virtualenv"
+    )
+
 for path in paths:
     print(path)
 PY
 )"
 
   if [[ -z "$bundle_paths" ]]; then
-    die "no bundled Python dependencies found; run uv sync --project ${WORKSTATION_DIR} first"
+    die "no bundled Python dependencies found; install the workstation manager extra into ${WORKSTATION_DIR}/.venv first"
   fi
 
   local dep_path
@@ -193,6 +209,7 @@ Runtime dependencies:
 
 Bundled Python dependencies:
   - cryptography
+  - pykeepass
 
 Configuration:
   ~/.config/proxnix/config

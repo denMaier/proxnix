@@ -35,6 +35,14 @@ dependencies = [
   "cryptography>=44",
 ]
 
+[project.optional-dependencies]
+manager = [
+  "pykeepass>=4.1",
+]
+pykeepass = [
+  "pykeepass>=4.1",
+]
+
 [project.urls]
 Homepage = "https://github.com/denMaier/proxnix"
 Repository = "https://github.com/denMaier/proxnix"

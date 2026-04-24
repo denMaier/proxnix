@@ -38,6 +38,11 @@ The cask depends on these Homebrew formulae:
 - `python@3.12`
 - `sops`
 
+The app bundle includes the workstation Python package source, the CLI wrapper
+scripts, and the Python modules needed by the Manager-facing secret workflows,
+including `pykeepass`. The GUI does not require users to install `pykeepass`
+into their global Python environment.
+
 Runtime tools still expected from the machine:
 
 - `ssh`
@@ -83,6 +88,31 @@ still refuses to open an unsigned local/test install, remove quarantine:
 xattr -dr com.apple.quarantine "/Applications/Proxnix Manager.app"
 ```
 
+## Python runtime resolution
+
+`Proxnix Manager` is CLI-first at runtime. The Bun bridge invokes Python only to
+run the bundled bridge script and workstation CLI commands, and the bridge
+communicates with the UI through structured JSON.
+
+Interpreter selection is:
+
+1. `PROXNIX_MANAGER_PYTHON`, when explicitly set
+2. bundled `bin/proxnix-python` under the packaged app resources directory
+3. repo-local `workstation/.venv/bin/python` during development
+4. Homebrew `python@3.12`
+5. `python3`, `python`, or Windows `py -3` from `PATH`
+
+For local development, prepare the repo-local environment before running the
+app:
+
+```bash
+./ci/bootstrap-workstation-venv.sh
+workstation/.venv/bin/python -m pip install -e "workstation[manager]"
+```
+
+That makes optional Manager providers such as `pykeepass` available to the
+bridge without relying on the system Python.
+
 ## Cask source
 
 This repository keeps the tap scaffold here:
@@ -113,6 +143,12 @@ Example:
   --version 0.1.0 \
   --output ../homebrew-tap/Casks/proxnix-manager.rb
 ```
+
+The release workflows create `workstation/.venv` with Python 3.12 and install
+`workstation[manager]` before wrapping the Electrobun app. The post-wrap step
+copies the workstation source and Manager Python dependencies into
+the app resources directory, then writes bundled CLI wrappers under its `bin/`
+subdirectory.
 
 ## Recommended repository setup
 

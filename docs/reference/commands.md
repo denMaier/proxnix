@@ -149,6 +149,12 @@ repo version of `proxnix-workstation` into that repo-local virtualenv.
 ./ci/bootstrap-workstation-venv.sh
 ```
 
+For local Proxnix Manager work, install the Manager extra after bootstrapping:
+
+```bash
+workstation/.venv/bin/python -m pip install -e "workstation[manager]"
+```
+
 ### `ci/release.sh`
 
 One-command release flow:

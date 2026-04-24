@@ -47,6 +47,13 @@ function resolvePythonCommand(): string[] {
     return explicit.split(/\s+/).filter(Boolean);
   }
 
+  for (const resourcesDir of bundledResourceCandidates()) {
+    const bundledPython = resolve(resourcesDir, "bin", "proxnix-python");
+    if (existsSync(bundledPython)) {
+      return [bundledPython];
+    }
+  }
+
   const moduleRelative = fileURLToPath(new URL("../../../../.venv/bin/python", import.meta.url));
   if (existsSync(moduleRelative)) {
     return [moduleRelative];
@@ -82,27 +89,33 @@ function resolvePythonCommand(): string[] {
   );
 }
 
+function bundledResourceCandidates(): string[] {
+  const executableDir = dirname(process.argv0);
+  const candidates = [
+    resolve(executableDir, "..", "Resources"),
+    resolve(executableDir, "Contents", "Resources"),
+    resolve(executableDir, "Resources"),
+  ];
+  return [...new Set(candidates)];
+}
+
 function bridgeScriptPath(): string {
   const moduleRelative = fileURLToPath(new URL("./scripts/proxnix_bridge.py", import.meta.url));
   if (existsSync(moduleRelative)) {
     return moduleRelative;
   }
 
-  const bundledPath = resolve(
-    dirname(process.argv0),
-    "..",
-    "Resources",
-    "app",
-    "bun",
-    "scripts",
-    "proxnix_bridge.py",
-  );
-  if (existsSync(bundledPath)) {
+  const bundledPaths = bundledResourceCandidates().flatMap((resourcesDir) => [
+    resolve(resourcesDir, "app", "bun", "scripts", "proxnix_bridge.py"),
+    resolve(resourcesDir, "bun", "scripts", "proxnix_bridge.py"),
+  ]);
+  const bundledPath = bundledPaths.find((candidate) => existsSync(candidate));
+  if (bundledPath) {
     return bundledPath;
   }
 
   throw new Error(
-    `Could not find proxnix bridge script. Checked ${moduleRelative} and ${bundledPath}.`,
+    `Could not find proxnix bridge script. Checked ${moduleRelative} and ${bundledPaths.join(", ")}.`,
   );
 }
 
