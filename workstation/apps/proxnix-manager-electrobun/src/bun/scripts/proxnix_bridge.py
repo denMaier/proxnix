@@ -917,6 +917,10 @@ def scan_state(config: dict[str, str]) -> tuple[bool, list[dict[str, object]], l
 
 
 def secrets_provider_status() -> dict[str, object]:
+    cli_result = _cli_secrets_provider_status()
+    if cli_result is not None:
+        return cli_result
+
     config, _preserved_keys, _config_path = read_config_payload()
     site_dir_raw = config["siteDir"]
     warnings: list[str] = []
@@ -1182,15 +1186,18 @@ def _run_json_cli(
     *,
     timeout: int = 120,
     stdin_payload: object | None = None,
+    stdin_text: str | None = None,
 ) -> tuple[dict[str, object] | None, str, int]:
     command, env = _proxnix_command()
-    stdin_text = None if stdin_payload is None else json.dumps(stdin_payload)
+    if stdin_payload is not None and stdin_text is not None:
+        return None, "internal bridge error: duplicate stdin payloads", 1
+    input_text = stdin_text if stdin_text is not None else (None if stdin_payload is None else json.dumps(stdin_payload))
     try:
         stdout, stderr, exit_code = _run_cli(
             [*command, *args],
             timeout=timeout,
             env=env,
-            stdin_text=stdin_text,
+            stdin_text=input_text,
         )
     except subprocess.TimeoutExpired:
         return None, f"proxnix {' '.join(args)} timed out.", 124
@@ -1211,8 +1218,14 @@ def _json_cli_data(
     *,
     timeout: int = 120,
     stdin_payload: object | None = None,
+    stdin_text: str | None = None,
 ) -> tuple[dict[str, object] | None, str, int]:
-    payload, stderr, exit_code = _run_json_cli(args, timeout=timeout, stdin_payload=stdin_payload)
+    payload, stderr, exit_code = _run_json_cli(
+        args,
+        timeout=timeout,
+        stdin_payload=stdin_payload,
+        stdin_text=stdin_text,
+    )
     if payload is None:
         return None, stderr, exit_code
     if payload.get("ok") is not True:
@@ -1228,6 +1241,16 @@ def _json_cli_data(
 
 def _cli_status() -> dict[str, object] | None:
     data, _error, exit_code = _json_cli_data(["status", "--json"])
+    if data is None or exit_code not in {0, 1, 2}:
+        return None
+    return data
+
+
+def _cli_secrets_provider_status() -> dict[str, object] | None:
+    data, _error, exit_code = _json_cli_data(
+        ["secrets", "status", "--json"],
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+    )
     if data is None or exit_code not in {0, 1, 2}:
         return None
     return data
@@ -1344,6 +1367,68 @@ def _cli_run_validation(payload: object) -> dict[str, object] | None:
     if exit_code not in {0, int(data.get("exitCode", 0) or 0)} and error:
         data["error"] = error
     return data
+
+
+def _cli_secret_scope_status(payload: object) -> dict[str, object] | None:
+    try:
+        scope_type, scope_id = _secret_scope_payload(payload)
+    except ValueError:
+        return None
+    args = ["secrets", "scope-status", "--scope", scope_type, "--json"]
+    if scope_id:
+        args.extend(["--id", scope_id])
+    data, _error, exit_code = _json_cli_data(
+        args,
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+    )
+    if data is None or exit_code not in {0, 1, 2}:
+        return None
+    return data
+
+
+def _cli_secret_command_result(
+    payload: object,
+    action: str,
+    *,
+    stdin_text: str | None = None,
+) -> dict[str, object] | None:
+    try:
+        scope_type, scope_id = _secret_scope_payload(payload)
+    except ValueError:
+        return None
+    opts = payload if isinstance(payload, dict) else {}
+    name = str(opts.get("name", "")).strip()
+    args = ["secrets", *_secret_args_for(scope_type, scope_id, action, name or None), "--json"]
+    data, error, exit_code = _json_cli_data(
+        args,
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+        stdin_text=stdin_text,
+    )
+    if data is None:
+        return {"output": "", "exitCode": exit_code or 1, "error": error}
+    return {
+        "output": str(data.get("output", "")).strip(),
+        "exitCode": int(data.get("exitCode", exit_code) or exit_code),
+        "error": str(data.get("error", "")).strip(),
+    }
+
+
+def _cli_init_container_identity(payload: object) -> dict[str, object] | None:
+    opts = payload if isinstance(payload, dict) else {}
+    vmid = str(opts.get("vmid", "")).strip()
+    if not vmid.isdigit():
+        return None
+    data, error, exit_code = _json_cli_data(
+        ["secrets", "init-container", vmid, "--json"],
+        timeout=INTERACTIVE_SECRET_BACKEND_TIMEOUT_SECONDS,
+    )
+    if data is None:
+        return {"output": "", "exitCode": exit_code or 1, "error": error}
+    return {
+        "output": str(data.get("output", "")).strip(),
+        "exitCode": int(data.get("exitCode", exit_code) or exit_code),
+        "error": str(data.get("error", "")).strip(),
+    }
 
 
 def run_publish(payload: object) -> dict[str, object]:
@@ -1489,6 +1574,10 @@ def _parse_secret_entries(scope_type: str, output: str) -> list[dict[str, str]]:
 
 
 def secret_scope_status(payload: object) -> dict[str, object]:
+    cli_result = _cli_secret_scope_status(payload)
+    if cli_result is not None:
+        return cli_result
+
     config, _, _ = read_config_payload()
     if not config["siteDir"]:
         return {
@@ -1540,6 +1629,10 @@ def set_secret(payload: object) -> dict[str, object]:
     if value == "":
         return {"output": "", "exitCode": 1, "error": "Secret value cannot be empty."}
 
+    cli_result = _cli_secret_command_result(payload, "set", stdin_text=value)
+    if cli_result is not None:
+        return cli_result
+
     args, env = _secrets_command()
     args.extend(_secret_args_for(scope_type, scope_id, "set", name))
     try:
@@ -1562,6 +1655,10 @@ def remove_secret(payload: object) -> dict[str, object]:
     if not name:
         return {"output": "", "exitCode": 1, "error": "Secret name is required."}
 
+    cli_result = _cli_secret_command_result(payload, "rm")
+    if cli_result is not None:
+        return cli_result
+
     args, env = _secrets_command()
     args.extend(_secret_args_for(scope_type, scope_id, "rm", name))
     try:
@@ -1578,6 +1675,10 @@ def remove_secret(payload: object) -> dict[str, object]:
 
 def rotate_secret_scope(payload: object) -> dict[str, object]:
     scope_type, scope_id = _secret_scope_payload(payload)
+    cli_result = _cli_secret_command_result(payload, "rotate")
+    if cli_result is not None:
+        return cli_result
+
     args, env = _secrets_command()
     args.extend(_secret_args_for(scope_type, scope_id, "rotate"))
     try:
@@ -1597,6 +1698,10 @@ def init_container_identity(payload: object) -> dict[str, object]:
     vmid = str(opts.get("vmid", "")).strip()
     if not vmid.isdigit():
         return {"output": "", "exitCode": 1, "error": "Container VMID is required."}
+
+    cli_result = _cli_init_container_identity(payload)
+    if cli_result is not None:
+        return cli_result
 
     args, env = _secrets_command()
     args.extend(["init-container", vmid])
