@@ -46,7 +46,10 @@ install_workstation_python_runtime() {
   mkdir -p "$runtime_dir"
   cp -a "${WORKSTATION_DIR}/src/proxnix_workstation" "${runtime_dir}/proxnix_workstation"
 
-  local python_bin="${WORKSTATION_DIR}/.venv/bin/python"
+  local python_bin="${PROXNIX_PACKAGE_PYTHON:-}"
+  if [[ -z "$python_bin" ]]; then
+    python_bin="${WORKSTATION_DIR}/.venv/bin/python"
+  fi
   if [[ ! -x "$python_bin" ]]; then
     python_bin="${WORKSTATION_DIR}/.venv/bin/python3"
   fi
@@ -56,6 +59,7 @@ install_workstation_python_runtime() {
 
   local bundle_paths
   bundle_paths="$("$python_bin" - <<'PY'
+from importlib.metadata import distribution
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -72,6 +76,18 @@ module_names = [
     "pykeepass",
     "pyotp",
 ]
+distribution_names = [
+    "argon2-cffi",
+    "argon2-cffi-bindings",
+    "cffi",
+    "construct",
+    "cryptography",
+    "lxml",
+    "pycparser",
+    "pycryptodomex",
+    "pykeepass",
+    "pyotp",
+]
 
 paths = []
 missing = []
@@ -85,6 +101,12 @@ for name in module_names:
             paths.append(Path(location))
     elif spec.origin:
         paths.append(Path(spec.origin))
+
+for name in distribution_names:
+    try:
+        paths.append(Path(distribution(name)._path))
+    except Exception:
+        pass
 
 if missing:
     raise SystemExit(

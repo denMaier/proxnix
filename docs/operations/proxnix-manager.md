@@ -158,6 +158,12 @@ copies the workstation source and Manager Python dependencies into
 the app resources directory, then writes bundled CLI wrappers under its `bin/`
 subdirectory.
 
+Local package tests should use a Python 3.12 environment for the copied
+dependencies because the packaged `proxnix-python` wrapper runs Homebrew
+`python@3.12` when it is available. If the repo-local `workstation/.venv` uses
+a different Python minor version, create a temporary Python 3.12 venv and pass
+it as `PROXNIX_PACKAGE_PYTHON`.
+
 ## Recommended repository setup
 
 The live tap repo is:
