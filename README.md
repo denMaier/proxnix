@@ -48,3 +48,7 @@ If you use MkDocs, `mkdocs.yml` is included so the docs render as a small docume
 ## Quick start
 
 See the full [installation guide](docs/getting-started/installation.md) and [first container walkthrough](docs/getting-started/first-container.md) for the complete setup path, including secrets, admin user passwords, and workstation configuration.
+
+## License
+
+Proxnix is released under the MIT License. See [`LICENSE`](LICENSE) for details.
