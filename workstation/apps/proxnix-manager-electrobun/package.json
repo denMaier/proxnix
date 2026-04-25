@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "electrobun build --env=dev && electrobun run --env=dev",
+    "web": "bun run src/bun/webServer.ts",
     "build": "electrobun build --env=stable",
     "typecheck": "tsc --noEmit"
   },

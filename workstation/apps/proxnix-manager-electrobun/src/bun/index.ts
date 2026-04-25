@@ -1,43 +1,11 @@
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
 import type { ProxnixManagerRPC } from "../shared/types";
-import { loadProxmoxNodes, restartProxmoxContainer } from "./proxmoxBridge";
-import {
-  attachSecretGroup,
-  createContainerBundle,
-  createSecretGroup,
-  createSiteNix,
-  deleteContainerBundle,
-  deleteSecretGroup,
-  detachSecretGroup,
-  gitAdd,
-  gitCommit,
-  gitPush,
-  gitStatus,
-  initContainerIdentity,
-  loadSecretScopeStatus,
-  loadSecretsProviderStatus,
-  loadSnapshot,
-  readTextFile,
-  removeSecret,
-  rotateSecretScope,
-  runOnboarding,
-  runDoctor,
-  runPublish,
-  saveConfig,
-  saveSidebarMetadata,
-  setSecret,
-} from "./workstationBridge";
-
-const INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
+import { createManagerRequestHandlers, INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS } from "./managerHandlers";
 
 const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
   maxRequestTime: INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS,
   handlers: {
-    requests: {
-      loadSnapshot: (params) => loadSnapshot(params),
-      saveConfig: (params) => saveConfig(params.config),
-      runOnboarding: (params) => runOnboarding(params.config),
-      createSiteNix: (_params: void) => createSiteNix(),
+    requests: createManagerRequestHandlers({
       chooseSiteDirectory: async (params) => {
         const startingFolder = params?.startingFolder;
         const chosenPaths = await Utils.openFileDialog({
@@ -54,28 +22,6 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
         return chosenPaths?.[0] ?? null;
       },
       openPath: (params) => Utils.openPath(params.path),
-      saveSidebarMetadata: (params) => saveSidebarMetadata(params.vmid, params.metadata),
-      loadSecretsProviderStatus: (params) => loadSecretsProviderStatus(params),
-      loadSecretScopeStatus: (params) => loadSecretScopeStatus(params),
-      setSecret: (params) => setSecret(params),
-      removeSecret: (params) => removeSecret(params),
-      rotateSecretScope: (params) => rotateSecretScope(params),
-      initContainerIdentity: (params) => initContainerIdentity(params.vmid),
-      createContainerBundle: (params) => createContainerBundle(params.vmid),
-      deleteContainerBundle: (params) => deleteContainerBundle(params.vmid),
-      createSecretGroup: (params) => createSecretGroup(params.group),
-      deleteSecretGroup: (params) => deleteSecretGroup(params.group),
-      attachSecretGroup: (params) => attachSecretGroup(params.vmid, params.group),
-      detachSecretGroup: (params) => detachSecretGroup(params.vmid, params.group),
-      runDoctor: (params) => runDoctor(params),
-      runPublish: (params) => runPublish(params),
-      gitStatus: (_params: void) => gitStatus(),
-      gitAdd: (params) => gitAdd(params),
-      gitCommit: (params) => gitCommit(params.message),
-      gitPush: (_params: void) => gitPush(),
-      readTextFile: (params) => readTextFile(params.path),
-      loadProxmoxNodes: (_params: void) => loadProxmoxNodes(),
-      restartProxmoxContainer: (params) => restartProxmoxContainer(params.vmid),
       openInEditor: async (params) => {
         const editors = ["code", "cursor", "zed", "subl"];
         for (const editor of editors) {
@@ -104,7 +50,7 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
         }
         return { opened: false, error: `No editor found for: ${params.path}` };
       },
-    },
+    }),
     messages: {},
   },
 });

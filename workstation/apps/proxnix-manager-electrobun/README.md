@@ -32,6 +32,24 @@ The usual runtime command is:
 bun start
 ```
 
+Run the same Manager surface as a local web app:
+
+```bash
+bun run web
+```
+
+Web mode listens on `127.0.0.1:4173` by default. Expose it to a LAN only behind
+a reverse auth proxy:
+
+```bash
+bun run web -- --host 0.0.0.0 --port 4173
+```
+
+Set `PROXNIX_MANAGER_TRUSTED_AUTH_HEADER` to the identity header your trusted
+proxy injects, for example `X-Forwarded-User`. Proxnix Manager does not
+implement first-party login in web mode; use an auth proxy such as Authentik,
+Authelia, oauth2-proxy, Cloudflare Access, or Tailscale in front of it.
+
 The dev bridge prefers the repo-local workstation virtualenv, so prepare it
 before testing secret providers:
 
@@ -53,8 +71,10 @@ XDG_CONFIG_HOME=/tmp/proxnix-onboarding-config bun start
 src/
   bun/
     index.ts
+    managerHandlers.ts
     proxmoxBridge.ts
     pythonBridge.ts
+    webServer.ts
     workstationBridge.ts
     scripts/proxnix_bridge.py
   mainview/
@@ -62,6 +82,7 @@ src/
     index.ts
     index.html
     index.css
+    rpcClient.ts
   shared/
     proxmoxTypes.ts
     types.ts

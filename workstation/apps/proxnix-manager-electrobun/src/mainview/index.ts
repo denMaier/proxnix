@@ -1,5 +1,5 @@
-import { Electroview } from "electrobun/view";
 import { icon, type IconName } from "./icons";
+import { createProxnixRpcClient } from "./rpcClient";
 import type { ProxmoxContainerStatus, ProxmoxNodesResult } from "../shared/proxmoxTypes";
 import type {
   AppSnapshot,
@@ -10,7 +10,6 @@ import type {
   GitFile,
   GitStatusResult,
   ProxnixConfig,
-  ProxnixManagerRPC,
   SecretScopeStatus,
   SecretsProviderStatus,
   SidebarMetadata,
@@ -48,15 +47,7 @@ const SECRET_PROVIDER_OPTIONS = [
 const INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 const SECRET_STATUS_FRESH_MS = 15_000;
 
-const proxnixRpc = Electroview.defineRPC<ProxnixManagerRPC>({
-  maxRequestTime: INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS,
-  handlers: {
-    requests: {},
-    messages: {},
-  },
-});
-
-new Electroview({ rpc: proxnixRpc });
+const proxnixRpc = await createProxnixRpcClient(INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS);
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 
