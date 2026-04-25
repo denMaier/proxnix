@@ -328,6 +328,24 @@ button {
   text-overflow: ellipsis;
 }
 
+.nav-deploy-dot {
+  display: inline-block;
+  justify-self: end;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.nav-deploy-dot.running {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.nav-deploy-dot.stopped {
+  background: var(--amber);
+  box-shadow: 0 0 0 2px var(--amber-soft);
+}
+
 .nav-badge {
   display: inline-flex;
   align-items: center;
@@ -893,6 +911,8 @@ button {
 }
 
 .status-dot {
+  display: inline-block;
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 999px;
@@ -1825,6 +1845,92 @@ button {
   font-size: 14px;
   text-align: center;
   line-height: 1.6;
+}
+
+/* Proxmox page */
+.proxmox-node-table {
+  display: flex;
+  flex-direction: column;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+}
+
+.proxmox-node-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 90px 80px minmax(150px, 1.2fr) minmax(150px, 1.2fr) 90px;
+  gap: 12px;
+  align-items: center;
+  min-width: 760px;
+  min-height: 44px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.proxmox-node-row.heading {
+  min-height: 34px;
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.proxmox-node-name {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.proxmox-node-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  min-width: 62px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.proxmox-node-status.online {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.proxmox-node-status.offline {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.proxmox-container-status {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.proxmox-container-status > .status-dot {
+  margin-top: 7px;
+}
+
+.proxmox-container-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.proxmox-container-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* Git page */

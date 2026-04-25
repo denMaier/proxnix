@@ -21,18 +21,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from proxnix_workstation.config import load_workstation_config as load_python_config
 from proxnix_workstation.git_ops import GitStatus, git_init, git_status, git_diff_summary, git_stage_all, git_commit, git_push
-from proxnix_workstation.paths import SitePaths
-from proxnix_workstation.provider_keys import have_container_private_key
-from proxnix_workstation.secret_provider import load_secret_provider
-from proxnix_workstation.secret_provider_types import group_scope
-from proxnix_workstation.site import collect_site_vmids, read_container_secret_groups
+from proxnix_workstation.manager_api import build_config_state, build_status, create_container_bundle
+from proxnix_workstation.manager_api import create_site_nix, save_config
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT = PACKAGE_DIR.parent.parent if PACKAGE_DIR.parent.name == "src" else None
 WORKSTATION_DIR = SOURCE_ROOT if SOURCE_ROOT and (SOURCE_ROOT / "pyproject.toml").is_file() else None
-COMMON_SCRIPT = None if WORKSTATION_DIR is None else WORKSTATION_DIR / "legacy" / "proxnix-workstation-common.sh"
 CONFIG_FILE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "proxnix" / "config"
 
 
@@ -78,6 +73,11 @@ class Config:
     remote_dir: str = "/var/lib/proxnix"
     remote_priv_dir: str = "/var/lib/proxnix/private"
     remote_host_relay_identity: str = "/etc/proxnix/host_relay_identity"
+    secret_provider: str = "embedded-sops"
+    secret_provider_command: str = ""
+    sops_master_identity: str = ""
+    scripts_dir: str = ""
+    manager_python_path: str = ""
 
 
 @dataclass
@@ -169,168 +169,61 @@ class AppState:
 
 def load_config() -> Config:
     try:
-        loaded = load_python_config(CONFIG_FILE)
-    except Exception:
-        loaded = None
-    if loaded is not None:
+        state = build_config_state(CONFIG_FILE)
+        raw = state.get("config", {})
+        if not isinstance(raw, dict):
+            raise ValueError("invalid config state")
         return Config(
-            site_dir="" if loaded.site_dir is None else str(loaded.site_dir),
-            hosts=list(loaded.hosts),
-            ssh_identity="" if loaded.ssh_identity is None else str(loaded.ssh_identity),
-            remote_dir=str(loaded.remote_dir),
-            remote_priv_dir=str(loaded.remote_priv_dir),
-            remote_host_relay_identity=str(loaded.remote_host_relay_identity),
+            site_dir=str(raw.get("siteDir", "")),
+            hosts=str(raw.get("hosts", "")).split(),
+            ssh_identity=str(raw.get("sshIdentity", "")),
+            remote_dir=str(raw.get("remoteDir", "/var/lib/proxnix")),
+            remote_priv_dir=str(raw.get("remotePrivDir", "/var/lib/proxnix/private")),
+            remote_host_relay_identity=str(
+                raw.get("remoteHostRelayIdentity", "/etc/proxnix/host_relay_identity")
+            ),
+            secret_provider=str(raw.get("secretProvider", "embedded-sops") or "embedded-sops"),
+            secret_provider_command=str(raw.get("secretProviderCommand", "")),
+            sops_master_identity=str(raw.get("sopsMasterIdentity", "")),
+            scripts_dir=str(raw.get("scriptsDir", "")),
+            manager_python_path=str(raw.get("managerPythonPath", "")),
         )
-
-    if COMMON_SCRIPT is None or not COMMON_SCRIPT.exists():
+    except Exception:
         return Config()
-
-    script = f"""
-set -e
-source {shell_quote(str(COMMON_SCRIPT))}
-load_proxnix_workstation_config
-printf 'PROXNIX_SITE_DIR=%s\\n' "$PROXNIX_SITE_DIR"
-printf 'PROXNIX_HOSTS=%s\\n' "$PROXNIX_HOSTS"
-printf 'PROXNIX_SSH_IDENTITY=%s\\n' "$PROXNIX_SSH_IDENTITY"
-printf 'PROXNIX_REMOTE_DIR=%s\\n' "$PROXNIX_REMOTE_DIR"
-printf 'PROXNIX_REMOTE_PRIV_DIR=%s\\n' "$PROXNIX_REMOTE_PRIV_DIR"
-printf 'PROXNIX_REMOTE_HOST_RELAY_IDENTITY=%s\\n' "$PROXNIX_REMOTE_HOST_RELAY_IDENTITY"
-"""
-
-    result = subprocess.run(
-        ["/bin/bash", "-lc", script],
-        text=True,
-        capture_output=True,
-        cwd=None if WORKSTATION_DIR is None else str(WORKSTATION_DIR),
-        env=os.environ.copy(),
-    )
-    if result.returncode != 0:
-        return Config()
-
-    values: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key] = value
-
-    return Config(
-        site_dir=values.get("PROXNIX_SITE_DIR", ""),
-        hosts=values.get("PROXNIX_HOSTS", "").split(),
-        ssh_identity=values.get("PROXNIX_SSH_IDENTITY", ""),
-        remote_dir=values.get("PROXNIX_REMOTE_DIR", "/var/lib/proxnix"),
-        remote_priv_dir=values.get("PROXNIX_REMOTE_PRIV_DIR", "/var/lib/proxnix/private"),
-        remote_host_relay_identity=values.get(
-            "PROXNIX_REMOTE_HOST_RELAY_IDENTITY", "/etc/proxnix/host_relay_identity"
-        ),
-    )
 
 
 # ─── Site Scanning ──────────────────────────────────────────────
-
-
-def _load_tui_provider(site_dir: str) -> tuple[object, SitePaths, object] | None:
-    """Try to load the workstation config and secret provider for identity/group checks."""
-    try:
-        config = load_python_config()
-        site_paths = SitePaths.from_config(config)
-        provider = load_secret_provider(config, site_paths)
-        return config, site_paths, provider
-    except Exception:
-        return None
-
-
-def _container_has_identity(ctx: tuple[object, SitePaths, object] | None, vmid: str, private_container: Path) -> bool:
-    if ctx is not None:
-        try:
-            config, site_paths, provider = ctx
-            return have_container_private_key(config, provider, site_paths, vmid)
-        except Exception:
-            pass
-    return (private_container / "age_identity.sops.yaml").is_file()
-
-
-def _container_has_secrets(ctx: tuple[object, SitePaths, object] | None, groups: list[str], private_container: Path) -> bool:
-    if ctx is not None and groups:
-        try:
-            _, _, provider = ctx
-            return any(provider.has_any(group_scope(g)) for g in groups)
-        except Exception:
-            pass
-    return (private_container / "secrets.sops.yaml").is_file()
 
 
 def scan_site(site_dir: str) -> list[ContainerInfo]:
     if not site_dir:
         return []
 
-    root = Path(site_dir).expanduser()
-    ctx = _load_tui_provider(site_dir)
-
     try:
-        site_paths = SitePaths(root)
-        vmids = collect_site_vmids(site_paths)
-
-        def build(vmid: str) -> ContainerInfo:
-            public_dir = site_paths.container_dir(vmid)
-            private_container = site_paths.private_dir / "containers" / vmid
-            dropin_dir = public_dir / "dropins"
-            groups = read_container_secret_groups(site_paths, vmid)
-            dropins = sorted(p.name for p in dropin_dir.iterdir()) if dropin_dir.is_dir() else []
-            return ContainerInfo(
-                vmid=vmid,
-                has_config=public_dir.exists(),
-                dropins=dropins,
-                groups=groups,
-                has_secret_store=_container_has_secrets(ctx, groups, private_container),
-                has_identity=_container_has_identity(ctx, vmid, private_container),
-            )
-
-        return [build(vmid) for vmid in vmids]
+        status = build_status(CONFIG_FILE)
+        raw_containers = status.get("containers", [])
+        if isinstance(raw_containers, list):
+            containers: list[ContainerInfo] = []
+            for raw in raw_containers:
+                if not isinstance(raw, dict):
+                    continue
+                vmid = str(raw.get("vmid", "")).strip()
+                if not vmid:
+                    continue
+                groups = [str(group) for group in raw.get("secretGroups", []) if str(group)]
+                containers.append(
+                    ContainerInfo(
+                        vmid=vmid,
+                        has_config=bool(raw.get("hasConfig")),
+                        dropins=[str(dropin) for dropin in raw.get("dropins", []) if str(dropin)],
+                        groups=groups,
+                        has_secret_store=bool(groups),
+                        has_identity=bool(raw.get("hasIdentity")),
+                    )
+                )
+            return containers
     except Exception:
-        pass
-
-    containers_dir = root / "containers"
-    private_dir = root / "private" / "containers"
-    vmids: set[str] = set()
-
-    for base in (containers_dir, private_dir):
-        if not base.is_dir():
-            continue
-        for entry in base.iterdir():
-            if entry.is_dir() and entry.name.isdigit():
-                vmids.add(entry.name)
-
-    def build(vmid: str) -> ContainerInfo:
-        public_dir = containers_dir / vmid
-        private_container = private_dir / vmid
-        dropin_dir = public_dir / "dropins"
-        groups_file = public_dir / "secret-groups.list"
-        groups: list[str] = []
-        if groups_file.exists():
-            for raw in groups_file.read_text(encoding="utf-8").splitlines():
-                line = raw.split("#", 1)[0].strip()
-                if line:
-                    groups.append(line)
-
-        dropins = sorted(p.name for p in dropin_dir.iterdir()) if dropin_dir.is_dir() else []
-        return ContainerInfo(
-            vmid=vmid,
-            has_config=public_dir.exists(),
-            dropins=dropins,
-            groups=groups,
-            has_secret_store=_container_has_secrets(ctx, groups, private_container),
-            has_identity=_container_has_identity(ctx, vmid, private_container),
-        )
-
-    return [build(vmid) for vmid in sorted(vmids, key=int)]
-
-
-# ─── Shell Helpers ──────────────────────────────────────────────
-
-
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
+        return []
 
 
 _ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
@@ -706,6 +599,7 @@ def build_sidebar_items(app: AppState) -> list[SidebarItem]:
     items: list[SidebarItem] = []
     # Actions section
     items.append(SidebarItem("ACTIONS", "header", "_h_actions", "\u26a1"))
+    items.append(SidebarItem("Site", "action", "site", "\u25a6"))
     items.append(SidebarItem("Git", "action", "git", "\u2387"))
     items.append(SidebarItem("Doctor", "action", "doctor", "\u2695"))
     items.append(SidebarItem("Publish All", "action", "publish", "\u2191"))
@@ -1000,6 +894,116 @@ def _view_dropins(stdscr: curses.window, app: AppState, container: ContainerInfo
             app.command_output = f"# {dropin_path}\n\n{content}"
             app.scroll = 0
             return
+
+
+# ─── Screen: Site ───────────────────────────────────────────────
+
+
+def render_site(win: curses.window, app: AppState) -> None:
+    """Render local site state and the core local site actions."""
+    h, w = win.getmaxyx()
+    draw_header_bar(win, "Site", "Enter to open actions, r to refresh")
+
+    y = 4
+    draw_eyebrow(win, y, 2, "Repository", w - 4)
+    y += 1
+    safe_addnstr(
+        win,
+        y,
+        2,
+        app.config.site_dir or "(not set)",
+        w - 4,
+        curses.A_BOLD if app.config.site_dir else color(C_DIM),
+    )
+    y += 2
+
+    site_nix = Path(app.config.site_dir).expanduser() / "site.nix" if app.config.site_dir else Path("site.nix")
+    draw_status_badge(
+        win,
+        y,
+        2,
+        "site.nix present" if site_nix.is_file() else "site.nix missing",
+        color(C_OK if site_nix.is_file() else C_WARN),
+        w - 4,
+    )
+    y += 2
+
+    y = draw_section(win, y, 2, w - 4, "Containers", trailing=str(len(app.containers)))
+    y += 1
+    if app.containers:
+        for container in app.containers[: max(0, h - y - 4)]:
+            flags = []
+            if container.has_identity:
+                flags.append("identity")
+            if container.groups:
+                flags.append("groups:" + ",".join(container.groups))
+            if container.dropins:
+                flags.append(f"{len(container.dropins)} dropins")
+            summary = " / ".join(flags) if flags else "scaffold only"
+            safe_addnstr(win, y, 4, f"{container.vmid}  {summary}", w - 8)
+            y += 1
+    else:
+        safe_addnstr(win, y, 4, "No containers found.", w - 8, color(C_DIM))
+        y += 1
+
+    y += 1
+    safe_addnstr(win, y, 2, "Core actions: create site.nix, create container bundle.", w - 4, color(C_DIM))
+
+
+def activate_site(stdscr: curses.window, app: AppState) -> bool:
+    actions = [
+        ("Refresh site state", "refresh"),
+        ("Create site.nix", "site_nix"),
+        ("Create container bundle", "container"),
+    ]
+    selected = 0
+
+    while True:
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+        draw_header_bar(stdscr, "Site \u2014 Actions", "Enter runs, Esc returns")
+        safe_addnstr(stdscr, 4, 2, app.config.site_dir or "Set site directory in Settings first.", w - 4, color(C_DIM))
+
+        for idx, (label, _) in enumerate(actions):
+            attr = curses.A_REVERSE | curses.A_BOLD if idx == selected else 0
+            safe_addnstr(stdscr, 7 + idx, 4, label, w - 8, attr)
+
+        safe_addnstr(stdscr, h - 1, 0, app.status.ljust(w), w, color(C_HEADER))
+        stdscr.refresh()
+
+        key = read_key(stdscr)
+        if key == curses.KEY_UP:
+            selected = (selected - 1) % len(actions)
+        elif key == curses.KEY_DOWN:
+            selected = (selected + 1) % len(actions)
+        elif key in ("\x1b", "q"):
+            return False
+        elif key in ("\n", "\r"):
+            _, action = actions[selected]
+            if action == "refresh":
+                app.refresh()
+                app.status = f"Refreshed: {len(app.containers)} container(s)"
+                return False
+            if action == "site_nix":
+                try:
+                    create_site_nix(CONFIG_FILE)
+                    app.refresh()
+                    app.status = "Created site.nix"
+                except ValueError as exc:
+                    app.status = str(exc)
+                return False
+            if action == "container":
+                vmid = prompt_text(stdscr, "New Container VMID")
+                if not vmid:
+                    app.status = "Create container cancelled"
+                    return False
+                try:
+                    create_container_bundle(CONFIG_FILE, vmid)
+                    app.refresh()
+                    app.status = f"Created container bundle {vmid}"
+                except ValueError as exc:
+                    app.status = str(exc)
+                return False
 
 
 # ─── Screen: Git ────────────────────────────────────────────────
@@ -1965,6 +1969,11 @@ def _settings_fields(app: AppState) -> list[tuple[str, list[tuple[str, str]]]]:
             ("Remote priv dir", c.remote_priv_dir),
             ("Relay identity", c.remote_host_relay_identity),
         ]),
+        ("Secrets", [
+            ("Provider", c.secret_provider),
+            ("SOPS identity", c.sops_master_identity),
+            ("Provider command", c.secret_provider_command),
+        ]),
     ]
 
 
@@ -1977,6 +1986,9 @@ def activate_settings(stdscr: curses.window, app: AppState) -> None:
         ("Remote dir", "remote_dir"),
         ("Remote priv dir", "remote_priv_dir"),
         ("Relay identity", "remote_host_relay_identity"),
+        ("Secret provider", "secret_provider"),
+        ("SOPS identity", "sops_master_identity"),
+        ("Provider command", "secret_provider_command"),
         ("\u25b6 Save to config file", "save"),
     ]
     selected = 0
@@ -2047,21 +2059,27 @@ def activate_settings(stdscr: curses.window, app: AppState) -> None:
 
 
 def _save_config(stdscr: curses.window, app: AppState) -> None:
-    """Write config back to the config file in PROXNIX_* format."""
+    """Write config back through the shared manager config API."""
     try:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            f"PROXNIX_SITE_DIR={app.config.site_dir}",
-            f"PROXNIX_HOSTS={' '.join(app.config.hosts)}",
-            f"PROXNIX_SSH_IDENTITY={app.config.ssh_identity}",
-            f"PROXNIX_REMOTE_DIR={app.config.remote_dir}",
-            f"PROXNIX_REMOTE_PRIV_DIR={app.config.remote_priv_dir}",
-            f"PROXNIX_REMOTE_HOST_RELAY_IDENTITY={app.config.remote_host_relay_identity}",
-        ]
-        CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        save_config(
+            CONFIG_FILE,
+            {
+                "siteDir": app.config.site_dir,
+                "hosts": " ".join(app.config.hosts),
+                "sshIdentity": app.config.ssh_identity,
+                "remoteDir": app.config.remote_dir,
+                "remotePrivDir": app.config.remote_priv_dir,
+                "remoteHostRelayIdentity": app.config.remote_host_relay_identity,
+                "secretProvider": app.config.secret_provider,
+                "secretProviderCommand": app.config.secret_provider_command,
+                "sopsMasterIdentity": app.config.sops_master_identity,
+                "scriptsDir": app.config.scripts_dir,
+                "managerPythonPath": app.config.manager_python_path,
+            },
+        )
         app.refresh()
         app.status = "Settings saved"
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         app.status = f"Save failed: {exc}"
 
 
@@ -2234,7 +2252,9 @@ def run_tui(stdscr: curses.window) -> None:
             pane.erase()
 
             item = sidebar_items[selected_idx]
-            if item.key == "git":
+            if item.key == "site":
+                render_site(pane, app)
+            elif item.key == "git":
                 render_git(pane, app)
             elif item.key == "doctor":
                 render_doctor(pane, app)
@@ -2268,7 +2288,9 @@ def run_tui(stdscr: curses.window) -> None:
             prev_output = app.command_output
             ran_command = False
 
-            if item.key == "git":
+            if item.key == "site":
+                ran_command = activate_site(stdscr, app)
+            elif item.key == "git":
                 ran_command = activate_git(stdscr, app)
             elif item.key == "doctor":
                 ran_command = activate_doctor(stdscr, app)

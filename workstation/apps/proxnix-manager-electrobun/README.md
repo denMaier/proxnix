@@ -14,6 +14,7 @@ Current scope:
 - site scanning and container bundle management
 - shared, group, and container secrets
 - git status, staging, commit, and push
+- Proxmox API node status
 - doctor and publish workflows
 
 ## Commands
@@ -52,13 +53,17 @@ XDG_CONFIG_HOME=/tmp/proxnix-onboarding-config bun start
 src/
   bun/
     index.ts
+    proxmoxBridge.ts
+    pythonBridge.ts
     workstationBridge.ts
     scripts/proxnix_bridge.py
   mainview/
+    icons.ts
     index.ts
     index.html
     index.css
   shared/
+    proxmoxTypes.ts
     types.ts
 ```
 
@@ -95,6 +100,25 @@ Python internals directly. The bridge can:
 - preserve unknown `PROXNIX_*` assignments
 - scan the site repo for containers, drop-ins, secret groups, and identities
 - call the workstation Python package for secrets, doctor, and publish actions
+
+Proxmox API integration is a separate Bun-side backend module, exposed through
+the same Electrobun RPC surface as the workstation bridge. Enable it in Settings
+to show the Proxmox page and container restart/status actions. The saved config
+keys are:
+
+```bash
+PROXNIX_PROXMOX_API_ENABLED='true'
+PROXNIX_PROXMOX_API_URL='https://proxmox.example:8006'
+PROXNIX_PROXMOX_API_TOKEN_ID='root@pam!proxnix-manager'
+PROXNIX_PROXMOX_API_TOKEN_SECRET='...'
+PROXNIX_PROXMOX_VERIFY_TLS='false'
+```
+
+When `PROXNIX_PROXMOX_API_ENABLED` is unset or false, the Manager hides Proxmox
+views/actions and does not make Proxmox API requests.
+
+`PROXNIX_PROXMOX_VERIFY_TLS=false` is useful for local clusters with
+self-signed certificates. It defaults to strict TLS verification.
 
 Python resolution order:
 
