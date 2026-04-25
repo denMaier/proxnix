@@ -38,7 +38,7 @@ jobs:
         run: python -m pip install --upgrade build
 
       - name: Build workstation Python package
-        run: python -m build --outdir dist workstation
+        run: python -m build --outdir dist workstation/cli
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

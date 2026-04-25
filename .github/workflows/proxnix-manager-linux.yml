@@ -53,7 +53,7 @@ jobs:
           workstation/.venv/bin/python -m pip install "cryptography>=44"
 
       - name: Install Electrobun app dependencies
-        working-directory: workstation/apps/proxnix-manager-electrobun
+        working-directory: workstation/manager
         run: bun install --frozen-lockfile
 
       - name: Build ProxnixManager Linux archive
