@@ -32,7 +32,7 @@ class ProxnixWorkstation < Formula
     venv.pip_install resource("pycparser")
     venv.pip_install resource("cffi")
     venv.pip_install resource("cryptography")
-    venv.pip_install_and_link buildpath/"workstation"
+    venv.pip_install_and_link buildpath/"workstation/cli"
   end
 
   def caveats
