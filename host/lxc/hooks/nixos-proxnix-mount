@@ -17,17 +17,26 @@ VMID=""
 ROOTFS=""
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
+START_SECONDS=$SECONDS
 
-log() { echo "[proxnix-mount][${VMID}] $*" >&2; }
+log() {
+    local message="[proxnix-mount][${VMID:-unknown}] $*"
+    echo "$message" >&2
+    if command -v logger >/dev/null 2>&1; then
+        logger -t proxnix-mount -- "$message"
+    fi
+}
 
 usage() {
     cat <<'EOF'
 Usage:
   nixos-proxnix-mount
+  nixos-proxnix-mount <vmid> lxc mount
   nixos-proxnix-mount --vmid <vmid> --rootfs </path/to/rootfs>
 
 When invoked without arguments, this script behaves like the normal LXC mount
-hook and reads VMID/rootfs from LXC_NAME and LXC_ROOTFS_MOUNT.
+hook and reads VMID/rootfs from LXC_NAME and LXC_ROOTFS_MOUNT. LXC/Proxmox
+may also pass the VMID and hook metadata as positional arguments.
 EOF
 }
 
@@ -47,10 +56,18 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
+        lxc|mount)
+            shift
+            ;;
         *)
-            echo "ERROR: unknown argument: $1" >&2
-            usage >&2
-            exit 1
+            if [[ -z "$VMID" ]]; then
+                VMID="$1"
+                shift
+            else
+                echo "ERROR: unknown argument: $1" >&2
+                usage >&2
+                exit 1
+            fi
             ;;
     esac
 done
@@ -75,6 +92,19 @@ fi
 
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
+
+finish_mount() {
+    local status=$?
+    local elapsed=$((SECONDS - START_SECONDS))
+    if [[ $status -eq 0 ]]; then
+        log "Finished mount hook in ${elapsed}s."
+    else
+        log "ERROR: mount hook failed after ${elapsed}s."
+    fi
+    exit "$status"
+}
+
+trap finish_mount EXIT
 
 bind_ro_file() {
     local src="$1" dest="$2"
@@ -244,6 +274,8 @@ COPY_ETC_SYSTEMD_ATTACHED_DIR="${COPY_ETC_DIR}/systemd/system.attached"
 DESIRED_CONFIG_HASH="$(tr -d '\r\n' < "${BIND_RUNTIME_DIR}/current-config-hash" 2>/dev/null || true)"
 CURRENT_CONFIG_HASH=""
 
+log "Starting mount hook (rootfs: ${ROOTFS:-unset}, stage: ${STAGE_DIR})."
+
 if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
     log "ERROR: rootfs mount not accessible."
     log "  LXC_ROOTFS_MOUNT=${LXC_ROOTFS_MOUNT:-unset}"
@@ -265,6 +297,7 @@ if [[ ! -f "${COPY_ETC_NIXOS_DIR}/configuration.nix" || ! -d "${BIND_CONFIG_DIR}
     log "ERROR: staged proxnix state is incomplete under ${STAGE_DIR}."
     exit 1
 fi
+log "Validated staged proxnix state (desired hash ${DESIRED_CONFIG_HASH})."
 
 PROXNIX_STATE_DIR="${ROOTFS}/var/lib/proxnix"
 PROXNIX_CONFIG_DIR="${PROXNIX_STATE_DIR}/config"
@@ -289,9 +322,11 @@ PROXNIX_SECRET_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-secrets.list"
 # Clean up any real /etc/systemd/system/ directory left by an older proxnix
 # version — NixOS setup-etc.pl requires it to be a symlink, not a directory.
 if [[ -d "${ROOTFS}/etc/systemd/system" && ! -L "${ROOTFS}/etc/systemd/system" ]]; then
+    log "Removing legacy real /etc/systemd/system directory from guest rootfs."
     rm -rf "${ROOTFS}/etc/systemd/system"
 fi
 
+log "Preparing guest proxnix directories."
 mkdir -p \
     "${ROOTFS}/etc/nixos" \
     "${PROXNIX_CONFIG_DIR}" \
@@ -311,7 +346,9 @@ if [[ -r "${PROXNIX_RUNTIME_CURRENT_HASH}" ]]; then
     CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${PROXNIX_RUNTIME_CURRENT_HASH}")"
 fi
 copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix" "${ROOTFS}/etc/nixos/configuration.nix" "644"
+log "Installed /etc/nixos/configuration.nix."
 bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"
+log "Bound managed config tree read-only at /var/lib/proxnix/config."
 remove_guest_path "${ROOTFS}/etc/nixos/managed"
 rm -f "${ROOTFS}/etc/nixos/base.nix" "${ROOTFS}/etc/nixos/common.nix" "${ROOTFS}/etc/nixos/proxmox.nix"
 rm -rf "${ROOTFS}/etc/nixos/dropins"
@@ -322,12 +359,14 @@ else
 fi
 bind_ro_file "${BIND_RUNTIME_DIR}/current-config-hash" "${PROXNIX_RUNTIME_CURRENT_HASH}"
 bind_ro_file "${BIND_RUNTIME_DIR}/vmid" "${PROXNIX_RUNTIME_VMID}"
+log "Bound runtime markers read-only."
 remove_guest_path "${PROXNIX_RUNTIME_BIN_DIR}"
 mkdir -p "${PROXNIX_RUNTIME_BIN_DIR}"
 sync_copied_guest_file_manifest "${COPY_RUNTIME_BIN_DIR}" "${PROXNIX_RUNTIME_BIN_DIR}" "${PROXNIX_RUNTIME_BIN_MANIFEST}" "555"
 copy_guest_file "${COPY_RUNTIME_DIR}/proxnix-apply-config-runner" "${PROXNIX_APPLY_CONFIG_RUNNER}" "555"
 copy_guest_file "${COPY_ETC_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" "${PROXNIX_MATERIALIZED_SYSTEMD_ATTACHED_DIR}/proxnix-apply-config.service" "644"
 ln -sfn ../proxnix-apply-config.service "${PROXNIX_MATERIALIZED_SYSTEMD_WANTS_DIR}/proxnix-apply-config.service"
+log "Installed guest runtime helpers and proxnix-apply-config service."
 
 if [[ -e "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator" ]]; then
     rm -f "${ROOTFS}/etc/systemd/system-generators/proxnix-apply-config-generator"
@@ -362,6 +401,7 @@ sync_bound_entry_manifest "${BIND_QUADLET_DIR}" "${PROXNIX_RUNTIME_QUADLET_DIR}"
 sync_bound_file_manifest "${BIND_QUADLET_DIR}" "${ROOTFS}/etc/containers/systemd" "$QUADLET_SYSTEMD_MANIFEST" \
     \( -name '*.container' -o -name '*.volume' -o -name '*.network' -o -name '*.pod' -o -name '*.image' -o -name '*.build' \)
 sync_copied_guest_file_manifest "${BIND_SECRETS_DIR}" "${PROXNIX_SECRET_DIR}" "${PROXNIX_SECRET_MANIFEST}" "600"
+log "Synced managed quadlet and secret manifests."
 
 rmdir "${PROXNIX_RUNTIME_QUADLET_DIR}" 2>/dev/null || true
 rmdir "${ROOTFS}/etc/containers/systemd" 2>/dev/null || true
@@ -524,6 +564,7 @@ fi
 EOF
 sed -i "s/__PROXNIX_STATE_VERSION__/${STATE_VERSION}/" "${ROOTFS}/root/proxnix-bootstrap.sh"
 chmod 755 "${ROOTFS}/root/proxnix-bootstrap.sh"
+log "Installed fallback bootstrap helper at /root/proxnix-bootstrap.sh."
 
 log "Mount-time bind setup complete."
 exit 0

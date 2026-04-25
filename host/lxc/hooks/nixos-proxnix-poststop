@@ -8,10 +8,24 @@
 
 set -uo pipefail
 
-VMID="${LXC_NAME:-}"
+VMID="${LXC_NAME:-${1:-}}"
+
+log() {
+    local message="[proxnix-poststop][${VMID:-unknown}] $*"
+    echo "$message" >&2
+    if command -v logger >/dev/null 2>&1; then
+        logger -t proxnix-poststop -- "$message"
+    fi
+}
 
 if [[ -z "$VMID" ]]; then
     exit 0
 fi
 
-rm -rf "/run/proxnix/${VMID}"
+STAGE_DIR="/run/proxnix/${VMID}"
+if [[ -d "$STAGE_DIR" ]]; then
+    rm -rf "$STAGE_DIR"
+    log "Removed staged state at ${STAGE_DIR}."
+else
+    log "No staged state to remove at ${STAGE_DIR}."
+fi
