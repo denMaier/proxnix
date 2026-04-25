@@ -1,6 +1,6 @@
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
 import type { ProxnixManagerRPC } from "../shared/types";
-import { createManagerRequestHandlers, INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS } from "./managerHandlers";
+import { createManagerRequestHandlers, INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS } from "../backend/managerHandlers";
 
 const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
   maxRequestTime: INTERACTIVE_BACKEND_REQUEST_TIMEOUT_MS,
@@ -57,7 +57,7 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
 
 new BrowserWindow({
   title: "Proxnix Manager",
-  url: "views://mainview/index.html",
+  url: "views://localFrontend/index.html",
   rpc: proxnixRpc,
   frame: {
     width: 1480,

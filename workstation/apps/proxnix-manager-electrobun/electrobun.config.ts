@@ -21,20 +21,20 @@ export default {
       notarize: enableMacCodesign && enableMacNotarize,
     },
     bun: {
-      entrypoint: "src/bun/index.ts",
+      entrypoint: "src/desktop-shell/index.ts",
       sourcemap: "linked",
     },
     views: {
-      mainview: {
-        entrypoint: "src/mainview/index.ts",
+      localFrontend: {
+        entrypoint: "src/frontend/index.ts",
         sourcemap: "linked",
       },
     },
     copy: {
-      "src/mainview/index.html": "views/mainview/index.html",
-      "src/mainview/index.css": "views/mainview/index.css",
-      "src/mainview/assets": "views/mainview/assets",
-      "src/bun/scripts": "bun/scripts",
+      "src/frontend/index.html": "views/localFrontend/index.html",
+      "src/frontend/index.css": "views/localFrontend/index.css",
+      "src/frontend/assets": "views/localFrontend/assets",
+      "src/backend/scripts": "backend/scripts",
     },
   },
   scripts: {

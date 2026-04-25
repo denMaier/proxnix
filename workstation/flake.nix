@@ -18,21 +18,26 @@
         let
           pkgs = import nixpkgs { inherit system; };
           workstation = pkgs.callPackage ./nix/packages/workstation { };
+          managerWeb = pkgs.callPackage ./nix/packages/manager-web { };
         in {
           default = workstation.tui;
           proxnix-workstation = workstation.tui;
           proxnix-workstation-cli = workstation.cli;
+          proxnix-manager-web = managerWeb;
         });
 
       overlays.default = final: prev:
         let
           workstation = final.callPackage ./nix/packages/workstation { };
+          managerWeb = final.callPackage ./nix/packages/manager-web { };
         in {
           proxnix-workstation = workstation.tui;
           proxnix-workstation-cli = workstation.cli;
+          proxnix-manager-web = managerWeb;
         };
 
       nixosModules.proxnix-workstation = import ./nix/modules/proxnix-workstation.nix;
+      nixosModules.proxnix-manager-web = import ./nix/modules/proxnix-manager-web.nix;
       darwinModules.proxnix-workstation = import ./nix/modules/proxnix-workstation.nix;
     };
 }

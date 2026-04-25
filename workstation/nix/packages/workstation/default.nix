@@ -11,7 +11,7 @@
 
 let
   version = "unstable";
-  src = ../../../workstation;
+  src = ../../..;
   pythonEnv = python3.withPackages (ps: [
     ps.cryptography
   ]);
@@ -41,8 +41,8 @@ let
     cat > "$out/bin/${name}" <<'EOF'
 #!${bash}/bin/bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec env PYTHONPATH="$SCRIPT_DIR/../share/proxnix-workstation/src${PYTHONPATH:+:$PYTHONPATH}" ${pythonEnv}/bin/python -m ${module} "$@"
+SCRIPT_DIR="$(cd "$(dirname "''${BASH_SOURCE[0]}")" && pwd)"
+exec env PYTHONPATH="$SCRIPT_DIR/../share/proxnix-workstation/src''${PYTHONPATH:+:$PYTHONPATH}" ${pythonEnv}/bin/python -m ${module} "$@"
 EOF
     chmod 755 "$out/bin/${name}"
   '';

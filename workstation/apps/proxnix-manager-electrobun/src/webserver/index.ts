@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createManagerRequestHandlers } from "./managerHandlers";
+import { createManagerRequestHandlers } from "../backend/managerHandlers";
 
 type RpcHandler = (params: unknown) => unknown | Promise<unknown>;
 
@@ -11,7 +11,7 @@ interface WebOptions {
 }
 
 const SRC_ROOT = new URL("../", import.meta.url);
-const MAINVIEW_ROOT = new URL("./mainview/", SRC_ROOT);
+const FRONTEND_ROOT = new URL("./frontend/", SRC_ROOT);
 
 const MIME_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -101,7 +101,7 @@ function parseArgs(args: string[]): WebOptions {
 
 function printUsage(): void {
   console.log(`Usage:
-  bun run src/bun/webServer.ts [--host <host>] [--port <port>]
+  bun run src/webserver/index.ts [--host <host>] [--port <port>]
   bun run web -- --host 127.0.0.1 --port 4173
 
 Environment:
@@ -114,7 +114,7 @@ Environment:
 async function buildMainviewBundle(): Promise<string> {
   const outdir = await mkdtemp(join(tmpdir(), "proxnix-manager-web."));
   const result = await Bun.build({
-    entrypoints: [new URL("./mainview/index.ts", SRC_ROOT).pathname],
+    entrypoints: [new URL("./frontend/index.ts", SRC_ROOT).pathname],
     outdir,
     target: "browser",
     format: "esm",
@@ -186,11 +186,11 @@ function serveStatic(pathname: string): Response {
   }
 
   if (path === "/index.css") {
-    return fileResponse(new URL("./index.css", MAINVIEW_ROOT).pathname);
+    return fileResponse(new URL("./index.css", FRONTEND_ROOT).pathname);
   }
 
   if (path.startsWith("/assets/")) {
-    return fileResponse(new URL(`.${path}`, MAINVIEW_ROOT).pathname);
+    return fileResponse(new URL(`.${path}`, FRONTEND_ROOT).pathname);
   }
 
   return fileResponse(join(publicDir, path.replace(/^\/+/, "")));

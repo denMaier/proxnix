@@ -69,24 +69,37 @@ XDG_CONFIG_HOME=/tmp/proxnix-onboarding-config bun start
 
 ```text
 src/
-  bun/
-    index.ts
+  backend/
     managerHandlers.ts
     proxmoxBridge.ts
     pythonBridge.ts
-    webServer.ts
     workstationBridge.ts
     scripts/proxnix_bridge.py
-  mainview/
+  desktop-shell/
+    index.ts
+  frontend/
     icons.ts
     index.ts
     index.html
     index.css
     rpcClient.ts
+  webserver/
+    index.ts
   shared/
     proxmoxTypes.ts
     types.ts
 ```
+
+The deployment boundaries are intentionally separate:
+
+- `backend/` contains the Manager capabilities: workstation bridge, Proxmox API
+  bridge, git/publish/doctor/secrets actions, and shared request handlers.
+- `frontend/` contains the browser UI. It can talk to either the Electrobun RPC
+  transport or the hosted HTTP RPC transport.
+- `desktop-shell/` is the local Electrobun host: native window, file picker,
+  open-path/editor integrations, and RPC wiring into `backend/`.
+- `webserver/` is the hosted Bun HTTP server: static frontend serving plus
+  `/api/rpc` wiring into the same `backend/`.
 
 ## macOS signing
 

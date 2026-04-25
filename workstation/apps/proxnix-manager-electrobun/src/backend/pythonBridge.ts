@@ -90,6 +90,8 @@ function bridgeScriptPath(): string {
   }
 
   const bundledPaths = bundledResourceCandidates().flatMap((resourcesDir) => [
+    resolve(resourcesDir, "app", "backend", "scripts", "proxnix_bridge.py"),
+    resolve(resourcesDir, "backend", "scripts", "proxnix_bridge.py"),
     resolve(resourcesDir, "app", "bun", "scripts", "proxnix_bridge.py"),
     resolve(resourcesDir, "bun", "scripts", "proxnix_bridge.py"),
   ]);
