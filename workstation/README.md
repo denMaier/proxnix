@@ -254,3 +254,5 @@ python3 -m twine upload dist/*
 - Release tags are expected to match `[project].version` in `pyproject.toml`.
 - `Proxnix Manager` is the Electrobun GUI and ships separately from a Homebrew
   tap; see `../docs/operations/proxnix-manager.md`.
+- `proxnix-manager-web` is the hosted Bun web server package for Nix/NixOS
+  deployments; see `../docs/operations/proxnix-manager-web.md`.

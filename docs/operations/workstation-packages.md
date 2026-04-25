@@ -84,16 +84,25 @@ Package outputs:
 
 - `./workstation#proxnix-workstation` for TUI + CLI
 - `./workstation#proxnix-workstation-cli` for CLI only
+- `./workstation#proxnix-manager-web` for the hosted Bun web server
 
 Module outputs:
 
 - `inputs.proxnix.nixosModules.proxnix-workstation`
+- `inputs.proxnix.nixosModules.proxnix-manager-web`
 - `inputs.proxnix.darwinModules.proxnix-workstation`
 
 ## macOS app
 
 `Proxnix Manager` is distributed separately through a Homebrew cask. See
 [Proxnix Manager](proxnix-manager.md).
+
+## Hosted Manager web app
+
+`proxnix-manager-web` packages the hosted Bun web server and wires it to the
+Nix-provided `proxnix-workstation-cli` runtime. The corresponding NixOS module
+can deploy it behind nginx with an auth proxy in front. See
+[Proxnix Manager Web](proxnix-manager-web.md).
 
 ### NixOS example
 

@@ -141,5 +141,6 @@ Common tasks:
 - use the raw host `.deb` when you want manual or offline package control
 - cut annotated `v*` release tags to publish host and workstation artifacts
 - refresh the Homebrew tap formula and cask when releasing Proxnix Manager
+- deploy Proxnix Manager Web behind a reverse auth proxy when you want shared browser access
 
-See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [Proxnix Manager](operations/proxnix-manager.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
+See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [Proxnix Manager](operations/proxnix-manager.md), [Proxnix Manager Web](operations/proxnix-manager-web.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
