@@ -1,4 +1,6 @@
 import { Electroview } from "electrobun/view";
+import { icon, type IconName } from "./icons";
+import type { ProxmoxContainerStatus, ProxmoxNodesResult } from "../shared/proxmoxTypes";
 import type {
   AppSnapshot,
   CommandResult,
@@ -19,6 +21,7 @@ type ViewSelection =
   | "site"
   | "settings"
   | "publish"
+  | "proxmox"
   | "secrets"
   | "secrets:groups"
   | "secrets:containers"
@@ -27,24 +30,6 @@ type ViewSelection =
   | "doctor"
   | "git"
   | `container:${string}`;
-
-type IconName =
-  | "back"
-  | "box"
-  | "branch"
-  | "chevron"
-  | "edit"
-  | "folder"
-  | "gear"
-  | "health"
-  | "home"
-  | "key"
-  | "lock"
-  | "open"
-  | "publish"
-  | "refresh"
-  | "spark"
-  | "trash";
 
 const SECRET_PROVIDER_OPTIONS = [
   "embedded-sops",
@@ -103,6 +88,11 @@ const state: {
   publishRunning: boolean;
   publishConfigOnly: boolean;
   publishVmid: string;
+  proxmoxResult: ProxmoxNodesResult | null;
+  proxmoxLoading: boolean;
+  proxmoxError: string | null;
+  proxmoxActionRunning: boolean;
+  proxmoxActionResult: CommandResult | null;
   gitResult: GitStatusResult | null;
   gitLoading: boolean;
   gitRunning: boolean;
@@ -159,6 +149,11 @@ const state: {
   publishRunning: false,
   publishConfigOnly: false,
   publishVmid: "",
+  proxmoxResult: null,
+  proxmoxLoading: false,
+  proxmoxError: null,
+  proxmoxActionRunning: false,
+  proxmoxActionResult: null,
   gitResult: null,
   gitLoading: false,
   gitRunning: false,
@@ -214,6 +209,11 @@ function defaultConfig(): ProxnixConfig {
     secretProviderCommand: "",
     scriptsDir: "",
     managerPythonPath: "",
+    proxmoxApiEnabled: "",
+    proxmoxApiUrl: "",
+    proxmoxApiTokenId: "",
+    proxmoxApiTokenSecret: "",
+    proxmoxVerifyTls: "true",
   };
 }
 
@@ -279,6 +279,11 @@ function normalizeConfig(config: Partial<ProxnixConfig> | null | undefined): Pro
     secretProviderCommand: normalizeString(config?.secretProviderCommand ?? base.secretProviderCommand),
     scriptsDir: normalizeString(config?.scriptsDir ?? base.scriptsDir),
     managerPythonPath: normalizeString(config?.managerPythonPath ?? base.managerPythonPath),
+    proxmoxApiEnabled: normalizeString(config?.proxmoxApiEnabled ?? base.proxmoxApiEnabled),
+    proxmoxApiUrl: normalizeString(config?.proxmoxApiUrl ?? base.proxmoxApiUrl),
+    proxmoxApiTokenId: normalizeString(config?.proxmoxApiTokenId ?? base.proxmoxApiTokenId),
+    proxmoxApiTokenSecret: normalizeString(config?.proxmoxApiTokenSecret ?? base.proxmoxApiTokenSecret),
+    proxmoxVerifyTls: normalizeString(config?.proxmoxVerifyTls ?? base.proxmoxVerifyTls) || base.proxmoxVerifyTls,
   };
 }
 
@@ -296,6 +301,10 @@ function usesEmbeddedSops(provider: string): boolean {
 
 function usesExecProvider(provider: string): boolean {
   return provider.trim() === "exec";
+}
+
+function isProxmoxApiEnabled(config: ProxnixConfig | null | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(normalizeString(config?.proxmoxApiEnabled).trim().toLocaleLowerCase());
 }
 
 function defaultMasterIdentityPath(): string {
@@ -586,6 +595,12 @@ function setSelection(next: ViewSelection): void {
   if (next === "git" && !state.gitResult && !state.gitLoading) {
     void handleRefreshGit();
   }
+  if (next === "proxmox" && isProxmoxApiEnabled(state.snapshot?.config) && !state.proxmoxResult && !state.proxmoxLoading) {
+    void handleRefreshProxmox();
+  }
+  if (next.startsWith("container:") && isProxmoxApiEnabled(state.snapshot?.config) && !state.proxmoxResult && !state.proxmoxLoading) {
+    void handleRefreshProxmox();
+  }
   if (next === "secrets" || next.startsWith("secrets:") || next.startsWith("container:")) {
     void ensureSecretsProviderStatus();
   }
@@ -618,6 +633,7 @@ function ensureSelection(snapshot: AppSnapshot): void {
     state.selection === "site" ||
     state.selection === "welcome" ||
     state.selection === "publish" ||
+    (state.selection === "proxmox" && isProxmoxApiEnabled(snapshot.config)) ||
     state.selection === "secrets" ||
     state.selection === "secrets:groups" ||
     state.selection === "secrets:containers" ||
@@ -648,40 +664,6 @@ function compactPath(path: string): string {
   return path
     .replace(/^\/Users\/[^/]+(?=\/)/, "~")
     .replace(/^\/home\/[^/]+(?=\/)/, "~");
-}
-
-function icon(name: IconName): string {
-  const paths: Record<IconName, string> = {
-    back: '<path d="M19 12H5" /><path d="m12 5-7 7 7 7" />',
-    box: '<path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z" /><path d="M3 7.5V16.5L12 21L21 16.5V7.5" /><path d="M12 12v9" />',
-    branch:
-      '<circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M8.5 6H15.5" /><path d="M18 8.5V15.5" /><path d="M8.5 6V10.5C8.5 12.71 10.29 14.5 12.5 14.5H18" />',
-    chevron: '<path d="m9 6 6 6-6 6" />',
-    edit:
-      '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z" />',
-    folder:
-      '<path d="M3 8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8Z" /><path d="M3 10h18" />',
-    gear:
-      '<circle cx="12" cy="12" r="3.5" /><path d="M12 2.8v2.3M12 18.9v2.3M4.3 7.1l2 1.2M17.7 14.7l2 1.2M2.8 12h2.3M18.9 12h2.3M4.3 16.9l2-1.2M17.7 9.3l2-1.2" />',
-    health:
-      '<path d="M12 5v14M5 12h14" /><circle cx="12" cy="12" r="9" />',
-    home:
-      '<path d="M3 11.5 12 4l9 7.5" /><path d="M5.5 10.5V20h13v-9.5" /><path d="M9.5 20v-5h5v5" />',
-    key:
-      '<circle cx="8" cy="12" r="4" /><path d="M12 12h9" /><path d="M17 12v3" /><path d="M20 12v2" />',
-    lock:
-      '<rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7.5A4 4 0 0 1 12 3.5A4 4 0 0 1 16 7.5V10" />',
-    open: '<path d="M14 4h6v6" /><path d="M10 14L20 4" /><path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5" />',
-    publish: '<path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M4 20h16" />',
-    refresh:
-      '<path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M7 17a7 7 0 0 0 11-3" /><path d="M17 7A7 7 0 0 0 6 10" />',
-    spark:
-      '<path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" />',
-    trash:
-      '<path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 15h10l1-15" /><path d="M10 10v7" /><path d="M14 10v7" />',
-  };
-
-  return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`;
 }
 
 function renderNavItem(
@@ -795,6 +777,8 @@ function syncExpandedGroups(snapshot: AppSnapshot): void {
 function renderSidebar(snapshot: AppSnapshot): string {
   const containerGroups = sidebarGroups(snapshot);
   const canCreateBundle = snapshot.config.siteDir.length > 0 && snapshot.siteDirExists;
+  const showProxmox = isProxmoxApiEnabled(snapshot.config);
+  const proxmoxContainers = new Map((state.proxmoxResult?.containers ?? []).map((container) => [container.vmid, container]));
   const containerButtons =
     containerGroups.length > 0
       ? containerGroups
@@ -805,6 +789,7 @@ function renderSidebar(snapshot: AppSnapshot): string {
                 const selection = `container:${container.vmid}` as ViewSelection;
                 const active = state.selection === selection ? " active" : "";
                 const detail = sidebarContainerDetail(snapshot, container);
+                const proxmoxContainer = showProxmox ? proxmoxContainers.get(container.vmid) : undefined;
 
                 return `
                   <button class="nav-item container-nav-item${active}" data-nav="${selection}" title="${escapeHtml(`VMID ${container.vmid}`)}">
@@ -816,6 +801,11 @@ function renderSidebar(snapshot: AppSnapshot): string {
                           : ""
                       }
                     </span>
+                    ${
+                      proxmoxContainer
+                        ? `<span class="nav-deploy-dot ${isRunningProxmoxStatus(proxmoxContainer.status) ? "running" : "stopped"}" title="Proxmox: ${escapeHtml(proxmoxContainer.status)}"></span>`
+                        : ""
+                    }
                   </button>
                 `;
               })
@@ -858,6 +848,7 @@ function renderSidebar(snapshot: AppSnapshot): string {
         <div class="nav-list">
           ${renderNavItem("home", "Welcome", "welcome", state.selection, "")}
           ${renderNavItem("branch", "Git", "git", state.selection, "")}
+          ${showProxmox ? renderNavItem("server", "Proxmox", "proxmox", state.selection, "") : ""}
           ${renderNavItem("publish", "Publish", "publish", state.selection, "")}
           ${renderNavItem("lock", "Secrets", "secrets", state.selection, "")}
           ${renderNavItem("edit", "Site", "site", state.selection, "")}
@@ -953,6 +944,8 @@ function renderToolbar(snapshot: AppSnapshot): string {
       ? "Settings"
       : state.selection === "publish"
         ? "Publish"
+        : state.selection === "proxmox"
+          ? "Proxmox"
         : state.selection === "secrets"
           ? "Secrets"
           : state.selection === "secrets:groups"
@@ -976,6 +969,7 @@ function renderToolbar(snapshot: AppSnapshot): string {
     site: "Site-wide NixOS overrides via site.nix.",
     settings: "Paths, SSH targets, and secret backend configuration.",
     publish: "Sync config, secrets, and identities to Proxmox hosts.",
+    proxmox: "Live node status from the Proxmox API.",
     secrets: "Shared and named secret groups.",
     "secrets:groups": "Shared secrets are global; named groups attach to containers.",
     "secrets:containers": "Per-container secret scope and identity.",
@@ -1017,6 +1011,162 @@ function renderToolbar(snapshot: AppSnapshot): string {
         </button>
       </div>
     </header>
+  `;
+}
+
+function formatPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let next = value;
+  let unitIndex = 0;
+  while (next >= 1024 && unitIndex < units.length - 1) {
+    next /= 1024;
+    unitIndex += 1;
+  }
+  return `${next >= 10 || unitIndex === 0 ? Math.round(next) : next.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) {
+    return "n/a";
+  }
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
+function statusClassName(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^a-z0-9_-]+/gu, "-");
+}
+
+function isRunningProxmoxStatus(value: string): boolean {
+  return ["online", "running"].includes(value.trim().toLocaleLowerCase());
+}
+
+function renderProxmoxPage(): string {
+  const result = state.proxmoxResult;
+  const nodes = result?.nodes ?? [];
+
+  return `
+    <div class="page-stack">
+      ${state.proxmoxError ? `<div class="error-band">${escapeHtml(state.proxmoxError)}</div>` : ""}
+      ${result?.warnings.length ? `<div class="error-band">${escapeHtml(result.warnings.join("\n"))}</div>` : ""}
+
+      <section class="page-controls">
+        <div class="controls-start"></div>
+        <div class="controls-end">
+          <button class="secondary-button" data-action="refresh-proxmox" ${state.proxmoxLoading ? "disabled" : ""}>
+            ${icon("refresh")}
+            <span>${state.proxmoxLoading ? "Refreshing" : "Refresh"}</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="page-band">
+        <div class="section-header">
+          <div>
+            <div class="section-title">${icon("server")}<span>Nodes</span></div>
+            <div class="section-copy">Opt-in API access. Set the enable flag and token auth in preserved config or the process environment.</div>
+          </div>
+        </div>
+        ${
+          state.proxmoxLoading && !result
+            ? `<div class="empty-state">Loading Proxmox nodes...</div>`
+            : nodes.length === 0
+              ? `<div class="empty-state">No Proxmox nodes loaded.</div>`
+              : `<div class="proxmox-node-table">
+                  <div class="proxmox-node-row heading">
+                    <span>Node</span>
+                    <span>Status</span>
+                    <span>CPU</span>
+                    <span>Memory</span>
+                    <span>Disk</span>
+                    <span>Uptime</span>
+                  </div>
+                  ${nodes.map((node) => `
+                    <div class="proxmox-node-row">
+                      <span class="proxmox-node-name">${escapeHtml(node.node)}</span>
+                      <span class="proxmox-node-status ${escapeHtml(statusClassName(node.status))}">${escapeHtml(node.status)}</span>
+                      <span>${escapeHtml(formatPercent(node.cpu))}</span>
+                      <span>${escapeHtml(formatBytes(node.mem))} / ${escapeHtml(formatBytes(node.maxmem))}</span>
+                      <span>${escapeHtml(formatBytes(node.disk))} / ${escapeHtml(formatBytes(node.maxdisk))}</span>
+                      <span>${escapeHtml(formatDuration(node.uptime))}</span>
+                    </div>
+                  `).join("")}
+                </div>`
+        }
+      </section>
+    </div>
+  `;
+}
+
+function proxmoxContainerStatus(vmid: string): ProxmoxContainerStatus | null {
+  return state.proxmoxResult?.containers.find((container) => container.vmid === vmid) ?? null;
+}
+
+function renderContainerProxmoxStatus(container: ContainerSummary): string {
+  const snapshot = state.snapshot;
+  if (!isProxmoxApiEnabled(snapshot?.config)) {
+    return "";
+  }
+
+  const status = proxmoxContainerStatus(container.vmid);
+  const deployed = status !== null;
+  const statusDot = status
+    ? `<span class="status-dot ${isRunningProxmoxStatus(status.status) ? "good" : "warn"}"></span>`
+    : `<span></span>`;
+  return `
+    <section class="page-band">
+      <div class="section-header">
+        <div>
+          <div class="section-title">${icon("server")}<span>Proxmox</span></div>
+          <div class="section-copy">Live deployment status from the Proxmox API.</div>
+        </div>
+        <div class="section-actions">
+          <button class="secondary-button" data-action="refresh-proxmox" ${state.proxmoxLoading ? "disabled" : ""}>
+            ${icon("refresh")}
+            <span>${state.proxmoxLoading ? "Refreshing" : "Refresh"}</span>
+          </button>
+          <button
+            class="primary-button"
+            data-action="restart-proxmox-container"
+            data-vmid="${escapeHtml(container.vmid)}"
+            ${!deployed || state.proxmoxActionRunning ? "disabled" : ""}
+          >
+            ${icon("refresh")}
+            <span>${state.proxmoxActionRunning ? "Restarting" : "Restart"}</span>
+          </button>
+        </div>
+      </div>
+      ${state.proxmoxError ? `<div class="error-band compact-band">${escapeHtml(state.proxmoxError)}</div>` : ""}
+      ${state.proxmoxActionResult ? `<div class="${state.proxmoxActionResult.exitCode === 0 ? "success-band compact-band" : "error-band compact-band"}">${escapeHtml(state.proxmoxActionResult.output || state.proxmoxActionResult.error || "")}</div>` : ""}
+      <div class="proxmox-container-status">
+        ${statusDot}
+        <div>
+          <div class="proxmox-container-title">${deployed ? "Deployed" : state.proxmoxLoading ? "Checking deployment" : "Not deployed"}</div>
+          <div class="proxmox-container-meta">
+            ${
+              status
+                ? `${escapeHtml(status.status)} on ${escapeHtml(status.node)}${status.name ? ` as ${escapeHtml(status.name)}` : ""} / uptime ${escapeHtml(formatDuration(status.uptime))}`
+                : "No matching LXC VMID was found in the Proxmox inventory."
+            }
+          </div>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -1264,6 +1414,7 @@ function renderSettingsField(
   wide = false,
   browse = false,
   attributeName = "data-field",
+  inputType = "text",
 ): string {
   const control = options
     ? `
@@ -1290,7 +1441,7 @@ function renderSettingsField(
         `
       : `
           <div class="field-control">
-            <input ${attributeName}="${field}" value="${escapeHtml(value)}" spellcheck="false" />
+            <input type="${escapeHtml(inputType)}" ${attributeName}="${field}" value="${escapeHtml(value)}" spellcheck="false" />
           </div>
         `;
 
@@ -1305,9 +1456,25 @@ function renderSettingsField(
   `;
 }
 
+function renderSettingsToggle(label: string, field: keyof ProxnixConfig, checked: boolean, hint: string): string {
+  return `
+    <label class="field wide">
+      <div class="field-label-row">
+        <span class="field-label">${escapeHtml(label)}</span>
+      </div>
+      <div class="option-toggle settings-toggle">
+        <input type="checkbox" data-field="${escapeHtml(field)}" ${checked ? "checked" : ""} />
+        <span>${checked ? "Enabled" : "Disabled"}</span>
+      </div>
+      <div class="field-hint">${escapeHtml(hint)}</div>
+    </label>
+  `;
+}
+
 function renderSettingsForm(snapshot: AppSnapshot): string {
   const draft = state.draft ?? defaultConfig();
   const dirty = isDirty();
+  const proxmoxEnabled = isProxmoxApiEnabled(draft);
   const preserved =
     snapshot.preservedConfigKeys.length > 0
       ? `${snapshot.preservedConfigKeys.length} extra key${snapshot.preservedConfigKeys.length === 1 ? "" : "s"} preserved`
@@ -1374,6 +1541,15 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
           : ""}
         ${renderSettingsField("Scripts dir", "scriptsDir", draft.scriptsDir, "Override path for proxnix CLI wrappers.", undefined, true)}
         ${renderSettingsField("Manager Python path", "managerPythonPath", draft.managerPythonPath, "Extra import paths for the Manager bridge. Prefer site-packages; venv bin paths expand automatically.", undefined, true)}
+        ${renderSettingsToggle("Proxmox API integration", "proxmoxApiEnabled", proxmoxEnabled, "Opt-in live Proxmox status and container actions. No API calls are made while disabled.")}
+        ${proxmoxEnabled
+          ? `
+              ${renderSettingsField("Proxmox API URL", "proxmoxApiUrl", draft.proxmoxApiUrl, "Example: https://proxmox.example:8006", undefined, true)}
+              ${renderSettingsField("API token ID", "proxmoxApiTokenId", draft.proxmoxApiTokenId, "Example: root@pam!proxnix-manager", undefined, true)}
+              ${renderSettingsField("API token secret", "proxmoxApiTokenSecret", draft.proxmoxApiTokenSecret, "Stored in the proxnix config file.", undefined, true, false, "data-field", "password")}
+              ${renderSettingsToggle("Verify Proxmox TLS", "proxmoxVerifyTls", draft.proxmoxVerifyTls.trim().toLocaleLowerCase() !== "false", "Disable only for local clusters with self-signed certificates.")}
+            `
+          : ""}
       </div>
     </section>
   `;
@@ -1742,6 +1918,8 @@ function renderContainerPage(container: ContainerSummary): string {
           )}
         </div>
       </section>
+
+      ${renderContainerProxmoxStatus(container)}
 
       <section class="page-band">
         <div class="details-grid">
@@ -2531,6 +2709,13 @@ function renderMain(snapshot: AppSnapshot): string {
     return renderPublishPage(snapshot);
   }
 
+  if (state.selection === "proxmox") {
+    if (!isProxmoxApiEnabled(snapshot.config)) {
+      return renderSettingsForm(snapshot);
+    }
+    return renderProxmoxPage();
+  }
+
   if (state.selection === "secrets") {
     return renderSecretsPage(snapshot);
   }
@@ -2556,10 +2741,14 @@ function renderMain(snapshot: AppSnapshot): string {
 
 function renderStatusbar(snapshot: AppSnapshot): string {
   const isSecretsPage = state.selection === "secrets" || state.selection.startsWith("secrets:");
+  const isProxmoxPage = state.selection === "proxmox";
+  const proxmoxConfigured = state.proxmoxResult?.configured ?? false;
   const containerLabel = selectedContainerStatusbarLabel();
-  const leftLabel = containerLabel
-    ? containerLabel
-    : isSecretsPage
+  const leftLabel = isProxmoxPage
+    ? `Proxmox: <span class="${proxmoxConfigured ? "status-dot good" : "status-dot warn"}"></span> ${proxmoxConfigured ? "API configured" : "API not configured"}${state.proxmoxResult?.apiUrl ? ` <code>${escapeHtml(state.proxmoxResult.apiUrl)}</code>` : ""}`
+    : containerLabel
+      ? containerLabel
+      : isSecretsPage
       ? `Secrets: <code>${escapeHtml(snapshot.config.secretProvider)}</code>`
       : snapshot.config.siteDir
         ? `Site: <code>${escapeHtml(compactPath(snapshot.config.siteDir))}</code>`
@@ -2575,7 +2764,11 @@ function renderStatusbar(snapshot: AppSnapshot): string {
             ? "Creating site"
           : state.publishRunning
             ? "Publishing"
-            : state.doctorRunning
+            : state.proxmoxActionRunning
+              ? "Restarting container"
+            : state.proxmoxLoading
+              ? "Loading Proxmox"
+              : state.doctorRunning
               ? "Running checks"
               : state.gitRunning
                 ? "Git operation"
@@ -2840,6 +3033,46 @@ async function handleRefreshGit(): Promise<void> {
     };
   } finally {
     state.gitLoading = false;
+    render();
+  }
+}
+
+async function handleRefreshProxmox(): Promise<void> {
+  if (!isProxmoxApiEnabled(state.snapshot?.config)) {
+    state.proxmoxResult = null;
+    state.proxmoxError = null;
+    return;
+  }
+  state.proxmoxLoading = true;
+  state.proxmoxError = null;
+  render();
+
+  try {
+    state.proxmoxResult = await proxnixRpc.request.loadProxmoxNodes();
+  } catch (error) {
+    state.proxmoxError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.proxmoxLoading = false;
+    render();
+  }
+}
+
+async function handleRestartProxmoxContainer(vmid: string): Promise<void> {
+  state.proxmoxActionRunning = true;
+  state.proxmoxActionResult = null;
+  render();
+
+  try {
+    state.proxmoxActionResult = await proxnixRpc.request.restartProxmoxContainer({ vmid });
+    await handleRefreshProxmox();
+  } catch (error) {
+    state.proxmoxActionResult = {
+      output: "",
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.proxmoxActionRunning = false;
     render();
   }
 }
@@ -3276,6 +3509,9 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
     if (state.selection === "git") {
       await handleRefreshGit();
     }
+    if (state.selection === "proxmox") {
+      await handleRefreshProxmox();
+    }
     return;
   }
 
@@ -3291,6 +3527,16 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
 
   if (action === "publish-execute") {
     await handleRunPublish(false);
+    return;
+  }
+
+  if (action === "refresh-proxmox") {
+    await handleRefreshProxmox();
+    return;
+  }
+
+  if (action === "restart-proxmox-container") {
+    await handleRestartProxmoxContainer(element.dataset.vmid ?? "");
     return;
   }
 
@@ -3467,6 +3713,11 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       syncExpandedGroups(snapshot);
       state.snapshot = snapshot;
       state.draft = cloneConfig(snapshot.config);
+      if (!isProxmoxApiEnabled(snapshot.config)) {
+        state.proxmoxResult = null;
+        state.proxmoxError = null;
+        state.proxmoxActionResult = null;
+      }
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
       if (isSecretsIndexSelection()) {
@@ -3564,6 +3815,11 @@ async function handleAction(action: string, element: HTMLElement): Promise<void>
       syncExpandedGroups(snapshot);
       state.snapshot = snapshot;
       state.draft = cloneConfig(snapshot.config);
+      if (!isProxmoxApiEnabled(snapshot.config)) {
+        state.proxmoxResult = null;
+        state.proxmoxError = null;
+        state.proxmoxActionResult = null;
+      }
       ensureSelection(snapshot);
       syncContainerMetadataDraft(snapshot);
       if (isSecretsIndexSelection()) {
@@ -3642,7 +3898,11 @@ function updateDraftFromField(target: HTMLInputElement | HTMLSelectElement): voi
     return;
   }
 
-  state.draft[field] = target.value;
+  if (target instanceof HTMLInputElement && target.type === "checkbox") {
+    state.draft[field] = target.checked ? "true" : field === "proxmoxVerifyTls" ? "false" : "";
+  } else {
+    state.draft[field] = target.value;
+  }
   syncDraftIndicators();
 }
 
@@ -3805,8 +4065,13 @@ root.addEventListener("change", (event) => {
     if (field === "secretProvider") {
       render();
     }
-  } else if (target instanceof HTMLInputElement && target.type === "checkbox" && target.dataset.option) {
-    updateOptionFromField(target);
+  } else if (target instanceof HTMLInputElement && target.type === "checkbox") {
+    if (target.dataset.field) {
+      updateDraftFromField(target);
+      render();
+    } else if (target.dataset.option) {
+      updateOptionFromField(target);
+    }
   }
 });
 

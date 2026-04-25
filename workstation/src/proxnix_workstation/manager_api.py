@@ -26,6 +26,11 @@ CONFIG_FIELDS = {
     "secretProviderCommand": "PROXNIX_SECRET_PROVIDER_COMMAND",
     "scriptsDir": "PROXNIX_SCRIPTS_DIR",
     "managerPythonPath": "PROXNIX_MANAGER_PYTHONPATH",
+    "proxmoxApiEnabled": "PROXNIX_PROXMOX_API_ENABLED",
+    "proxmoxApiUrl": "PROXNIX_PROXMOX_API_URL",
+    "proxmoxApiTokenId": "PROXNIX_PROXMOX_API_TOKEN_ID",
+    "proxmoxApiTokenSecret": "PROXNIX_PROXMOX_API_TOKEN_SECRET",
+    "proxmoxVerifyTls": "PROXNIX_PROXMOX_VERIFY_TLS",
 }
 
 DEFAULT_CONFIG = {
@@ -40,6 +45,11 @@ DEFAULT_CONFIG = {
     "secretProviderCommand": "",
     "scriptsDir": "",
     "managerPythonPath": "",
+    "proxmoxApiEnabled": "",
+    "proxmoxApiUrl": "",
+    "proxmoxApiTokenId": "",
+    "proxmoxApiTokenSecret": "",
+    "proxmoxVerifyTls": "true",
 }
 
 SITE_NIX_SCAFFOLD = """\
@@ -87,6 +97,11 @@ def _config_payload(config: WorkstationConfig) -> dict[str, object]:
         "secretProviderCommand": config.secret_provider_command or "",
         "scriptsDir": "" if config.scripts_dir is None else str(config.scripts_dir),
         "managerPythonPath": provider_env.get("PROXNIX_MANAGER_PYTHONPATH", ""),
+        "proxmoxApiEnabled": provider_env.get("PROXNIX_PROXMOX_API_ENABLED", ""),
+        "proxmoxApiUrl": provider_env.get("PROXNIX_PROXMOX_API_URL", ""),
+        "proxmoxApiTokenId": provider_env.get("PROXNIX_PROXMOX_API_TOKEN_ID", ""),
+        "proxmoxApiTokenSecret": provider_env.get("PROXNIX_PROXMOX_API_TOKEN_SECRET", ""),
+        "proxmoxVerifyTls": provider_env.get("PROXNIX_PROXMOX_VERIFY_TLS", "true"),
     }
 
 

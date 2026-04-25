@@ -1,4 +1,5 @@
 import type { RPCSchema } from "electrobun/bun";
+import type { ProxmoxNodesResult } from "./proxmoxTypes";
 
 export interface ProxnixConfig {
   siteDir: string;
@@ -12,6 +13,11 @@ export interface ProxnixConfig {
   secretProviderCommand: string;
   scriptsDir: string;
   managerPythonPath: string;
+  proxmoxApiEnabled: string;
+  proxmoxApiUrl: string;
+  proxmoxApiTokenId: string;
+  proxmoxApiTokenSecret: string;
+  proxmoxVerifyTls: string;
 }
 
 export interface ContainerSummary {
@@ -291,6 +297,14 @@ export type ProxnixManagerRPC = {
       readTextFile: {
         params: { path: string };
         response: FilePreview;
+      };
+      loadProxmoxNodes: {
+        params: void;
+        response: ProxmoxNodesResult;
+      };
+      restartProxmoxContainer: {
+        params: { vmid: string };
+        response: CommandResult;
       };
     };
   }>;

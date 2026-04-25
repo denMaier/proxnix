@@ -27,6 +27,11 @@ KNOWN_KEYS = (
     "PROXNIX_SECRET_PROVIDER_COMMAND",
     "PROXNIX_SCRIPTS_DIR",
     "PROXNIX_MANAGER_PYTHONPATH",
+    "PROXNIX_PROXMOX_API_ENABLED",
+    "PROXNIX_PROXMOX_API_URL",
+    "PROXNIX_PROXMOX_API_TOKEN_ID",
+    "PROXNIX_PROXMOX_API_TOKEN_SECRET",
+    "PROXNIX_PROXMOX_VERIFY_TLS",
 )
 
 DEFAULT_CONFIG = {
@@ -41,6 +46,11 @@ DEFAULT_CONFIG = {
     "secretProviderCommand": "",
     "scriptsDir": "",
     "managerPythonPath": "",
+    "proxmoxApiEnabled": "",
+    "proxmoxApiUrl": "",
+    "proxmoxApiTokenId": "",
+    "proxmoxApiTokenSecret": "",
+    "proxmoxVerifyTls": "true",
 }
 
 SITE_NIX_SCAFFOLD = """\
@@ -488,6 +498,11 @@ def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
         "secretProviderCommand": value_for("PROXNIX_SECRET_PROVIDER_COMMAND").strip(),
         "scriptsDir": _expand_home_string(value_for("PROXNIX_SCRIPTS_DIR"), home).strip(),
         "managerPythonPath": value_for("PROXNIX_MANAGER_PYTHONPATH").strip(),
+        "proxmoxApiEnabled": value_for("PROXNIX_PROXMOX_API_ENABLED").strip(),
+        "proxmoxApiUrl": value_for("PROXNIX_PROXMOX_API_URL").strip(),
+        "proxmoxApiTokenId": value_for("PROXNIX_PROXMOX_API_TOKEN_ID").strip(),
+        "proxmoxApiTokenSecret": value_for("PROXNIX_PROXMOX_API_TOKEN_SECRET").strip(),
+        "proxmoxVerifyTls": value_for("PROXNIX_PROXMOX_VERIFY_TLS", default="true").strip() or "true",
     }
 
     return payload, preserved_keys, config_path

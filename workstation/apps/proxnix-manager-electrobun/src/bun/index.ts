@@ -1,5 +1,6 @@
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
 import type { ProxnixManagerRPC } from "../shared/types";
+import { loadProxmoxNodes, restartProxmoxContainer } from "./proxmoxBridge";
 import {
   attachSecretGroup,
   createContainerBundle,
@@ -73,6 +74,8 @@ const proxnixRpc = BrowserView.defineRPC<ProxnixManagerRPC>({
       gitCommit: (params) => gitCommit(params.message),
       gitPush: (_params: void) => gitPush(),
       readTextFile: (params) => readTextFile(params.path),
+      loadProxmoxNodes: (_params: void) => loadProxmoxNodes(),
+      restartProxmoxContainer: (params) => restartProxmoxContainer(params.vmid),
       openInEditor: async (params) => {
         const editors = ["code", "cursor", "zed", "subl"];
         for (const editor of editors) {
