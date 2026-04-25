@@ -6,7 +6,8 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 1. **Host hooks:** Did the pre-start and mount hooks run?
    ```bash
-   journalctl -t lxc-<vmid>-start -n 50   # or check syslog
+   journalctl -t proxnix-prestart -t proxnix-mount -t proxnix-poststop -n 100
+   journalctl -t lxc-<vmid>-start -n 50   # raw LXC hook output, also useful with pct start <vmid> --debug
    ```
 
 2. **Guest apply service:** Did the config get applied?
