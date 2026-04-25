@@ -139,6 +139,14 @@ PY
   cat > "${bin_dir}/proxnix-python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew brew; do
+  if command -v "$brew_bin" >/dev/null 2>&1; then
+    python_prefix="$("$brew_bin" --prefix python 2>/dev/null || true)"
+    if [[ -n "$python_prefix" && -x "$python_prefix/libexec/bin/python3" ]]; then
+      exec "$python_prefix/libexec/bin/python3" "$@"
+    fi
+  fi
+done
 if [[ -x /opt/homebrew/opt/python@3.12/bin/python3.12 ]]; then
   exec /opt/homebrew/opt/python@3.12/bin/python3.12 "$@"
 fi
@@ -210,7 +218,7 @@ Included CLI tools:
 
 Runtime dependencies:
   - bash
-  - python 3.12
+  - python 3.12 or newer
   - ssh
   - rsync
   - sops

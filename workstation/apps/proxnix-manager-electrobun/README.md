@@ -101,7 +101,7 @@ Python resolution order:
 1. `PROXNIX_MANAGER_PYTHON`
 2. packaged `bin/proxnix-python` under the app resources directory
 3. repo-local `workstation/.venv/bin/python`
-4. Homebrew `python@3.12`
+4. Homebrew `python`
 5. `python3`, `python`, or `py -3`
 
 Packaged builds bundle the workstation source and core Python dependencies

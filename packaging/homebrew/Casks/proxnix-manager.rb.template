@@ -7,7 +7,7 @@ cask "proxnix-manager" do
   desc "macOS GUI for proxnix"
   homepage "{{HOMEPAGE}}"
 
-  depends_on formula: "python@3.12"
+  depends_on formula: "python"
   depends_on formula: "sops"
   depends_on macos: ">= :ventura"
 

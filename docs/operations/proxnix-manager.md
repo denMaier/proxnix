@@ -35,7 +35,7 @@ The Homebrew cask is designed to install:
 
 The cask depends on these Homebrew formulae:
 
-- `python@3.12`
+- `python`
 - `sops`
 
 The app bundle includes the workstation Python package source, the CLI wrapper
@@ -100,7 +100,7 @@ Interpreter selection is:
 1. `PROXNIX_MANAGER_PYTHON`, when explicitly set
 2. bundled `bin/proxnix-python` under the packaged app resources directory
 3. repo-local `workstation/.venv/bin/python` during development
-4. Homebrew `python@3.12`
+4. Homebrew `python`
 5. `python3`, `python`, or Windows `py -3` from `PATH`
 
 Advanced imports can be added with `PROXNIX_MANAGER_PYTHONPATH`, either in the
@@ -125,11 +125,11 @@ used by the Manager, for example:
 workstation/.venv/bin/python -m pip install pykeepass
 ```
 
-For an installed packaged Manager, prefer a dedicated Python 3.12 provider venv
+For an installed packaged Manager, prefer a dedicated Python 3.12-or-newer provider venv
 instead of installing optional provider packages into Homebrew Python globally:
 
 ```bash
-/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv ~/.local/share/proxnix/provider-python
+/opt/homebrew/opt/python/libexec/bin/python3 -m venv ~/.local/share/proxnix/provider-python
 ~/.local/share/proxnix/provider-python/bin/python -m pip install pykeepass
 ```
 
@@ -180,11 +180,11 @@ resources directory, then writes bundled CLI wrappers under its `bin/`
 subdirectory. Optional providers such as `pykeepass` are intentionally excluded
 from the shipped app bundle.
 
-Local package tests should use a Python 3.12 environment for the copied
-dependencies because the packaged `proxnix-python` wrapper runs Homebrew
-`python@3.12` when it is available. If the repo-local `workstation/.venv` uses
-a different Python minor version, create a temporary Python 3.12 venv and pass
-it as `PROXNIX_PACKAGE_PYTHON`.
+Local package tests should use a Python 3.12-or-newer environment for the
+copied dependencies because the packaged `proxnix-python` wrapper runs
+Homebrew `python` when it is available. If the repo-local `workstation/.venv`
+uses an older Python version, create a temporary Python 3.12-or-newer venv and
+pass it as `PROXNIX_PACKAGE_PYTHON`.
 
 ## Recommended repository setup
 

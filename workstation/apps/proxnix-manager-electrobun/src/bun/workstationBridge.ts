@@ -59,10 +59,23 @@ function resolvePythonCommand(): string[] {
     return [moduleRelative];
   }
 
-  const preferredPaths = [
-    "/opt/homebrew/opt/python@3.12/bin/python3.12",
-    "/usr/local/opt/python@3.12/bin/python3.12",
-  ];
+  for (const brew of ["/opt/homebrew/bin/brew", "/usr/local/bin/brew", Bun.which("brew")].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  )) {
+    if (!existsSync(brew)) {
+      continue;
+    }
+    const result = Bun.spawnSync([brew, "--prefix", "python"], { stderr: "pipe", stdout: "pipe" });
+    if (result.success) {
+      const prefix = new TextDecoder().decode(result.stdout).trim();
+      const brewedPython = resolve(prefix, "libexec", "bin", "python3");
+      if (existsSync(brewedPython)) {
+        return [brewedPython];
+      }
+    }
+  }
+
+  const preferredPaths = ["/opt/homebrew/opt/python@3.12/bin/python3.12", "/usr/local/opt/python@3.12/bin/python3.12"];
   for (const candidate of preferredPaths) {
     if (existsSync(candidate)) {
       return [candidate];
