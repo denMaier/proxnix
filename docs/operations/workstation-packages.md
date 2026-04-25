@@ -55,7 +55,7 @@ This repo uses PyPI Trusted Publishing from GitHub Actions rather than a stored
 API token.
 
 The workflow validates that the pushed `v*` tag matches
-`workstation/pyproject.toml`:
+`workstation/cli/pyproject.toml`:
 
 ```text
 v1.2.3  <->  version = "1.2.3"

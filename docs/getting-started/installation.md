@@ -4,7 +4,7 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 
 ## Checklist
 
-- [ ] Install proxnix on every Proxmox node, preferably from the helper-script entrypoint that installs the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml` once from your control machine
+- [ ] Install proxnix on every Proxmox node, preferably from the helper-script entrypoint that installs the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml` once from your control machine
 - [ ] Create a separate workstation-owned site repo, or stop after workstation config if you only want a fresh host/bootstrap first
 - [ ] Configure your workstation for `proxnix-secrets` and `proxnix-publish`
 - [ ] Initialize the host relay identity
@@ -16,7 +16,7 @@ Every Proxmox node that may start proxnix-managed containers needs the same
 installed assets. The canonical path is the helper-script entrypoint, which
 downloads and installs the `proxnix-host` Debian package for the local
 architecture. You can also install the package manually, run `host/install.sh`
-directly on the node, or use `host/ansible/install.yml` from an Ansible
+directly on the node, or use `host/deploy/ansible/install.yml` from an Ansible
 control machine over SSH.
 
 It installs two kinds of assets:
@@ -129,10 +129,10 @@ target node itself. The playbook copies the proxnix files from your local repo
 checkout to each remote Proxmox host over SSH.
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
-The example inventory in `host/inventory.proxmox.ini` already sets
+The example inventory in `host/deploy/inventory.proxmox.ini` already sets
 `ansible_connection=ssh` and `ansible_user=root`. `proxmox_cluster` is defined
 as a child group of `proxmox`, so either target works without inventory
 warnings. Make sure your control machine has SSH access to the listed hosts.
@@ -141,14 +141,14 @@ By default the playbook targets the `proxmox` inventory group. Override that
 group when needed:
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
 
 If you want one playbook for host install plus workstation config, use one of
 the AI-oriented wrappers instead:
 
-- `host/ansible/ai-agent-bootstrap.yml` for install + host verification + workstation config, without publishing a live site repo
-- `host/ansible/ai-agent-deploy.yml` for the full publish flow
+- `host/deploy/ansible/ai-agent-bootstrap.yml` for install + host verification + workstation config, without publishing a live site repo
+- `host/deploy/ansible/ai-agent-deploy.yml` for the full publish flow
 
 ## Step 2: Create the workstation site repo
 
@@ -191,7 +191,7 @@ Or with the repo helper:
 
 If you want to keep the tooling repo-local instead of changing the global
 Python environment, install it into `workstation/.venv` and use the wrappers
-under `workstation/bin/`:
+under `workstation/cli/bin/`:
 
 ```bash
 ./ci/bootstrap-workstation-venv.sh
@@ -345,7 +345,7 @@ host/install.sh
 Or redeploy them remotely from your Ansible control machine:
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
 After upgrading, restart managed containers so they pick up the new hook/runtime code.

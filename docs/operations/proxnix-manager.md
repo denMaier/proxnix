@@ -14,7 +14,7 @@ interface for the most common workstation workflows:
 - git status, staging, commit, and push
 - doctor and publish workflows
 
-The app source lives in `workstation/apps/proxnix-manager-electrobun/`.
+The app source lives in `workstation/manager/`.
 
 The intended macOS install surface is a Homebrew tap so Apple Silicon users can
 install it with one command:

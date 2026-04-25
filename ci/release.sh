@@ -106,14 +106,14 @@ if ensure_branch_exists "$release_branch"; then
     || release_die "HEAD is not reachable from '${release_branch}'"
 fi
 
-echo "Updating VERSION and workstation/pyproject.toml to ${release_version}"
+echo "Updating VERSION and workstation/cli/pyproject.toml to ${release_version}"
 if [[ $dry_run -eq 0 ]]; then
   "${SCRIPT_DIR}/set-version.sh" "$release_version"
 fi
 
 echo "Creating release commit: ${commit_message}"
 if [[ $dry_run -eq 0 ]]; then
-  git add VERSION workstation/pyproject.toml
+  git add VERSION workstation/cli/pyproject.toml
   if ! git diff --cached --quiet; then
     git commit -m "$commit_message"
   else

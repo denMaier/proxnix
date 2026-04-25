@@ -75,12 +75,12 @@ of ad hoc shell snippets. Pick the playbook that matches the approved goal.
 
 Prefer:
 
-- `host/ansible/ai-agent-bootstrap.yml`
-- `host/ansible/ai-agent-bootstrap.vars.example.yml`
+- `host/deploy/ansible/ai-agent-bootstrap.yml`
+- `host/deploy/ansible/ai-agent-bootstrap.vars.example.yml`
 
 That playbook:
 
-- installs proxnix on the target Proxmox hosts by importing `host/ansible/install.yml`
+- installs proxnix on the target Proxmox hosts by importing `host/deploy/ansible/install.yml`
 - runs `proxnix-doctor --host-only` on every target node
 - renders the workstation config used by `proxnix`
 - optionally creates an empty site repo skeleton
@@ -90,23 +90,23 @@ That playbook:
 Typical usage:
 
 ```bash
-cp host/ansible/ai-agent-bootstrap.vars.example.yml host/ansible/ai-agent-bootstrap.vars.yml
+cp host/deploy/ansible/ai-agent-bootstrap.vars.example.yml host/deploy/ansible/ai-agent-bootstrap.vars.yml
 ansible-playbook \
-  -i host/inventory.proxmox.ini \
-  host/ansible/ai-agent-bootstrap.yml \
-  -e @host/ansible/ai-agent-bootstrap.vars.yml
+  -i host/deploy/inventory.proxmox.ini \
+  host/deploy/ansible/ai-agent-bootstrap.yml \
+  -e @host/deploy/ansible/ai-agent-bootstrap.vars.yml
 ```
 
 ### For `deployment_goal=full-publish`
 
 Prefer:
 
-- `host/ansible/ai-agent-deploy.yml`
-- `host/ansible/ai-agent-deploy.vars.example.yml`
+- `host/deploy/ansible/ai-agent-deploy.yml`
+- `host/deploy/ansible/ai-agent-deploy.vars.example.yml`
 
 That playbook:
 
-- installs proxnix on the target Proxmox hosts by importing `host/ansible/install.yml`
+- installs proxnix on the target Proxmox hosts by importing `host/deploy/ansible/install.yml`
 - writes the workstation config used by `proxnix`
 - initializes the host relay identity when needed
 - validates the site repo
@@ -117,11 +117,11 @@ That playbook:
 Typical usage:
 
 ```bash
-cp host/ansible/ai-agent-deploy.vars.example.yml host/ansible/ai-agent-deploy.vars.yml
+cp host/deploy/ansible/ai-agent-deploy.vars.example.yml host/deploy/ansible/ai-agent-deploy.vars.yml
 ansible-playbook \
-  -i host/inventory.proxmox.ini \
-  host/ansible/ai-agent-deploy.yml \
-  -e @host/ansible/ai-agent-deploy.vars.yml
+  -i host/deploy/inventory.proxmox.ini \
+  host/deploy/ansible/ai-agent-deploy.yml \
+  -e @host/deploy/ansible/ai-agent-deploy.vars.yml
 ```
 
 If the user chose `deb-package` or `local-checkout` instead of Ansible, keep
@@ -169,31 +169,31 @@ If `deployment_goal=host-bootstrap`, prefer:
 
 ```bash
 ansible-playbook \
-  -i host/inventory.proxmox.ini \
-  host/ansible/ai-agent-bootstrap.yml \
-  -e @host/ansible/ai-agent-bootstrap.vars.yml
+  -i host/deploy/inventory.proxmox.ini \
+  host/deploy/ansible/ai-agent-bootstrap.yml \
+  -e @host/deploy/ansible/ai-agent-bootstrap.vars.yml
 ```
 
 If `deployment_goal=full-publish`, prefer:
 
 ```bash
 ansible-playbook \
-  -i host/inventory.proxmox.ini \
-  host/ansible/ai-agent-deploy.yml \
-  -e @host/ansible/ai-agent-deploy.vars.yml
+  -i host/deploy/inventory.proxmox.ini \
+  host/deploy/ansible/ai-agent-deploy.yml \
+  -e @host/deploy/ansible/ai-agent-deploy.vars.yml
 ```
 
 If the agent only needs the host runtime install and will do the workstation
 steps separately, the lower-level playbook is still available:
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
 To target a different inventory group:
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
 
 ### 2. Verify the host install immediately
@@ -223,7 +223,7 @@ If the user wants to use the repo-local helper instead:
 ```
 
 If the workstation should avoid mutating the global Python environment, prefer a
-repo-local virtualenv plus the wrappers under `workstation/bin/`:
+repo-local virtualenv plus the wrappers under `workstation/cli/bin/`:
 
 ```bash
 ./ci/bootstrap-workstation-venv.sh
@@ -289,7 +289,7 @@ If the user wants a dedicated key and it does not exist yet, create one:
 ssh-keygen -t ed25519 -f ~/.ssh/proxnix-master
 ```
 
-If the agent is using `host/ansible/ai-agent-deploy.yml`, this config render is
+If the agent is using `host/deploy/ansible/ai-agent-deploy.yml`, this config render is
 already handled by the playbook.
 
 If the approved goal is `host-bootstrap`, you can stop after rendering and
@@ -413,7 +413,7 @@ assertions, and writes reports an agent can summarize back to the operator.
 Run:
 
 ```bash
-workstation/bin/proxnix --config ~/.config/proxnix/config exercise lxc --host root@node1 --base-vmid 940
+workstation/cli/bin/proxnix --config ~/.config/proxnix/config exercise lxc --host root@node1 --base-vmid 940
 ```
 
 Or with the installed CLI:
@@ -591,7 +591,7 @@ Treat the deployment as successful only when all of these are true:
 ## What not to do
 
 - Do not invent deployment paths outside the Debian package, local
-  `host/install.sh`, `host/ansible/install.yml`, or `host/ansible/ai-agent-deploy.yml`
+  `host/install.sh`, `host/deploy/ansible/install.yml`, or `host/deploy/ansible/ai-agent-deploy.yml`
 - Do not skip the initial questions and silently choose a secrets model or test
   scope
 - Do not treat host install success as enough; always run the verification steps

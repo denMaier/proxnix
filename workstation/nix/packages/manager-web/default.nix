@@ -11,7 +11,7 @@
 }:
 
 let
-  workstationPackages = callPackage ../workstation { };
+  workstationPackages = callPackage ../cli { };
   workstationCli = workstationPackages.cli;
   pythonEnv = python3.withPackages (ps: [
     ps.cryptography
@@ -28,7 +28,7 @@ in
 stdenvNoCC.mkDerivation {
   pname = "proxnix-manager-web";
   version = "unstable";
-  src = ../../../apps/proxnix-manager-electrobun;
+  src = ../../../manager;
 
   nativeBuildInputs = [ makeWrapper ];
 
@@ -39,11 +39,11 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
 
     mkdir -p "$out/share/proxnix-manager-web"
-    cp -a src package.json "$out/share/proxnix-manager-web/"
+    cp -a app package.json "$out/share/proxnix-manager-web/"
 
     mkdir -p "$out/bin"
     makeWrapper ${bun}/bin/bun "$out/bin/proxnix-manager-web" \
-      --add-flags "run $out/share/proxnix-manager-web/src/webserver/index.ts" \
+      --add-flags "run $out/share/proxnix-manager-web/app/webui/index.ts" \
       --prefix PATH : ${lib.makeBinPath runtimeInputs} \
       --set-default PROXNIX_MANAGER_PYTHON ${pythonEnv}/bin/python \
       --prefix PROXNIX_MANAGER_PYTHONPATH : ${workstationCli}/share/proxnix-workstation/src

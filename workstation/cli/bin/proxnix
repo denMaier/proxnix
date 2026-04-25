@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLI_DIR="$(cd "${BIN_DIR}/.." && pwd)"
+WORKSTATION_DIR="$(cd "${CLI_DIR}/.." && pwd)"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$WORKSTATION_DIR/.uv-cache}"
+export PROXNIX_WORKSTATION_BIN_DIR="${PROXNIX_WORKSTATION_BIN_DIR:-$BIN_DIR}"
+
+if [[ -x "$WORKSTATION_DIR/.venv/bin/python" ]]; then
+  exec env PYTHONPATH="$CLI_DIR/src${PYTHONPATH:+:$PYTHONPATH}" "$WORKSTATION_DIR/.venv/bin/python" -m proxnix_workstation.cli "$@"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$CLI_DIR" proxnix "$@"
+fi
+
+exec env PYTHONPATH="$CLI_DIR/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m proxnix_workstation.cli "$@"

@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/package-common.sh"
 
 prepare_dirs
 
-app_dir="${WORKSTATION_DIR}/apps/proxnix-manager-electrobun"
+app_dir="${WORKSTATION_DIR}/manager"
 artifact="${DIST_DIR}/proxnix-manager-${VERSION}-linux-${ARCH}.tar.gz"
 electrobun_artifact="${app_dir}/artifacts/stable-linux-${ARCH}-ProxnixManager-Setup.tar.gz"
 

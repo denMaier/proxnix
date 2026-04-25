@@ -1,0 +1,18 @@
+{
+  "name": "proxnix-manager",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "electrobun build --env=dev && electrobun run --env=dev",
+    "web": "bun run app/webui/index.ts",
+    "build": "electrobun build --env=stable",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electrobun": "1.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

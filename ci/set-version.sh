@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSION_FILE="${ROOT_DIR}/VERSION"
-PYPROJECT="${ROOT_DIR}/workstation/pyproject.toml"
+PYPROJECT="${ROOT_DIR}/workstation/cli/pyproject.toml"
 
 usage() {
   cat <<'EOF'
@@ -47,7 +47,7 @@ new_text, count = re.subn(
     count=1,
 )
 if count != 1:
-    raise SystemExit("error: could not update [project].version in workstation/pyproject.toml")
+    raise SystemExit("error: could not update [project].version in workstation/cli/pyproject.toml")
 path.write_text(new_text, encoding="utf-8")
 PY
 

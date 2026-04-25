@@ -12,13 +12,13 @@ ARCH="${ARCH:-$(uname -m)}"
 readonly ROOT_DIR WORKSTATION_DIR DIST_DIR BUILD_DIR VERSION ARCH
 
 WORKSTATION_SCRIPTS=(
-  legacy/proxnix-workstation-common.sh
-  bin/proxnix
-  bin/proxnix-publish
-  bin/proxnix-secrets
-  bin/proxnix-doctor
-  bin/proxnix-lxc-exercise
-  bin/proxnix-tui
+  cli/legacy/proxnix-workstation-common.sh
+  cli/bin/proxnix
+  cli/bin/proxnix-publish
+  cli/bin/proxnix-secrets
+  cli/bin/proxnix-doctor
+  cli/bin/proxnix-lxc-exercise
+  cli/bin/proxnix-tui
 )
 
 die() {
@@ -44,7 +44,7 @@ install_workstation_python_runtime() {
   local dest_root="$1"
   local runtime_dir="${dest_root}/lib/python"
   mkdir -p "$runtime_dir"
-  cp -a "${WORKSTATION_DIR}/src/proxnix_workstation" "${runtime_dir}/proxnix_workstation"
+  cp -a "${WORKSTATION_DIR}/cli/src/proxnix_workstation" "${runtime_dir}/proxnix_workstation"
 
   local python_bin="${PROXNIX_PACKAGE_PYTHON:-}"
   if [[ -z "$python_bin" ]]; then

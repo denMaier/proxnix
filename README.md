@@ -26,7 +26,7 @@ upgrade and uninstall path.
 
 ## Repo layout
 
-- `host/` contains the Proxmox-host install/runtime code: hooks, installers, inventory, helper scripts, and the shared managed Nix modules.
+- `host/` contains the Proxmox host layer, with stable installer entrypoints plus grouped `runtime/`, `deploy/`, `packaging/`, `remote/`, and `extras/` sources.
 - `workstation/` contains the workstation-authoritative CLI, TUI, Proxnix Manager app, Nix flake, packaging scripts, and workstation module exports.
 - `docs/` contains shared human-facing documentation.
 

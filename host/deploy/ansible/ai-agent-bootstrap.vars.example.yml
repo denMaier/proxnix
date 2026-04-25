@@ -1,0 +1,39 @@
+# Copy this file, fill in the values, then run:
+#
+#   ansible-playbook \
+#     -i host/deploy/inventory.proxmox.ini \
+#     host/deploy/ansible/ai-agent-bootstrap.yml \
+#     -e @host/deploy/ansible/ai-agent-bootstrap.vars.yml
+
+# Inventory group passed through to host/deploy/ansible/install.yml.
+proxnix_ai_target_hosts_group: proxmox
+
+# Workstation config rendered for later manual publish use.
+proxnix_ai_site_dir: "{{ lookup('env', 'HOME') }}/src/proxnix-site"
+proxnix_ai_config_file: "{{ lookup('env', 'HOME') }}/.config/proxnix/config"
+proxnix_ai_master_identity: "{{ lookup('env', 'HOME') }}/.ssh/proxnix-master"
+
+# Host list written into ~/.config/proxnix/config.
+proxnix_ai_publish_hosts:
+  - root@node1
+  - root@node2
+
+# Optional when SSH config or an agent already handles auth.
+# proxnix_ai_publish_ssh_identity: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519"
+
+# Keep an existing site repo untouched by default. Set to true only when you
+# explicitly want the playbook to create an empty repo skeleton.
+proxnix_ai_create_site_repo: false
+
+# Run the real exercise harness only when you want disposable validation CTs.
+proxnix_ai_run_exercise: false
+# proxnix_ai_exercise_host: root@node1
+# proxnix_ai_exercise_base_vmid: 940
+
+# Optional exercise overrides.
+# proxnix_ai_exercise_template: local:vztmpl/nixos-25.11-x86_64-linux.tar.xz
+# proxnix_ai_exercise_storage: local-lvm
+# proxnix_ai_exercise_bridge: vmbr0
+# proxnix_ai_exercise_ip: dhcp
+# proxnix_ai_exercise_gw: 192.168.178.1
+# proxnix_ai_exercise_timeout_seconds: 5400

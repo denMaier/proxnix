@@ -15,36 +15,36 @@ Useful flags:
 | `--dry-run` | Preview what would be installed without writing anything |
 | `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
 
-### `host/ansible/install.yml`
+### `host/deploy/ansible/install.yml`
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
 It copies files from this repo on the Ansible controller to the remote hosts in
 your inventory; it is not meant to run against `localhost`.
 
 ```bash
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
 ```
 
-### `host/ansible/ai-agent-bootstrap.yml`
+### `host/deploy/ansible/ai-agent-bootstrap.yml`
 
 Install proxnix onto one or more Proxmox nodes, verify `proxnix-doctor --host-only`,
 render a workstation config, and optionally run the disposable exercise harness,
 without publishing a live site repo.
 
 ```bash
-cp host/ansible/ai-agent-bootstrap.vars.example.yml host/ansible/ai-agent-bootstrap.vars.yml
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/ai-agent-bootstrap.yml -e @host/ansible/ai-agent-bootstrap.vars.yml
+cp host/deploy/ansible/ai-agent-bootstrap.vars.example.yml host/deploy/ansible/ai-agent-bootstrap.vars.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/ai-agent-bootstrap.yml -e @host/deploy/ansible/ai-agent-bootstrap.vars.yml
 ```
 
-### `host/ansible/ai-agent-deploy.yml`
+### `host/deploy/ansible/ai-agent-deploy.yml`
 
 End-to-end agent playbook for install + workstation config + site validation +
 publish + optional exercise.
 
 ```bash
-cp host/ansible/ai-agent-deploy.vars.example.yml host/ansible/ai-agent-deploy.vars.yml
-ansible-playbook -i host/inventory.proxmox.ini host/ansible/ai-agent-deploy.yml -e @host/ansible/ai-agent-deploy.vars.yml
+cp host/deploy/ansible/ai-agent-deploy.vars.example.yml host/deploy/ansible/ai-agent-deploy.vars.yml
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/ai-agent-deploy.yml -e @host/deploy/ansible/ai-agent-deploy.vars.yml
 ```
 
 ### `host/remote/github-install.sh`
@@ -172,7 +172,7 @@ One-command release flow:
 ```
 
 This reads the current version from `VERSION`, bumps one numeric component when
-asked, updates `workstation/pyproject.toml`, creates a release commit, creates
+asked, updates `workstation/cli/pyproject.toml`, creates a release commit, creates
 an annotated `v*` tag, and pushes by default.
 
 ### `ci/bump-version.sh`
@@ -204,7 +204,7 @@ Create an annotated release tag and optionally push it:
 ```
 
 This expects the tag version to match both `VERSION` and
-`workstation/pyproject.toml`.
+`workstation/cli/pyproject.toml`.
 
 ### `proxnix-uninstall`
 
@@ -212,7 +212,7 @@ Remove proxnix's installed assets from the current Proxmox node. Leaves
 `/var/lib/proxnix` intact.
 
 This command is installed onto the host by `host/install.sh` and
-`host/ansible/install.yml`, so you do not need to keep the original repo
+`host/deploy/ansible/install.yml`, so you do not need to keep the original repo
 checkout around just to uninstall proxnix.
 
 If the node was installed from the Debian package instead, remove it with:
@@ -303,7 +303,7 @@ The legacy split commands such as `proxnix-secrets`, `proxnix-publish`,
 `proxnix-doctor`, `proxnix-tui`, and `proxnix-lxc-exercise` remain available as
 compatibility aliases.
 
-### `workstation/bin/proxnix-tui`
+### `workstation/cli/bin/proxnix-tui`
 
 Terminal UI for the workstation-side proxnix workflows.
 
@@ -312,7 +312,7 @@ It reads the same `~/.config/proxnix/config` file as `proxnix-publish` and
 common publish and secret-management actions in a curses interface.
 
 ```bash
-workstation/bin/proxnix-tui
+workstation/cli/bin/proxnix-tui
 proxnix-tui
 ```
 
@@ -442,17 +442,17 @@ Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the 
 
 `--container-config <vmid>` remains as a compatibility alias for `--config-only --vmid <vmid>`.
 
-### `workstation/bin/proxnix-doctor`
+### `workstation/cli/bin/proxnix-doctor`
 
 Lint the workstation-owned site repo and optionally compare the expected relay
 cache against one or more Proxmox hosts over SSH.
 
 ```bash
-workstation/bin/proxnix-doctor
-workstation/bin/proxnix-doctor --site-only
-workstation/bin/proxnix-doctor --vmid 120
-workstation/bin/proxnix-doctor root@node1
-workstation/bin/proxnix-doctor --config-only root@node1
+workstation/cli/bin/proxnix-doctor
+workstation/cli/bin/proxnix-doctor --site-only
+workstation/cli/bin/proxnix-doctor --vmid 120
+workstation/cli/bin/proxnix-doctor root@node1
+workstation/cli/bin/proxnix-doctor --config-only root@node1
 ```
 
 It checks:
@@ -472,15 +472,15 @@ Exit codes:
 | 1 | Warnings found, no hard failures |
 | 2 | One or more hard failures |
 
-### `workstation/bin/proxnix-lxc-exercise`
+### `workstation/cli/bin/proxnix-lxc-exercise`
 
 Create and validate a dedicated proxnix exercise lab on one Proxmox host.
 
 ```bash
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --template local:vztmpl/nixos.tar.xz --storage local-lvm
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940 --cleanup-existing
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --cleanup-existing --ip 192.168.178.240/24 --gw 192.168.178.1 --nameserver 192.168.178.100
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --template local:vztmpl/nixos.tar.xz --storage local-lvm
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940 --cleanup-existing
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --cleanup-existing --ip 192.168.178.240/24 --gw 192.168.178.1 --nameserver 192.168.178.100
 ```
 
 It:

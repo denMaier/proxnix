@@ -17,7 +17,7 @@
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          workstation = pkgs.callPackage ./nix/packages/workstation { };
+          workstation = pkgs.callPackage ./nix/packages/cli { };
           managerWeb = pkgs.callPackage ./nix/packages/manager-web { };
         in {
           default = workstation.tui;
@@ -28,7 +28,7 @@
 
       overlays.default = final: prev:
         let
-          workstation = final.callPackage ./nix/packages/workstation { };
+          workstation = final.callPackage ./nix/packages/cli { };
           managerWeb = final.callPackage ./nix/packages/manager-web { };
         in {
           proxnix-workstation = workstation.tui;

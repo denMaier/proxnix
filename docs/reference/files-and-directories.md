@@ -8,44 +8,44 @@ This page maps every important proxnix path by role.
 |------|---------|
 | `host/install.sh` | Installs local hooks, helpers, and node-local proxnix files |
 | `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-uninstall` |
-| `host/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
-| `host/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
+| `host/deploy/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
+| `host/deploy/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
 | `host/remote/github-install.sh` | Curl-friendly GitHub wrapper that downloads the repo archive and runs `host/install.sh` |
 | `host/remote/install-host-package.sh` | Helper-script style installer for the published `proxnix-host` Debian package |
 | `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
 | `ci/project-version.sh` | Prints the canonical version from `VERSION` |
 | `ci/release-lib.sh` | Shared shell helpers for tag validation and release tagging |
-| `ci/bump-version.sh` | Bumps `major`, `minor`, or `patch` in `VERSION` and `workstation/pyproject.toml` |
-| `ci/set-version.sh` | Updates `VERSION` and `workstation/pyproject.toml` together |
+| `ci/bump-version.sh` | Bumps `major`, `minor`, or `patch` in `VERSION` and `workstation/cli/pyproject.toml` |
+| `ci/set-version.sh` | Updates `VERSION` and `workstation/cli/pyproject.toml` together |
 | `ci/release.sh` | One-command version bump, release commit, annotated tag, and push |
 | `ci/release-tag.sh` | One-command annotated release tag creator and optional pusher |
 | `ci/install-git-hooks.sh` | Installs the repo-managed git hooks via `core.hooksPath` |
 | `ci/install-workstation.sh` | Installs or upgrades the workstation Python package with pip |
 | `ci/render-homebrew-cask.sh` | Renders a concrete Homebrew cask for Proxnix Manager from the template |
 | `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `proxnix-workstation` from the template |
-| `ci/workstation-version.sh` | Prints the workstation package version from `workstation/pyproject.toml` |
-| `host/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
-| `host/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
-| `host/proxnix-doctor` | Host-side health check tool |
-| `host/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
-| `host/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
-| `host/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
-| `host/security-policy.nix` | Shared host-enforced security policy that is not meant to be relaxed from the guest |
-| `host/configuration.nix` | Managed NixOS entrypoint imported inside the guest |
-| `host/system/` | Extra host-side systemd units, mounts, timers, and udev rules |
-| `workstation/bin/proxnix` | Repo-local wrapper for the unified workstation CLI |
-| `workstation/bin/proxnix-secrets` | Repo-local wrapper for the workstation secret and identity tool |
-| `workstation/bin/proxnix-publish` | Repo-local wrapper for relay-cache publishing |
-| `workstation/bin/proxnix-doctor` | Repo-local wrapper for site lint and drift checking |
-| `workstation/bin/proxnix-lxc-exercise` | Repo-local wrapper for the automated LXC exercise lab |
-| `workstation/bin/proxnix-tui` | Repo-local wrapper for the terminal UI |
-| `workstation/legacy/proxnix-workstation-common.sh` | Retained shell-era helper library for compatibility |
+| `ci/workstation-version.sh` | Prints the workstation package version from `workstation/cli/pyproject.toml` |
+| `host/runtime/lib/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
+| `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
+| `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
+| `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
+| `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
+| `host/runtime/nix/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
+| `host/runtime/nix/security-policy.nix` | Shared host-enforced security policy that is not meant to be relaxed from the guest |
+| `host/runtime/nix/configuration.nix` | Managed NixOS entrypoint imported inside the guest |
+| `host/extras/system/` | Extra host-side systemd units, mounts, timers, and udev rules |
+| `workstation/cli/bin/proxnix` | Repo-local wrapper for the unified workstation CLI |
+| `workstation/cli/bin/proxnix-secrets` | Repo-local wrapper for the workstation secret and identity tool |
+| `workstation/cli/bin/proxnix-publish` | Repo-local wrapper for relay-cache publishing |
+| `workstation/cli/bin/proxnix-doctor` | Repo-local wrapper for site lint and drift checking |
+| `workstation/cli/bin/proxnix-lxc-exercise` | Repo-local wrapper for the automated LXC exercise lab |
+| `workstation/cli/bin/proxnix-tui` | Repo-local wrapper for the terminal UI |
+| `workstation/cli/legacy/proxnix-workstation-common.sh` | Retained shell-era helper library for compatibility |
 | `workstation/flake.nix` | Nix package and module exports for workstation tooling |
 | `workstation/nix/` | Workstation package definitions and shared NixOS/nix-darwin module |
 | `workstation/packaging/` | Workstation packaging scripts used by CI and release builds |
-| `workstation/src/` | Publishable Python package source |
-| `workstation/apps/proxnix-manager-electrobun/` | Electrobun Proxnix Manager app |
+| `workstation/cli/src/` | Publishable Python package source |
+| `workstation/manager/` | Proxnix Manager desktop app and hosted web UI |
 | `packaging/homebrew/` | Homebrew tap scaffolds for the `proxnix-workstation` formula and Proxnix Manager cask |
 | `.github/workflows/host-packages.yml` | GitHub Actions workflow for host Debian package builds and GitHub release assets |
 | `.github/workflows/pypi-publish.yml` | GitHub Actions workflow for workstation Python package builds and PyPI publishing |
@@ -62,29 +62,26 @@ Current top-level layout:
 ├── host/
 │   ├── install.sh
 │   ├── uninstall.sh
-│   ├── ansible/install.yml
-│   ├── inventory.proxmox.ini
+│   ├── install/
+│   ├── runtime/
+│   │   ├── lxc/config/
+│   │   ├── lxc/hooks/
+│   │   ├── lib/
+│   │   ├── bin/
+│   │   ├── nix/
+│   │   └── systemd/
+│   ├── deploy/
+│   │   ├── ansible/install.yml
+│   │   └── inventory.proxmox.ini
 │   ├── packaging/
 │   ├── remote/github-install.sh
-│   ├── lxc/
-│   ├── system/
-│   ├── systemd/
-│   ├── pve-conf-to-nix.py
-│   ├── proxnix-create-lxc
-│   ├── proxnix-doctor
-│   ├── proxnix-secrets-guest
-│   ├── base.nix
-│   ├── common.nix
-│   ├── security-policy.nix
-│   └── configuration.nix
+│   └── extras/system/
 ├── workstation/
 │   ├── flake.nix
-│   ├── apps/proxnix-manager-electrobun/
-│   ├── bin/
-│   ├── legacy/
+│   ├── cli/
+│   ├── manager/
 │   ├── nix/
-│   ├── packaging/
-│   └── src/
+│   └── packaging/
 ├── packaging/homebrew/
 ├── ci/
 ├── .githooks/

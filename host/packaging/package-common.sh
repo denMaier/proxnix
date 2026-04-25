@@ -4,13 +4,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST_DIR="${ROOT_DIR}/host"
+HOST_RUNTIME_DIR="${HOST_DIR}/runtime"
 PACKAGING_DIR="${HOST_DIR}/packaging"
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/.tmp-host-packaging}"
 VERSION="${VERSION:-$(git -C "${ROOT_DIR}" rev-parse --short=12 HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
 PACKAGE_NAME="${PACKAGE_NAME:-proxnix-host}"
 
-readonly ROOT_DIR HOST_DIR PACKAGING_DIR DIST_DIR BUILD_DIR VERSION PACKAGE_NAME
+readonly ROOT_DIR HOST_DIR HOST_RUNTIME_DIR PACKAGING_DIR DIST_DIR BUILD_DIR VERSION PACKAGE_NAME
 
 HOST_PACKAGE_FILES=(
   "lxc/config/nixos.common.conf:/usr/share/lxc/config/nixos.common.conf:0644"
@@ -18,17 +19,17 @@ HOST_PACKAGE_FILES=(
   "lxc/hooks/nixos-proxnix-prestart:/usr/share/lxc/hooks/nixos-proxnix-prestart:0755"
   "lxc/hooks/nixos-proxnix-mount:/usr/share/lxc/hooks/nixos-proxnix-mount:0755"
   "lxc/hooks/nixos-proxnix-poststop:/usr/share/lxc/hooks/nixos-proxnix-poststop:0755"
-  "pve-conf-to-nix.py:/usr/local/lib/proxnix/pve-conf-to-nix.py:0755"
+  "lib/pve-conf-to-nix.py:/usr/local/lib/proxnix/pve-conf-to-nix.py:0755"
   "lxc/hooks/nixos-proxnix-common.sh:/usr/local/lib/proxnix/nixos-proxnix-common.sh:0644"
-  "proxnix-secrets-guest:/usr/local/lib/proxnix/proxnix-secrets-guest:0755"
-  "proxnix-doctor:/usr/local/sbin/proxnix-doctor:0755"
-  "proxnix-create-lxc:/usr/local/sbin/proxnix-create-lxc:0755"
+  "lib/proxnix-secrets-guest:/usr/local/lib/proxnix/proxnix-secrets-guest:0755"
+  "bin/proxnix-doctor:/usr/local/sbin/proxnix-doctor:0755"
+  "bin/proxnix-create-lxc:/usr/local/sbin/proxnix-create-lxc:0755"
   "systemd/proxnix-gc.service:/etc/systemd/system/proxnix-gc.service:0644"
   "systemd/proxnix-gc.timer:/etc/systemd/system/proxnix-gc.timer:0644"
-  "base.nix:/var/lib/proxnix/base.nix:0644"
-  "common.nix:/var/lib/proxnix/common.nix:0644"
-  "security-policy.nix:/var/lib/proxnix/security-policy.nix:0644"
-  "configuration.nix:/var/lib/proxnix/configuration.nix:0644"
+  "nix/base.nix:/var/lib/proxnix/base.nix:0644"
+  "nix/common.nix:/var/lib/proxnix/common.nix:0644"
+  "nix/security-policy.nix:/var/lib/proxnix/security-policy.nix:0644"
+  "nix/configuration.nix:/var/lib/proxnix/configuration.nix:0644"
 )
 
 die() {
@@ -106,7 +107,7 @@ install_host_payload() {
 
   for spec in "${HOST_PACKAGE_FILES[@]}"; do
     IFS=':' read -r rel_src dest mode <<< "$spec"
-    src="${HOST_DIR}/${rel_src}"
+    src="${HOST_RUNTIME_DIR}/${rel_src}"
     install -d -m 0755 "$(dirname "${stage_root}${dest}")"
     install -m "$mode" "$src" "${stage_root}${dest}"
   done

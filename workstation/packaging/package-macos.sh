@@ -11,7 +11,7 @@ source "${SCRIPT_DIR}/package-common.sh"
 prepare_dirs
 
 artifact="${DIST_DIR}/proxnix-manager-${VERSION}-macos-${ARCH}.dmg"
-app_dir="${WORKSTATION_DIR}/apps/proxnix-manager-electrobun"
+app_dir="${WORKSTATION_DIR}/manager"
 electrobun_artifact="${app_dir}/artifacts/stable-macos-${ARCH}-ProxnixManager.dmg"
 
 command -v bun >/dev/null 2>&1 || die "bun is required to package the Electrobun app"

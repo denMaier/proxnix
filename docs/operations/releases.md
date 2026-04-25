@@ -28,7 +28,7 @@ Current hook coverage:
 - release tags must be annotated, not lightweight
 - release tags cannot be deleted or silently moved by push
 - release tags must point to a commit reachable from the release branch
-- release tags must match both `VERSION` and `workstation/pyproject.toml`
+- release tags must match both `VERSION` and `workstation/cli/pyproject.toml`
 
 Default release branch:
 
@@ -64,7 +64,7 @@ Examples:
 - reads the current version from `VERSION`
 - bumps `major`, `minor`, or `patch` when asked
 - updates `VERSION`
-- updates `workstation/pyproject.toml`
+- updates `workstation/cli/pyproject.toml`
 - creates a release commit
 - creates an annotated `v*` tag
 - pushes the commit and tag by default
@@ -97,7 +97,7 @@ Examples:
 This only updates:
 
 - `VERSION`
-- `workstation/pyproject.toml`
+- `workstation/cli/pyproject.toml`
 
 ## What the tag triggers
 

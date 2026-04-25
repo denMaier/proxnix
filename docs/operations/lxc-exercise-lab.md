@@ -60,13 +60,13 @@ secret handling, Podman secret integration, and the final managed config hash.
 Minimal invocation:
 
 ```bash
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940
 ```
 
 Useful overrides:
 
 ```bash
-workstation/bin/proxnix-lxc-exercise \
+workstation/cli/bin/proxnix-lxc-exercise \
   --host root@node1 \
   --base-vmid 950 \
   --template local:vztmpl/nixos-25.11-x86_64-linux.tar.xz \
@@ -77,13 +77,13 @@ workstation/bin/proxnix-lxc-exercise \
 If a previous exercise attempt failed and left its VMIDs behind, rerun with:
 
 ```bash
-workstation/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940 --cleanup-existing
+workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 940 --cleanup-existing
 ```
 
 Static networking example:
 
 ```bash
-workstation/bin/proxnix-lxc-exercise \
+workstation/cli/bin/proxnix-lxc-exercise \
   --host root@node1 \
   --base-vmid 950 \
   --cleanup-existing \

@@ -54,12 +54,12 @@ echo "Installing ansible and proxnix-workstation into $VENV_DIR"
 UV_CACHE_DIR="$CACHE_DIR" uv pip install \
   --python "$VENV_DIR/bin/python" \
   ansible \
-  -e "$ROOT_DIR/workstation"
+  -e "$ROOT_DIR/workstation/cli"
 
 cat <<EOF
 
 Repo-local workstation environment is ready.
 Use these wrappers:
-- $ROOT_DIR/workstation/bin/proxnix
+- $ROOT_DIR/workstation/cli/bin/proxnix
 - $ROOT_DIR/workstation/.venv/bin/ansible-playbook
 EOF
