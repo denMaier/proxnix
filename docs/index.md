@@ -6,6 +6,10 @@
 
 Proxnix manages NixOS LXC containers from the Proxmox host.
 
+> **Public alpha:** proxnix is pre-1.0 infrastructure software. The core
+> workflows are usable, but the hosted Manager Web and NixOS deployment module
+> are new and should be tested in a lab or non-critical environment first.
+
 Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, copies and binds the managed pieces into the guest root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
 
 ## Who this is for

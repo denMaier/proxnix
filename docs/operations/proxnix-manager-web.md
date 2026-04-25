@@ -4,6 +4,11 @@
 instead of the Electrobun desktop shell. It is intended for Nix/NixOS
 deployments where a reverse auth proxy handles login.
 
+> **Alpha status:** hosted Manager Web is a new deployment surface. Use
+> `deploymentMode = "reverse-proxy"` for shared access, test write permissions
+> and publish workflows carefully, and avoid exposing `direct` mode outside
+> isolated development networks.
+
 ## Deployment model
 
 The Manager code is split into explicit runtime boundaries:

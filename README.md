@@ -6,6 +6,12 @@
 
 Host-managed NixOS LXC containers for Proxmox.
 
+> **Public alpha:** proxnix is pre-1.0 infrastructure software. The CLI,
+> desktop Manager, hosted Manager Web, and NixOS deployment module are ready
+> for early testers, but interfaces and operational defaults may still change.
+> Use a lab or non-critical deployment first, and put Manager Web behind a
+> trusted auth proxy for any shared access.
+
 Proxnix turns Proxmox container metadata and host-side Nix modules into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
 
 This repository is the install/bootstrap layer. It owns the shared hooks,
