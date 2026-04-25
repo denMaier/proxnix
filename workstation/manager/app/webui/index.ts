@@ -135,6 +135,7 @@ async function buildMainviewBundle(): Promise<string> {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Proxnix Manager</title>
+    <link rel="icon" type="image/png" href="/assets/proxnix-icon.png" />
     <link rel="stylesheet" href="/index.css" />
     <script type="module" src="/web.js"></script>
   </head>
@@ -177,7 +178,7 @@ async function handleRpc(request: Request): Promise<Response> {
   }
 }
 
-function serveStatic(pathname: string): Response {
+async function serveStatic(pathname: string): Promise<Response> {
   const path = pathname === "/" ? "/index.html" : pathname;
 
   if (path.includes("..")) {
@@ -188,6 +189,10 @@ function serveStatic(pathname: string): Response {
     return fileResponse(new URL("./index.css", FRONTEND_ROOT).pathname);
   }
 
+  if (path === "/favicon.ico") {
+    return fileResponse(new URL("./assets/proxnix-icon.png", FRONTEND_ROOT).pathname);
+  }
+
   if (path.startsWith("/assets/")) {
     return fileResponse(new URL(`.${path}`, FRONTEND_ROOT).pathname);
   }
@@ -195,8 +200,12 @@ function serveStatic(pathname: string): Response {
   return fileResponse(join(publicDir, path.replace(/^\/+/, "")));
 }
 
-function fileResponse(path: string): Response {
+async function fileResponse(path: string): Promise<Response> {
   const file = Bun.file(path);
+  if (!(await file.exists())) {
+    return textResponse("Not found", 404);
+  }
+
   return new Response(file, {
     headers: securityHeaders({ "Content-Type": contentType(path) }),
   });
