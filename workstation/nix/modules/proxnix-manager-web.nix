@@ -48,7 +48,12 @@ in {
       type = lib.types.package;
       default = managerPackage;
       defaultText = lib.literalExpression "inputs.proxnix.packages.${pkgs.system}.proxnix-manager-web";
-      description = lib.mdDoc "Package that provides `proxnix-manager-web`.";
+      description = lib.mdDoc ''
+        Package that provides `proxnix-manager-web`. The default package wraps
+        the Manager web server with the Nix-provided `proxnix-workstation-cli`
+        package, a Python environment suitable for the Manager bridge, and the
+        runtime tools needed by publish/secrets/git workflows.
+      '';
     };
 
     user = lib.mkOption {
