@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# proxnix-reconciler-state -- node-local reconciler SQLite journal helper.
+
+set -euo pipefail
+
+repo_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/proxnix_reconciler_state.py"
+if [[ -f "$repo_helper" ]]; then
+  exec /usr/bin/env python3 "$repo_helper" "$@"
+fi
+
+exec /usr/bin/env python3 /usr/local/lib/proxnix/proxnix_reconciler_state.py "$@"

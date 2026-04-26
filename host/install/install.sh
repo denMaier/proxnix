@@ -21,6 +21,8 @@
 #   /usr/local/lib/proxnix/pve-conf-to-nix.py   — local runtime helper
 #   /usr/local/lib/proxnix/proxnix_authority_render.py
 #                                               — authority renderer library
+#   /usr/local/lib/proxnix/proxnix_reconciler_state.py
+#                                               — local reconciler state helper
 #   /usr/local/lib/proxnix/nixos-proxnix-common.sh
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
@@ -30,6 +32,7 @@
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
+#   /usr/local/sbin/proxnix-reconciler-state    — reconciler SQLite journal helper
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
 #
 # Node-local proxnix data:
@@ -225,6 +228,8 @@ action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$RUNTIME_DIR/lib/pve-conf-to-nix.py" "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" "755"
 do_install "$RUNTIME_DIR/lib/proxnix_authority_render.py" \
            "$PROXNIX_LIB_DIR/proxnix_authority_render.py" "755"
+do_install "$RUNTIME_DIR/lib/proxnix_reconciler_state.py" \
+           "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py" "755"
 do_install "$RUNTIME_DIR/lxc/hooks/nixos-proxnix-common.sh" \
            "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" "644"
 do_install "$RUNTIME_DIR/lib/proxnix-secrets-guest" \
@@ -237,6 +242,7 @@ do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" 
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconciler-state" "$PROXNIX_SBIN_DIR/proxnix-reconciler-state" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
