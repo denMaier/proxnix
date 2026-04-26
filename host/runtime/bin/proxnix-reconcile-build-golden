@@ -59,13 +59,15 @@ render_authority() {
 }
 
 protect_golden_closure() {
+  # Register a real Nix indirect gcroot. See protect_host_closure in
+  # proxnix-reconcile for why a bare symlink is not enough — without
+  # nix-store --add-root --indirect there is no auto-root under
+  # /nix/var/nix/gcroots/auto/ and nix-collect-garbage will reap the closure.
   local system_path="$1"
+  need_cmd nix-store
   mkdir -p "$GCROOT_DIR"
   local root_path="${GCROOT_DIR}/golden-template"
-  local tmp_path="${root_path}.tmp.$$"
-  rm -f "$tmp_path"
-  ln -s "$system_path" "$tmp_path"
-  mv -f "$tmp_path" "$root_path"
+  nix-store --realise --add-root "$root_path" --indirect "$system_path" >/dev/null
 }
 
 while [[ $# -gt 0 ]]; do

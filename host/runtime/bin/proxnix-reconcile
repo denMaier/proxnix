@@ -253,6 +253,9 @@ write_build_status() {
   need_cmd date
   mkdir -p "$STATUS_DIR"
 
+  local protected
+  protected="$(gcroot_present "$vmid" "$desired_system")"
+
   local tmp="${STATUS_DIR}/${vmid}.json.tmp"
   jq -n \
     --argjson vmid "$vmid" \
@@ -262,6 +265,7 @@ write_build_status() {
     --arg currentSystem "$current_system" \
     --arg previousSystem "$previous_system" \
     --arg lastDeployStatus "${last_deploy_status:-not-run}" \
+    --argjson protected "$protected" \
     --arg node "$NODE_NAME" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
@@ -278,7 +282,7 @@ write_build_status() {
       container_is_local: true,
       host_has_closure: true,
       container_has_closure: (if $currentSystem == $desiredSystem then true else false end),
-      protected_by_host_gc_root: true,
+      protected_by_host_gc_root: $protected,
       lastBuildStatus: "ok",
       lastDeployStatus: $lastDeployStatus,
       lastError: null,
@@ -293,10 +297,15 @@ write_activation_status() {
   need_cmd date
   local status_file="${STATUS_DIR}/${vmid}.json"
   [[ -f "$status_file" ]] || die "status not found for VMID ${vmid}; run --build-only first"
+
+  local protected
+  protected="$(gcroot_present "$vmid" "$desired_system")"
+
   local tmp="${status_file}.tmp"
   jq \
     --arg desiredSystem "$desired_system" \
     --arg previousSystem "$previous_system" \
+    --argjson protected "$protected" \
     --arg activatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.desiredSystem = $desiredSystem
       | .currentSystem = $desiredSystem
@@ -306,7 +315,7 @@ write_activation_status() {
       | .container_is_local = true
       | .host_has_closure = true
       | .container_has_closure = true
-      | .protected_by_host_gc_root = true
+      | .protected_by_host_gc_root = $protected
       | .lastBuildStatus = "ok"
       | .lastDeployStatus = "ok"
       | .lastError = null
@@ -328,6 +337,20 @@ write_noop_status() {
     last_build_status="$(jq -r '.lastBuildStatus // "not-run"' "$status_file" 2>/dev/null || true)"
   fi
 
+  # Self-heal: re-register the gcroot on noop so an accidental
+  # nix-collect-garbage between deploys doesn't leave the closure unprotected.
+  # We gate the entire probe on the closure being present on disk so noop is
+  # cheap when the host store has nothing to protect (and so we don't trigger
+  # substituter fetches just to refresh a gcroot for a closure we no longer have).
+  local host_has_closure="false"
+  local protected="false"
+  if [[ -e "$desired_system" ]]; then
+    host_has_closure="true"
+    if protect_host_closure "$vmid" "$desired_system" 2>/dev/null; then
+      protected="$(gcroot_present "$vmid" "$desired_system")"
+    fi
+  fi
+
   local tmp="${STATUS_DIR}/${vmid}.json.tmp"
   jq -n \
     --argjson vmid "$vmid" \
@@ -337,6 +360,8 @@ write_noop_status() {
     --arg currentSystem "$current_system" \
     --arg previousSystem "$previous_system" \
     --arg lastBuildStatus "$last_build_status" \
+    --argjson hostHasClosure "$host_has_closure" \
+    --argjson protected "$protected" \
     --arg node "$NODE_NAME" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
@@ -351,9 +376,9 @@ write_noop_status() {
       desired_system: $desiredSystem,
       current_system: (if $currentSystem == "" then null else $currentSystem end),
       container_is_local: true,
-      host_has_closure: null,
+      host_has_closure: $hostHasClosure,
       container_has_closure: true,
-      protected_by_host_gc_root: false,
+      protected_by_host_gc_root: $protected,
       lastBuildStatus: $lastBuildStatus,
       lastDeployStatus: "noop-current",
       lastError: null,
@@ -471,13 +496,44 @@ build_manifest_system() {
 }
 
 protect_host_closure() {
+  # Register a real Nix indirect gcroot so nix-collect-garbage on the host
+  # cannot reap the desired closure. `nix-store --realise --add-root --indirect`
+  # creates both the symlink at $root_path AND a paired indirect auto-root
+  # under /nix/var/nix/gcroots/auto/ — only the latter actually pins the
+  # closure against GC. A bare `ln -s` looks identical but protects nothing.
   local vmid="$1" system_path="$2"
+  need_cmd nix-store
   mkdir -p "$GCROOT_DIR"
   local root_path="${GCROOT_DIR}/${vmid}-desired"
-  local tmp_path="${root_path}.tmp.$$"
-  rm -f "$tmp_path"
-  ln -s "$system_path" "$tmp_path"
-  mv -f "$tmp_path" "$root_path"
+  nix-store --realise --add-root "$root_path" --indirect "$system_path" >/dev/null
+}
+
+# Probes whether the desired closure is currently protected by a real Nix
+# gcroot that we own. Emits "true" or "false" on stdout. Used to populate the
+# protected_by_host_gc_root status field truthfully (the previous code
+# hardcoded true regardless of actual protection).
+gcroot_present() {
+  local vmid="$1" system_path="$2"
+  local root_path="${GCROOT_DIR}/${vmid}-desired"
+  if [[ ! -L "$root_path" ]]; then
+    printf 'false\n'
+    return
+  fi
+  local link_target
+  link_target="$(readlink "$root_path" 2>/dev/null || true)"
+  if [[ "$link_target" != "$system_path" ]]; then
+    printf 'false\n'
+    return
+  fi
+  if ! command -v nix-store >/dev/null 2>&1; then
+    printf 'false\n'
+    return
+  fi
+  if nix-store --query --roots "$system_path" 2>/dev/null | grep -qF "$root_path"; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
 }
 
 manifest_system() {

@@ -20,6 +20,94 @@ def write_executable(path: Path, content: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def fake_nix_store_stub(*, requisites: str | None = None, marker: str | None = None) -> str:
+    """Shell body for a fake `nix-store` that the reconciler can drive.
+
+    Supports the operations protect_host_closure / protect_golden_closure /
+    gcroot_present / seed_closure exercise:
+
+    * ``nix-store --realise --add-root <root> --indirect <store>`` creates the
+      symlink the test expects (and acts as a successful gcroot registration).
+    * ``nix-store --query --roots <store>`` scans ``$PROXNIX_GCROOT_DIR`` and
+      emits any symlinks in it that point at ``<store>``. This is what the
+      ``gcroot_present`` probe relies on to report the truthful
+      ``protected_by_host_gc_root`` field.
+    * ``nix-store --query --requisites <store>`` emits ``requisites`` if given,
+      otherwise falls back to the store path itself.
+    * ``nix-store --export`` emits a small dummy payload.
+
+    ``marker`` (optional) is a path that gets ``touch``ed on every call, so a
+    test can assert nix-store was (or was not) invoked.
+    """
+    requisites_block = (
+        "\n".join(f"printf '%s\\n' {p}" for p in requisites.split())
+        if requisites
+        else "printf '%s\\n' \"$1\""
+    )
+    marker_line = f"touch {marker}\n" if marker else ""
+    return r"""#!/bin/sh
+""" + marker_line + r"""case "$1" in
+  --realise)
+    shift
+    root=""
+    target=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --add-root) root="$2"; shift 2;;
+        --indirect) shift;;
+        *) target="$1"; shift;;
+      esac
+    done
+    if [ -n "$root" ] && [ -n "$target" ]; then
+      mkdir -p "$(dirname "$root")"
+      ln -sfn "$target" "$root"
+    fi
+    [ -n "$target" ] && printf '%s\n' "$target"
+    ;;
+  --query)
+    shift
+    case "$1" in
+      --roots)
+        shift
+        target="$1"
+        gcroot_dir="${PROXNIX_GCROOT_DIR:-${PROXNIX_DIR:-/var/lib/proxnix}/gcroots/deploy}"
+        if [ -d "$gcroot_dir" ]; then
+          for f in "$gcroot_dir"/*; do
+            [ -L "$f" ] || continue
+            link="$(readlink "$f" 2>/dev/null || true)"
+            if [ "$link" = "$target" ]; then
+              printf '%s\n' "$f"
+            fi
+          done
+        fi
+        ;;
+      --requisites)
+        shift
+        REQ_TARGET="$1"
+""" + (
+        "        " + requisites_block.replace("\n", "\n        ") + "\n"
+        if requisites
+        else "        printf '%s\\n' \"$REQ_TARGET\"\n"
+    ) + r"""        ;;
+      *)
+        exit 2
+        ;;
+    esac
+    ;;
+  --export)
+    cat /dev/null
+    printf 'exported\n'
+    ;;
+  --import)
+    cat >/dev/null
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+"""
+
+
 class ReconcileDryRunTests(unittest.TestCase):
     def test_golden_template_build_warms_and_protects_local_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -41,6 +129,7 @@ printf '%s\n' "$*" > "$PROXNIX_NIX_ARGS_FILE"
 printf '%s\n' /nix/store/golden-template-system
 """,
             )
+            write_executable(fake_bin / "nix-store", fake_nix_store_stub())
 
             env = os.environ.copy()
             nix_args_file = Path(tmp) / "nix-args"
@@ -94,6 +183,7 @@ printf '%s\n' "$*" > "$PROXNIX_NIX_ARGS_FILE"
 printf '%s\n' /nix/store/golden-template-system
 """,
             )
+            write_executable(fake_bin / "nix-store", fake_nix_store_stub())
 
             env = os.environ.copy()
             nix_args_file = Path(tmp) / "nix-args"
@@ -385,6 +475,7 @@ JSON
 esac
 """,
             )
+            write_executable(fake_bin / "nix-store", fake_nix_store_stub())
 
             env = os.environ.copy()
             env.update(
@@ -527,19 +618,7 @@ esac
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -805,6 +884,7 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
             )
 
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "nix-store", fake_nix_store_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh
@@ -898,19 +978,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -1023,19 +1091,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -1347,19 +1403,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/dep-a /nix/store/desired-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/desired-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -1460,7 +1504,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                "#!/bin/sh\ncase \"$1\" in --query) printf '%s\\n' /nix/store/desired-system-101 ;; --export) printf exported ;; *) exit 2 ;; esac\n",
+                fake_nix_store_stub(requisites="/nix/store/desired-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -1564,19 +1608,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/desired-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/desired-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
@@ -1685,7 +1717,7 @@ esac
             )
             write_executable(
                 fake_bin / "nix-store",
-                "#!/bin/sh\ncase \"$1\" in --query) printf '%s\\n' /nix/store/built-system-101 ;; --export) printf exported ;; *) exit 2 ;; esac\n",
+                fake_nix_store_stub(requisites="/nix/store/built-system-101"),
             )
             write_executable(
                 fake_create,
@@ -1793,19 +1825,7 @@ esac
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             write_executable(
                 fake_bin / "nix-store",
-                """#!/bin/sh
-case "$1" in
-  --query)
-    printf '%s\n' /nix/store/old-system-101
-    ;;
-  --export)
-    printf '%s\n' exported-closure
-    ;;
-  *)
-    exit 2
-    ;;
-esac
-""",
+                fake_nix_store_stub(requisites="/nix/store/old-system-101"),
             )
             write_executable(
                 fake_bin / "pct",
