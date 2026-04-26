@@ -49,9 +49,12 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn('do_systemd_service "proxnix-reconcile"', install_sh)
         self.assertIn('PROXNIX_PRESTART_BUILD:-1', prestart)
         self.assertIn('proxnix-reconcile-build --vmid "$VMID"', prestart)
+        self.assertNotIn('copy/etc/nixos/configuration.nix', prestart)
         self.assertNotIn("PROXNIX_PRESTART_RECONCILE", prestart)
         self.assertNotIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
         self.assertIn('proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"', mount)
+        self.assertNotIn('copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix"', mount)
+        self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)
         self.assertIn("ExecStartPre=/bin/sleep 10", template_service)
 

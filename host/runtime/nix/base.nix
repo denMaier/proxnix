@@ -2,8 +2,6 @@
 
 let
   proxnixStateDir = "/var/lib/proxnix";
-  proxnixConfigDir = "${proxnixStateDir}/config";
-  proxnixManagedDir = "${proxnixConfigDir}/managed";
   proxnixRuntimeDir = "${proxnixStateDir}/runtime";
   proxnixRuntimeBinDir = "${proxnixRuntimeDir}/bin";
   proxnixRuntimeManifestDir = "${proxnixRuntimeDir}/manifests";
@@ -102,13 +100,9 @@ let
     [ -z "$disk" ] || printf '  Disk:        %s\n' "$disk"
     printf '  Root FS:     %s\n\n' "''${fs_type:-unknown}"
 
-    printf 'Managed config\n'
-    printf '  Files:       /etc/nixos/configuration.nix\n'
-    printf '               ${proxnixManagedDir}/{base,common,security-policy,site,proxmox}.nix\n'
-    printf '               ${proxnixManagedDir}/dropins/*.nix\n'
-    printf '               ${proxnixRuntimeBinDir}/* on PATH\n'
-    printf '               site.nix is optional and usually comes from a separate repo\n'
-    printf '  Local hook:  /etc/nixos/local.nix\n'
+    printf 'Host-built system\n'
+    printf '  Runtime:     ${proxnixRuntimeBinDir}/* on PATH\n'
+    printf '  Local hook:  /etc/nixos/local.nix (guest-only debugging)\n'
     if [ -n "$current" ]; then
       printf '  Hash:        %s (diagnostic; host reconciler owns activation)\n\n' "$current"
     else
@@ -116,7 +110,7 @@ let
     fi
 
     printf 'Workloads\n'
-    printf '  Guest-owned services and containers live in ${proxnixManagedDir}/dropins/*.nix\n'
+    printf '  Guest-owned services and containers are compiled into the host-built system closure\n'
     printf '  Writable data  /var/lib/<app>/...\n\n'
 
     printf 'Useful commands\n'
@@ -247,8 +241,6 @@ in {
     materialized_wants_dir="${proxnixMaterializedSystemdWantsDir}"
 
     mkdir -p \
-      "${proxnixConfigDir}" \
-      "${proxnixManagedDir}" \
       "${proxnixRuntimeDir}" \
       "${proxnixRuntimeBinDir}" \
       "${proxnixRuntimeManifestDir}" \
@@ -366,16 +358,12 @@ in {
     proxnix
     ========
 
-    Managed config
-      /etc/nixos/configuration.nix
-      ${proxnixManagedDir}/{base,common,security-policy,site,proxmox}.nix
-      ${proxnixManagedDir}/dropins/*.nix
+    Host-built system
       ${proxnixRuntimeBinDir}/* on PATH
-      ${proxnixManagedDir}/site.nix  optional site override
-      /etc/nixos/local.nix  optional local override
+      /etc/nixos/local.nix  guest-only debugging
 
     Workloads
-      ${proxnixManagedDir}/dropins/*.nix  guest-owned services and containers
+      guest-owned services and containers are compiled into the active closure
 
     Secrets
       proxnix-secrets ls
