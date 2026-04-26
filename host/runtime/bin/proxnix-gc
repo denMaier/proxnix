@@ -56,7 +56,10 @@ prune_stage_dirs() {
     [[ -d "$dir" ]] || continue
     vmid="$(basename "$dir")"
     if ct_is_running "$vmid"; then
-      log "removed stale stage dir for running CT ${vmid}; build input is copied into the guest rootfs"
+      # Stage directories are host scratch space for assembling boot input. Once
+      # the mount hook has copied content into the guest rootfs, a running CT no
+      # longer needs its stage dir as a durable source of truth.
+      log "released stage dir for booted CT ${vmid} (content already copied into guest)"
       remove_path "$dir"
       continue
     fi

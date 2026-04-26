@@ -16,7 +16,7 @@
 # Config hashes remain diagnostic metadata; host-side reconciliation owns
 # activation by exact NixOS system path.
 
-set -uo pipefail
+set -euo pipefail
 umask 077  # staging starts private; config binds are relaxed later, secrets stay host-root only
 
 VMID=""
@@ -25,6 +25,7 @@ PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SECRETS_GUEST_BIN="${PROXNIX_LIB_DIR}/proxnix-secrets-guest"
 COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 START_SECONDS=$SECONDS
+STAGE_COMPLETE=0
 
 log() {
     local message="[proxnix-prestart][${VMID:-unknown}] $*"
@@ -97,6 +98,11 @@ fi
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
 
+if ! proxnix_validate_vmid "$VMID"; then
+    log "ERROR: invalid VMID: ${VMID:-unset}"
+    exit 1
+fi
+
 PVE_CONF_TO_NIX="${PROXNIX_LIB_DIR}/pve-conf-to-nix.py"
 CONTAINER_TEMPLATE_DIR="${NIXLXC_DIR}/containers/_template"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
@@ -123,10 +129,10 @@ cleanup_stage() {
 finish_prestart() {
     local status=$?
     local elapsed=$((SECONDS - START_SECONDS))
-    if [[ $status -eq 0 ]]; then
+    if [[ $status -eq 0 && $STAGE_COMPLETE -eq 1 ]]; then
         log "Finished pre-start hook in ${elapsed}s."
     else
-        log "ERROR: pre-start hook failed after ${elapsed}s; removing incomplete stage ${STAGE_DIR}."
+        log "ERROR: pre-start hook did not complete cleanly after ${elapsed}s; removing incomplete stage ${STAGE_DIR}."
         cleanup_stage
     fi
     exit "$status"
@@ -359,5 +365,6 @@ else
 fi
 
 log "Rendered staged state at ${STAGE_DIR} (host root uid: ${HOST_SUBUID})"
+STAGE_COMPLETE=1
 run_prestart_build
 exit 0

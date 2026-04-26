@@ -69,6 +69,10 @@ exit 2
             self.assertTrue((gcroot_dir / "101-desired").is_symlink())
             self.assertFalse((gcroot_dir / "202-desired").exists())
             self.assertTrue((gcroot_dir / "not-managed").is_symlink())
+            self.assertIn(
+                "released stage dir for booted CT 101 (content already copied into guest)",
+                result.stderr,
+            )
 
     def test_dry_run_does_not_remove_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

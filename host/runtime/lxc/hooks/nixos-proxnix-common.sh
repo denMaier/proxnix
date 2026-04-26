@@ -22,6 +22,11 @@ proxnix_stage_dir() {
     printf '%s/%s' "$PROXNIX_STAGE_BASE_DIR" "$vmid"
 }
 
+proxnix_validate_vmid() {
+    local vmid="${1:-}"
+    [[ -n "$vmid" && "$vmid" =~ ^[0-9]+$ ]]
+}
+
 proxnix_container_dir() {
     local vmid="$1"
     printf '%s/containers/%s' "$NIXLXC_DIR" "$vmid"

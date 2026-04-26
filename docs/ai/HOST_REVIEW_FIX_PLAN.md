@@ -41,17 +41,18 @@ Addresses findings #1, #2, #15, #16.
 
 Addresses findings #3, #11, log-wording portion of #6.
 
-- [ ] `nixos-proxnix-prestart` switched to `set -euo pipefail` with explicit
+- [x] `nixos-proxnix-prestart` switched to `set -euo pipefail` with explicit
       error handling for legitimately optional ops
-- [ ] `nixos-proxnix-mount` switched to `set -euo pipefail`
-- [ ] `nixos-proxnix-poststop` switched to `set -euo pipefail`
-- [ ] `finish_prestart` trap reads stage state variable rather than `$?`
+- [x] `nixos-proxnix-mount` switched to `set -euo pipefail`
+- [x] `nixos-proxnix-poststop` switched to `set -euo pipefail`
+- [x] `finish_prestart` trap reads stage state variable rather than `$?`
       so partial-stage failures always trigger `cleanup_stage`
-- [ ] `validate_vmid()` helper added to `nixos-proxnix-common.sh` and used by
+- [x] `validate_vmid()` helper added to `nixos-proxnix-common.sh` and used by
       all three hooks
-- [ ] `proxnix-gc` log wording: "released stage dir for booted CT (content
+- [x] `proxnix-gc` log wording: "released stage dir for booted CT (content
       already copied into guest)" + comment explaining design contract
 - [ ] Shellcheck clean on `host/runtime/bin/*` and `host/runtime/lxc/hooks/*`
+      (not run locally; `shellcheck` was not installed)
 
 ---
 

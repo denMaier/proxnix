@@ -16,6 +16,9 @@ class AnsibleInstallTests(unittest.TestCase):
         mount = (
             ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-mount"
         ).read_text(encoding="utf-8")
+        poststop = (
+            ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-poststop"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("nix --version", playbook)
         self.assertNotIn("become: true", playbook)
@@ -44,6 +47,9 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("proxnix-reconcile", playbook)
 
         self.assertIn('PROXNIX_PRESTART_GOLDEN_BUILD:-1', prestart)
+        self.assertIn("set -euo pipefail", prestart)
+        self.assertIn('if ! proxnix_validate_vmid "$VMID"', prestart)
+        self.assertIn("STAGE_COMPLETE=1", prestart)
         self.assertIn('proxnix-reconcile-build-golden', prestart)
         self.assertIn('PROXNIX_PRESTART_BUILD:-1', prestart)
         self.assertIn('proxnix-reconcile-build --vmid "$VMID"', prestart)
@@ -51,10 +57,14 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertNotIn("PROXNIX_PRESTART_RECONCILE", prestart)
         self.assertNotIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
         self.assertIn('proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"', mount)
+        self.assertIn("set -euo pipefail", mount)
+        self.assertIn('if ! proxnix_validate_vmid "$VMID"', mount)
         self.assertIn("rsync -a --delete", mount)
         self.assertIn("/var/lib/proxnix/build-input", mount)
         self.assertNotIn('copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix"', mount)
         self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
+        self.assertIn("set -euo pipefail", poststop)
+        self.assertIn('if ! proxnix_validate_vmid "$VMID"', poststop)
 
     def test_flake_packages_host_runtime(self) -> None:
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")

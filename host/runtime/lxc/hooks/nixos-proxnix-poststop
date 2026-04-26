@@ -6,9 +6,11 @@
 # that staged state after the container stops, and also covers the case where
 # the container failed to start after pre-start rendered the tree.
 
-set -uo pipefail
+set -euo pipefail
 
 VMID="${LXC_NAME:-${1:-}}"
+PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 
 log() {
     local message="[proxnix-poststop][${VMID:-unknown}] $*"
@@ -22,7 +24,20 @@ if [[ -z "$VMID" ]]; then
     exit 0
 fi
 
-STAGE_DIR="/run/proxnix/${VMID}"
+if [[ ! -f "$COMMON_LIB" ]]; then
+    log "ERROR: ${COMMON_LIB} not found."
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$COMMON_LIB"
+
+if ! proxnix_validate_vmid "$VMID"; then
+    log "ERROR: invalid VMID: ${VMID}"
+    exit 1
+fi
+
+STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 if [[ -d "$STAGE_DIR" ]]; then
     rm -rf "$STAGE_DIR"
     log "Removed staged state at ${STAGE_DIR}."

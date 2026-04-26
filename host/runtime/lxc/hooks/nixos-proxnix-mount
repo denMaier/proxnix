@@ -10,7 +10,7 @@
 # only proxnix hook that writes into the guest filesystem. The same script can
 # also be invoked directly by local harnesses with --vmid/--rootfs.
 
-set -uo pipefail
+set -euo pipefail
 umask 022  # ensure files written into the container rootfs have sane default permissions
 
 VMID=""
@@ -92,6 +92,11 @@ fi
 
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
+
+if ! proxnix_validate_vmid "$VMID"; then
+    log "ERROR: invalid VMID: ${VMID:-unset}"
+    exit 1
+fi
 
 finish_mount() {
     local status=$?
