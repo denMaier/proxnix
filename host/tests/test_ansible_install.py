@@ -18,10 +18,25 @@ class AnsibleInstallTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("nix --version", playbook)
-        self.assertIn("name: sops", playbook)
+        self.assertNotIn("become: true", playbook)
+        self.assertIn("proxnix_nix_install_mode: require-existing", playbook)
+        self.assertIn("proxnix_nix_install_mode in ['require-existing', 'determinate']", playbook)
+        self.assertIn("https://install.determinate.systems/nix", playbook)
+        self.assertIn("sh -s -- install --no-confirm", playbook)
+        self.assertIn("creates: /nix/nix-installer", playbook)
+        self.assertIn("proxnix_nix_install_mode == 'determinate'", playbook)
+        self.assertNotIn("ansible.builtin.apt", playbook)
+        self.assertIn("proxnix_host_tools_profile: /nix/var/nix/profiles/proxnix-host-tools", playbook)
+        self.assertIn("nixpkgs#age", playbook)
+        self.assertIn("nixpkgs#jq", playbook)
+        self.assertIn("nixpkgs#rsync", playbook)
+        self.assertIn("nixpkgs#sops", playbook)
+        self.assertIn('nix profile install --profile "$profile" "${missing[@]}"', playbook)
+        self.assertIn('dest: "{{ proxnix_local_bin_dir }}/{{ item }}"', playbook)
+        self.assertIn("Verify proxnix host tools are installed on the target host", playbook)
         self.assertIn("path: /etc/nix/nix.conf", playbook)
         self.assertIn("experimental-features = nix-command flakes", playbook)
-        self.assertIn("nix is not installed; install the Nix daemon", playbook)
+        self.assertIn("install Nix first or rerun with -e proxnix_nix_install_mode=determinate", playbook)
         self.assertIn('nix --extra-experimental-features "nix-command flakes" eval --expr true', playbook)
         self.assertIn("proxnix_authority_render.py", playbook)
         self.assertIn("proxnix_reconciler_state.py", playbook)
@@ -51,6 +66,20 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("/var/lib/proxnix/build-input", mount)
         self.assertNotIn('copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix"', mount)
         self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
+
+    def test_uninstall_removes_proxnix_host_tool_profile(self) -> None:
+        uninstall = (ROOT / "host" / "install" / "uninstall.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("/usr/local/bin", uninstall)
+        self.assertIn("/nix/var/nix/profiles/proxnix-host-tools", uninstall)
+        self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/age"', uninstall)
+        self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/jq"', uninstall)
+        self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/rsync"', uninstall)
+        self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/sops"', uninstall)
+        self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', uninstall)
+        self.assertIn('"$PROXNIX_HOST_TOOLS_PROFILE"-*-link', uninstall)
 
     def test_gc_service_uses_runtime_helper(self) -> None:
         service = (

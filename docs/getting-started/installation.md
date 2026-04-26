@@ -62,15 +62,31 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 ## Step 1: Install on the Proxmox host
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
-Install the Nix daemon before running the playbook. The playbook installs
-`sops` through apt, enables `nix-command flakes` for an existing Nix
-installation, verifies the prerequisites, and then copies the proxnix files
-from your local repo checkout to each remote Proxmox host over SSH. Run it from
-your workstation or another Ansible control machine, not from the target node
-itself.
+By default the playbook requires an existing Nix installation. It enables
+`nix-command flakes`, installs proxnix host tools through the
+`/nix/var/nix/profiles/proxnix-host-tools` Nix profile, exposes those tools
+through `/usr/local/bin`, verifies the prerequisites, and then copies the
+proxnix files from your local repo checkout to each remote Proxmox host over
+SSH. Run it from your workstation or another Ansible control machine, not from
+the target node itself.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
+```
+
+If you want the playbook to install Nix when missing, opt into the Determinate
+Systems installer explicitly:
+
+```bash
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
+```
+
+`proxnix-uninstall` removes the proxnix host tool symlinks and Nix profile, but
+does not remove Nix itself. For a Determinate-installed Nix, remove Nix
+separately with:
+
+```bash
+/nix/nix-installer uninstall
 ```
 
 The example inventory in `host/deploy/inventory.proxmox.ini` already sets

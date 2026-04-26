@@ -19,6 +19,8 @@ LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
+PROXNIX_LOCAL_BIN_DIR="/usr/local/bin"
+PROXNIX_HOST_TOOLS_PROFILE="/nix/var/nix/profiles/proxnix-host-tools"
 SYSTEMD_UNIT_DIR="/etc/systemd/system"
 PROXNIX_INSTALL_MANIFEST="${PROXNIX_LIB_DIR}/install-manifest.txt"
 PROXNIX_INSTALL_INFO="${PROXNIX_LIB_DIR}/install-info.txt"
@@ -32,7 +34,7 @@ action() { echo ""; echo "→ $*"; }
 
 do_rm() {
     local path="$1"
-    if [[ ! -e "$path" ]]; then
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
         log "(already absent) $path"
         return
     fi
@@ -95,6 +97,16 @@ do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed-offline"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconciler-state"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-uninstall"
+
+action "Nix-managed host tools"
+do_rm "$PROXNIX_LOCAL_BIN_DIR/age"
+do_rm "$PROXNIX_LOCAL_BIN_DIR/jq"
+do_rm "$PROXNIX_LOCAL_BIN_DIR/rsync"
+do_rm "$PROXNIX_LOCAL_BIN_DIR/sops"
+for profile_path in "$PROXNIX_HOST_TOOLS_PROFILE" "$PROXNIX_HOST_TOOLS_PROFILE"-*-link; do
+    [[ -e "$profile_path" || -L "$profile_path" ]] || continue
+    do_rm "$profile_path"
+done
 
 action "GC timer"
 if [[ $DRY_RUN -eq 0 ]]; then

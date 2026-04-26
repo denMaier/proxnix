@@ -2,7 +2,6 @@
 - name: Install proxnix on Proxmox nodes
   hosts: "{{ proxnix_target_hosts | default('proxmox') }}"
   connection: ssh
-  become: true
   gather_facts: false
 
   vars:
@@ -13,12 +12,29 @@
     proxnix_lxc_hooks_dir: /usr/share/lxc/hooks
     proxnix_lib_dir: /usr/local/lib/proxnix
     proxnix_sbin_dir: /usr/local/sbin
+    proxnix_local_bin_dir: /usr/local/bin
     proxnix_systemd_unit_dir: /etc/systemd/system
     proxnix_data_dir: /var/lib/proxnix
     proxnix_private_dir: /var/lib/proxnix/private
     proxnix_host_state_dir: /etc/proxnix
     proxnix_install_manifest: "{{ proxnix_lib_dir }}/install-manifest.txt"
     proxnix_install_info: "{{ proxnix_lib_dir }}/install-info.txt"
+    # Valid values:
+    # - require-existing: fail if Nix is absent
+    # - determinate: install Nix with the Determinate Systems installer if absent
+    proxnix_nix_install_mode: require-existing
+    proxnix_determinate_nix_install_url: https://install.determinate.systems/nix
+    proxnix_host_tools_profile: /nix/var/nix/profiles/proxnix-host-tools
+    proxnix_host_tool_packages:
+      - nixpkgs#age
+      - nixpkgs#jq
+      - nixpkgs#rsync
+      - nixpkgs#sops
+    proxnix_host_tool_commands:
+      - age
+      - jq
+      - rsync
+      - sops
     proxnix_directories:
       - path: "{{ proxnix_lib_dir }}"
         mode: "0755"
@@ -151,22 +167,39 @@
       ansible.builtin.command: pveversion
       changed_when: false
 
-    - name: Install sops
-      ansible.builtin.apt:
-        name: sops
-        state: present
-        update_cache: true
-
     - name: Check whether nix is installed
       ansible.builtin.command: nix --version
       register: proxnix_nix_check
       changed_when: false
       failed_when: false
 
+    - name: Validate Nix install mode
+      ansible.builtin.assert:
+        that:
+          - proxnix_nix_install_mode in ['require-existing', 'determinate']
+        fail_msg: "proxnix_nix_install_mode must be 'require-existing' or 'determinate'"
+
+    - name: Install Nix with Determinate Systems installer when requested
+      ansible.builtin.shell: |
+        set -eu
+        curl --proto '=https' --tlsv1.2 -sSf -L {{ proxnix_determinate_nix_install_url | quote }} | sh -s -- install --no-confirm
+      args:
+        creates: /nix/nix-installer
+        executable: /bin/bash
+      when:
+        - proxnix_nix_install_mode == 'determinate'
+        - proxnix_nix_check.rc != 0
+
     - name: Fail when nix is missing
       ansible.builtin.fail:
-        msg: "nix is not installed; install the Nix daemon on this Proxmox host before running proxnix"
-      when: proxnix_nix_check.rc != 0
+        msg: "nix is not installed; install Nix first or rerun with -e proxnix_nix_install_mode=determinate"
+      when:
+        - proxnix_nix_install_mode == 'require-existing'
+        - proxnix_nix_check.rc != 0
+
+    - name: Verify nix is installed on the target host
+      ansible.builtin.command: nix --version
+      changed_when: false
 
     - name: Ensure /etc/nix exists
       ansible.builtin.file:
@@ -193,13 +226,50 @@
         daemon_reload: true
       failed_when: false
 
-    - name: Verify sops is installed on the target host
-      ansible.builtin.command: sops --version
-      changed_when: false
-
     - name: Verify nix-command and flakes are enabled
       ansible.builtin.command: nix --extra-experimental-features "nix-command flakes" eval --expr true
       changed_when: false
+
+    - name: Install proxnix host tools with Nix
+      ansible.builtin.shell: |
+        set -eu
+        profile={{ proxnix_host_tools_profile | quote }}
+        commands=({% for tool in proxnix_host_tool_commands %}{{ tool | quote }} {% endfor %})
+        packages=({% for package in proxnix_host_tool_packages %}{{ package | quote }} {% endfor %})
+        missing=()
+
+        for index in "${!commands[@]}"; do
+          tool="${commands[$index]}"
+          package="${packages[$index]}"
+          if [ ! -x "$profile/bin/$tool" ]; then
+            missing+=("$package")
+          fi
+        done
+
+        if [ "${#missing[@]}" -eq 0 ]; then
+          exit 0
+        fi
+
+        nix profile install --profile "$profile" "${missing[@]}"
+      args:
+        executable: /bin/bash
+      register: proxnix_host_tools_install
+      changed_when: proxnix_host_tools_install.stdout != "" or proxnix_host_tools_install.stderr != ""
+
+    - name: Expose proxnix host tools on PATH
+      ansible.builtin.file:
+        src: "{{ proxnix_host_tools_profile }}/bin/{{ item }}"
+        dest: "{{ proxnix_local_bin_dir }}/{{ item }}"
+        state: link
+        owner: root
+        group: root
+        force: false
+      loop: "{{ proxnix_host_tool_commands }}"
+
+    - name: Verify proxnix host tools are installed on the target host
+      ansible.builtin.command: "{{ item }} --version"
+      changed_when: false
+      loop: "{{ proxnix_host_tool_commands }}"
 
   tasks:
     - name: Ensure proxnix-managed directories exist
@@ -251,6 +321,11 @@
           /usr/local/sbin/proxnix-reconcile-activate
           /usr/local/sbin/proxnix-reconciler-state
           /usr/local/sbin/proxnix-uninstall
+          /usr/local/bin/age
+          /usr/local/bin/jq
+          /usr/local/bin/rsync
+          /usr/local/bin/sops
+          /nix/var/nix/profiles/proxnix-host-tools
           /etc/systemd/system/proxnix-gc.service
           /etc/systemd/system/proxnix-gc.timer
           /etc/systemd/system/proxnix-reconcile.service
@@ -296,6 +371,9 @@
 
           To remove only the installed proxnix runtime from this node, run:
             proxnix-uninstall
+
+          proxnix-uninstall removes the proxnix host tool symlinks and profile.
+          It does not remove Nix itself.
 
     - name: Enable proxnix GC timer
       ansible.builtin.systemd:

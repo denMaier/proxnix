@@ -5,15 +5,19 @@
 ### `host/deploy/ansible/install.yml`
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
-This is the only supported host deployment path. It verifies Proxmox, `sops`,
-Nix, and flakes support, installs `sops` through apt, enables flakes for an
-existing Nix installation, then copies files from this repo on the Ansible
-controller to the remote hosts in your inventory. It is not meant to run against
-`localhost`.
+This is the only supported host deployment path. It verifies Proxmox and Nix,
+enables flakes for an existing Nix installation, installs proxnix host tools
+through `/nix/var/nix/profiles/proxnix-host-tools`, exposes them through
+`/usr/local/bin`, then copies files from this repo on the Ansible controller to
+the remote hosts in your inventory. It is not meant to run against `localhost`.
+By default Nix must already be installed. To install Nix when missing,
+explicitly set `proxnix_nix_install_mode=determinate`; this uses the
+Determinate Systems installer.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
 ```
 
 ### `host/deploy/ansible/ai-agent-bootstrap.yml`

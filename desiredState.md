@@ -72,7 +72,8 @@ revision. If absent, host builds use rolling mode without writing a local lock.
 # Deployment
   # Hosts 
     * nix daemon must already be installed
-    * Ansible installs sops through apt and enables nix-command/flakes
+    * optionally, Ansible can install Nix with Determinate installer when explicitly requested
+    * Ansible enables nix-command/flakes and installs proxnix host tools through a dedicated Nix profile
     * Ansible playbook is the only supported host deployment path
     * no deb-package, curl installer, or local install script
     * keep uninstall script for cleanup
