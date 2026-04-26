@@ -941,6 +941,8 @@ def _cli_run_publish(payload: object) -> dict[str, object] | None:
     args = ["diff" if opts.get("dryRun") else "sync", "--json"]
     if opts.get("configOnly"):
         args.append("--config-only")
+    if opts.get("reconcile"):
+        args.append("--reconcile")
     vmid = opts.get("vmid")
     if vmid:
         args.extend(["--vmid", str(vmid)])
