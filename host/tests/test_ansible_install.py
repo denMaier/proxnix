@@ -94,7 +94,8 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("${sops}/bin/sops", package)
         self.assertIn("/nix/var/nix/profiles/proxnix-host", activate)
         self.assertIn("systemctl enable --now proxnix-gc.timer", activate)
-        self.assertIn("systemctl disable --now proxnix-reconcile.timer", activate)
+        self.assertNotIn("systemctl disable --now proxnix-reconcile.timer", activate)
+        self.assertNotIn('cp host/runtime/bin/proxnix-host-activate "$out/bin/proxnix-host-activate"', package)
         self.assertIn("proxnix-authority-render", activate)
         self.assertIn("proxnix-gc", activate)
         self.assertIn("proxnix-reconcile-build-golden", activate)
@@ -109,6 +110,10 @@ class AnsibleInstallTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("CT_HOSTNAME=", create_lxc)
         self.assertNotIn("\nHOSTNAME=", create_lxc)
+        doctor = (ROOT / "host" / "runtime" / "bin" / "proxnix-doctor").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("proxnix_reconciler_state.py", doctor)
 
     def test_uninstall_removes_proxnix_host_profile(self) -> None:
         uninstall = (ROOT / "host" / "install" / "uninstall.sh").read_text(

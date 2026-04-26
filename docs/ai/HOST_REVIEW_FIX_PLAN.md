@@ -87,11 +87,11 @@ Addresses findings #4, #5, #9, #12.
 
 Addresses findings #13, #14, #17.
 
-- [ ] `proxnix-doctor` required-files list includes
+- [x] `proxnix-doctor` required-files list includes
       `proxnix_reconciler_state.py`
-- [ ] `proxnix-host-activate` drops the `systemctl disable --now
+- [x] `proxnix-host-activate` drops the `systemctl disable --now
       proxnix-reconcile.timer` line (timer not installed in this version)
-- [ ] `host/nix/proxnix-host.nix` drops the redundant `cp` of
+- [x] `host/nix/proxnix-host.nix` drops the redundant `cp` of
       `proxnix-host-activate`
 
 ---

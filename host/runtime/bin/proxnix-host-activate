@@ -184,6 +184,5 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now proxnix-gc.timer
-systemctl disable --now proxnix-reconcile.timer 2>/dev/null || true
 
 echo "proxnix host runtime activated from $PROXNIX_PROFILE"

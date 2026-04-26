@@ -168,6 +168,7 @@ check_host_files() {
       "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
       "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" \
       "$PROXNIX_LIB_DIR/proxnix_authority_render.py" \
+      "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py" \
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \

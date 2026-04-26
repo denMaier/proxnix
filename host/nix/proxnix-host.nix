@@ -23,7 +23,6 @@ stdenvNoCC.mkDerivation {
     cp -R host/runtime/bin/. "$out/bin/"
     cp host/install/uninstall.sh "$out/bin/proxnix-host-uninstall"
     ln -s proxnix-host-uninstall "$out/bin/proxnix-uninstall"
-    cp host/runtime/bin/proxnix-host-activate "$out/bin/proxnix-host-activate"
     chmod +x "$out"/bin/*
 
     cp -R host/runtime/lib/. "$out/lib/proxnix/"
