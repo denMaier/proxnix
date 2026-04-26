@@ -66,6 +66,7 @@ TEMPLATE_AUTO=0
 STORAGE_AUTO=0
 CLEANUP_EXISTING=0
 EXISTING_HOSTNAME=""
+SKIP_DOCTOR=0
 
 die() {
   echo "ERROR: $*" >&2
@@ -110,6 +111,7 @@ usage() {
     "  --start                   Start the CT after creation (default)" \
     "  --no-start                Create the CT but do not start it" \
     "  --no-config-dir           Skip creating /var/lib/proxnix/containers/<vmid>/" \
+    "  --no-doctor               Skip proxnix-doctor --host-only (for reconciler use)" \
     "  --cleanup-existing       Replace an existing CT only when its hostname already matches --hostname" \
     "  --dry-run                 Print the commands without running them" \
     "  --yes                     Skip the confirmation prompt" \
@@ -514,6 +516,10 @@ parse_args() {
         CREATE_CONFIG_DIR=0
         shift
         ;;
+      --no-doctor)
+        SKIP_DOCTOR=1
+        shift
+        ;;
       --cleanup-existing)
         CLEANUP_EXISTING=1
         shift
@@ -640,7 +646,9 @@ main() {
   if [[ $TEMPLATE_AUTO -eq 1 ]]; then
     msg_ok "Using newest local NixOS template: ${TEMPLATE}"
   fi
-  run_proxnix_check
+  if [[ $SKIP_DOCTOR -ne 1 ]]; then
+    run_proxnix_check
+  fi
   print_plan
   confirm_plan
   cleanup_existing_container_if_requested

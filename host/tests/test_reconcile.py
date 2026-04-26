@@ -416,6 +416,123 @@ esac
             self.assertEqual(status["lastDeployStatus"], "ok")
             self.assertIsNone(status["lastError"])
 
+    def test_recreate_missing_calls_create_lxc_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            marker = Path(tmp) / "activated"
+            create_args = Path(tmp) / "create-args"
+            fake_create = Path(tmp) / "proxnix-create-lxc"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101","memory":2048,"swap":512,"cores":2,"rootfs":"local-lvm:vm-101-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=dhcp","unprivileged":true}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/built-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                "#!/bin/sh\ncase \"$1\" in --query) printf '%s\\n' /nix/store/built-system-101 ;; --export) printf exported ;; *) exit 2 ;; esac\n",
+            )
+            write_executable(
+                fake_create,
+                f"""#!/bin/sh
+printf '%s\\n' "$@" > {create_args}
+mkdir -p {pve}
+printf '%s\\n' 'ostype: nixos' 'hostname: ct101' > {pve / "101.conf"}
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\\n' 'status: stopped'
+  exit 0
+fi
+if [ "$1" = "start" ]; then
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    if [ -f {marker} ]; then
+      printf '%s\\n' /nix/store/built-system-101
+    else
+      printf '%s\\n' /nix/store/old-system-101
+    fi
+    ;;
+  nix-store)
+    cat >/dev/null
+    ;;
+  test)
+    exit 0
+    ;;
+  /nix/store/built-system-101/bin/switch-to-configuration)
+    touch {marker}
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                    "PROXNIX_CREATE_LXC": str(fake_create),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101", "--recreate-missing"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = create_args.read_text(encoding="utf-8").splitlines()
+            self.assertIn("--no-doctor", args)
+            self.assertIn("--no-start", args)
+            self.assertIn("local-lvm", args)
+            self.assertIn("8", args)
+            self.assertIn("vmbr0", args)
+            self.assertIn("dhcp", args)
+
 
 if __name__ == "__main__":
     unittest.main()

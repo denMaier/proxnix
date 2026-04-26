@@ -272,6 +272,8 @@ writes `/var/lib/proxnix/status/<vmid>.json` without activating it.
 CT and verifies `switch-to-configuration` exists. `--vmid <id>` runs the current
 end-to-end path for one CT:
 build, seed, exact-path activation, verification, and status write.
+`--recreate-missing` lets that path create a missing CT first from manifest
+lifecycle fields.
 
 ```bash
 proxnix-reconcile --dry-run
@@ -279,6 +281,7 @@ proxnix-reconcile --dry-run --vmid 100
 proxnix-reconcile --build-only --vmid 100
 proxnix-reconcile --seed-only --vmid 100
 proxnix-reconcile --vmid 100
+proxnix-reconcile --vmid 100 --recreate-missing
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```
@@ -307,6 +310,7 @@ This helper:
 - always sets Proxmox CT features `nesting=1,keyctl=1` for NixOS guests
 - starts the CT by default after creating it
 - optionally creates `/var/lib/proxnix/containers/<vmid>/dropins`
+- supports `--no-doctor` for reconciler-controlled non-interactive creation
 - supports `--cleanup-existing` for safe reruns when that VMID already belongs
   to a container whose hostname already matches `--hostname`
 - never attempts to install proxnix itself

@@ -14,6 +14,7 @@ PVE_LXC_DIR="${PROXNIX_PVE_LXC_DIR:-/etc/pve/lxc}"
 LOCK_DIR="${PROXNIX_RUN_DIR:-/run/proxnix}"
 NODE_NAME="${PROXNIX_NODE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
 AUTHORITY_RENDER="${PROXNIX_AUTHORITY_RENDER:-/usr/local/sbin/proxnix-authority-render}"
+CREATE_LXC="${PROXNIX_CREATE_LXC:-/usr/local/sbin/proxnix-create-lxc}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -22,6 +23,7 @@ Usage:
   ${SELF_NAME} [--dry-run] [--vmid <id>] [--node-name <name>]
   ${SELF_NAME} --build-only --vmid <id> [--node-name <name>]
   ${SELF_NAME} --seed-only --vmid <id>
+  ${SELF_NAME} --vmid <id> --recreate-missing
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
 
@@ -298,6 +300,31 @@ manifest_source_revision() {
   jq -c --arg vmid "$selected_vmid" '.containers[$vmid].sourceRevision // null' <<<"$manifest"
 }
 
+pve_field() {
+  local selected_vmid="$1" manifest="$2" field="$3"
+  jq -r --arg vmid "$selected_vmid" --arg field "$field" '.containers[$vmid].pve[$field] // empty' <<<"$manifest"
+}
+
+net0_part() {
+  local net0="$1" key="$2"
+  tr ',' '\n' <<<"$net0" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
+}
+
+rootfs_storage() {
+  local rootfs="$1"
+  [[ "$rootfs" == *:* ]] || return 0
+  printf '%s\n' "${rootfs%%:*}"
+}
+
+rootfs_disk_gb() {
+  local rootfs="$1" size
+  size="$(tr ',' '\n' <<<"$rootfs" | awk -F= '$1 == "size" { print $2; exit }')"
+  size="${size%G}"
+  size="${size%g}"
+  [[ -n "$size" ]] || return 0
+  printf '%s\n' "$size"
+}
+
 build_only() {
   local selected_vmid="$1"
   [[ -n "$selected_vmid" ]] || die "--build-only requires --vmid"
@@ -374,6 +401,69 @@ seed_only() {
   printf '%s seeded %s\n' "$selected_vmid" "$desired_system"
 }
 
+resolve_create_lxc() {
+  if [[ -x "$CREATE_LXC" ]]; then
+    printf '%s\n' "$CREATE_LXC"
+    return
+  fi
+
+  local repo_create="${SCRIPT_DIR}/proxnix-create-lxc"
+  if [[ -x "$repo_create" ]]; then
+    printf '%s\n' "$repo_create"
+    return
+  fi
+
+  die "proxnix-create-lxc not found"
+}
+
+ensure_container_exists() {
+  local selected_vmid="$1" manifest="$2" recreate_missing="$3"
+  local conf="${PVE_LXC_DIR}/${selected_vmid}.conf"
+  [[ -f "$conf" ]] && return
+
+  if [[ "$recreate_missing" -ne 1 ]]; then
+    die "PVE config missing for VMID ${selected_vmid}: ${conf}; rerun with --recreate-missing to create it from manifest data"
+  fi
+
+  local create_lxc hostname memory swap cores unprivileged rootfs storage disk net0 bridge ip gw template
+  create_lxc="$(resolve_create_lxc)"
+  hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
+  memory="$(pve_field "$selected_vmid" "$manifest" memory)"
+  swap="$(pve_field "$selected_vmid" "$manifest" swap)"
+  cores="$(pve_field "$selected_vmid" "$manifest" cores)"
+  unprivileged="$(pve_field "$selected_vmid" "$manifest" unprivileged)"
+  rootfs="$(pve_field "$selected_vmid" "$manifest" rootfs)"
+  storage="$(rootfs_storage "$rootfs")"
+  disk="$(rootfs_disk_gb "$rootfs")"
+  net0="$(pve_field "$selected_vmid" "$manifest" net0)"
+  bridge="$(net0_part "$net0" bridge)"
+  ip="$(net0_part "$net0" ip)"
+  gw="$(net0_part "$net0" gw)"
+  template="$(pve_field "$selected_vmid" "$manifest" template)"
+
+  local -a cmd=(
+    "$create_lxc"
+    --vmid "$selected_vmid"
+    --hostname "$hostname"
+    --yes
+    --no-start
+    --no-doctor
+  )
+  [[ -n "$template" ]] && cmd+=(--template "$template")
+  [[ -n "$storage" ]] && cmd+=(--storage "$storage")
+  [[ -n "$disk" ]] && cmd+=(--disk "$disk")
+  [[ -n "$memory" ]] && cmd+=(--memory "$memory")
+  [[ -n "$swap" ]] && cmd+=(--swap "$swap")
+  [[ -n "$cores" ]] && cmd+=(--cores "$cores")
+  [[ -n "$bridge" ]] && cmd+=(--bridge "$bridge")
+  [[ -n "$ip" ]] && cmd+=(--ip "$ip")
+  [[ -n "$gw" ]] && cmd+=(--gw "$gw")
+  [[ -n "$unprivileged" ]] && cmd+=(--unprivileged "$unprivileged")
+
+  "${cmd[@]}"
+  [[ -f "$conf" ]] || die "proxnix-create-lxc completed but PVE config is still missing for VMID ${selected_vmid}: ${conf}"
+}
+
 ensure_container_running_for_exec() {
   local vmid="$1" state=""
   need_cmd pct
@@ -412,7 +502,7 @@ verify_system() {
 }
 
 reconcile_selected() {
-  local selected_vmid="$1"
+  local selected_vmid="$1" recreate_missing="$2"
   [[ -n "$selected_vmid" ]] || die "full reconcile currently requires --vmid"
   need_cmd jq
   need_cmd nix
@@ -436,6 +526,7 @@ reconcile_selected() {
   system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
   [[ -n "$system_path" ]] || die "nix build produced no output path"
 
+  ensure_container_exists "$selected_vmid" "$manifest" "$recreate_missing"
   ensure_container_running_for_exec "$selected_vmid"
   live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
   status_file="${STATUS_DIR}/${selected_vmid}.json"
@@ -478,7 +569,7 @@ reconcile_selected() {
 }
 
 main() {
-  local vmid="" dry_run=0 build_only=0 seed_only=0 rollback=0 show_status=0
+  local vmid="" dry_run=0 build_only=0 seed_only=0 rollback=0 show_status=0 recreate_missing=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -492,6 +583,10 @@ main() {
         ;;
       --seed-only)
         seed_only=1
+        shift
+        ;;
+      --recreate-missing)
+        recreate_missing=1
         shift
         ;;
       --vmid)
@@ -548,7 +643,7 @@ main() {
     return
   fi
 
-  reconcile_selected "$vmid"
+  reconcile_selected "$vmid" "$recreate_missing"
 }
 
 main "$@"
