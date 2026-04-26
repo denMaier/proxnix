@@ -45,7 +45,7 @@ There are four main layers:
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
 2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
 3. **Host authority and build**: the Proxmox node renders a local authority wrapper, evaluates the desired CT system, and builds the NixOS closure
-4. **Host-side activation**: `proxnix-reconcile` seeds the closure into the CT and activates the exact system path
+4. **Host-side activation**: the CT start path or an explicit `proxnix-reconcile` run seeds the closure into the CT and activates the exact system path
 
 ## The guest is not a black box
 

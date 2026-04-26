@@ -127,6 +127,15 @@ untouched. Local coordination details such as pending uploads and retry history
 live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status
 files remain the operator-facing status surface.
 
+Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
+hook stages guest inputs and then asynchronously starts
+`proxnix-reconcile@<vmid>.service`; that service waits briefly for the CT to
+become runnable and then reconciles only that VMID. Operators and workstation
+deploys can still trigger explicit reconciliation with `proxnix-reconcile
+--vmid <id>` or `systemctl start proxnix-reconcile@<id>.service`. The only
+remaining proxnix timers are for stale stage-dir cleanup and shared-cache upload
+retry.
+
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.
 

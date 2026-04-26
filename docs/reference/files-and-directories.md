@@ -34,6 +34,8 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
+| `host/runtime/systemd/proxnix-reconcile.service` | Explicit all-local-container reconcile service |
+| `host/runtime/systemd/proxnix-reconcile@.service` | Event/explicit per-VMID reconcile service triggered by LXC pre-start |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
 | `host/runtime/nix/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |

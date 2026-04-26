@@ -38,8 +38,10 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
 - `/usr/local/sbin/proxnix-reconcile`
+- `/usr/local/sbin/proxnix-cache-reconcile`
 - `proxnix-gc.service` and `proxnix-gc.timer`
-- `proxnix-reconcile.service` and `proxnix-reconcile.timer`
+- `proxnix-reconcile.service` and `proxnix-reconcile@.service`
+- `proxnix-cache-reconcile.service` and `proxnix-cache-reconcile.timer`
 
 ### Node-local relay cache
 
@@ -381,7 +383,7 @@ use:
 proxnix-uninstall
 ```
 
-Both paths remove only the installed hooks, helpers, and timers. They
+Both paths remove only the installed hooks, helpers, services, and timers. They
 intentionally leave `/var/lib/proxnix` and `/etc/proxnix` alone.
 
 ## What you should have when done

@@ -143,7 +143,7 @@ pct start 100
 
 At this point proxnix has already:
 
-1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/`
+1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/` and triggered `proxnix-reconcile@100.service`
 2. Run the **mount hook** — copied `/etc/nixos/configuration.nix`, bound the managed tree under `/var/lib/proxnix/config/managed/`, and copied root-only secret files into `/var/lib/proxnix/secrets/`
 3. Removed any legacy guest-side `proxnix-apply-config` service files
 
@@ -151,7 +151,8 @@ The Proxmox node now owns activation through `proxnix-reconcile`.
 
 ## 4. Deploy the desired system
 
-Run the host reconciler for the CT:
+If you want to force convergence immediately instead of waiting for the
+pre-start-triggered service, run the host reconciler for the CT:
 
 ```bash
 proxnix-reconcile --vmid 100
@@ -159,7 +160,9 @@ proxnix-reconcile --vmid 100
 
 The host evaluates the generated authority, builds the desired NixOS closure,
 imports it into the CT without guest networking, activates the exact system
-path, and records status under `/var/lib/proxnix/status/100.json`.
+path, and records status under `/var/lib/proxnix/status/100.json`. The same
+per-VMID path is also available as `systemctl start
+proxnix-reconcile@100.service`.
 
 If the CT is already running the evaluated desired system, the command exits as
 `noop-current` without building, importing, or contacting a shared cache. If the

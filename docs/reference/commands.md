@@ -238,7 +238,7 @@ proxnix-doctor --host-only
 
 Host-only checks include the Nix daemon, `nix-command`/flakes support, `/nix`
 free space, the authority and status directories, and the reconciler command
-plus timer unit.
+plus explicit/event-triggered service units.
 
 Exit codes:
 
@@ -281,6 +281,13 @@ with a GC root, seed, exact-path activation, verification, and status write.
 `--recreate-missing` creates a CT only when manifest placement explicitly
 targets the current node.
 
+Normal convergence is not run by a full-host timer. Container starts trigger
+`proxnix-reconcile@<vmid>.service` from the LXC pre-start hook, and explicit
+operator/workstation flows can run `proxnix-reconcile --vmid <id>` or start the
+template service directly. `proxnix-reconcile.service` remains available for an
+explicit all-local-container run, but no `proxnix-reconcile.timer` is installed
+or enabled.
+
 ```bash
 proxnix-reconcile --dry-run
 proxnix-reconcile --dry-run --vmid 100
@@ -291,6 +298,7 @@ proxnix-reconcile --vmid 100 --recreate-missing
 proxnix-reconcile --rollback --vmid 100
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
+systemctl start proxnix-reconcile@100.service
 ```
 
 Status JSON keeps compatibility fields such as `desiredSystem` and
