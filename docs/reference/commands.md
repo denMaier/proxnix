@@ -6,7 +6,8 @@
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
 This is the only supported host deployment path. It verifies Proxmox, `sops`,
-Nix, and flakes support, then copies files from this repo on the Ansible
+Nix, and flakes support, installs `sops` through apt, enables flakes for an
+existing Nix installation, then copies files from this repo on the Ansible
 controller to the remote hosts in your inventory. It is not meant to run against
 `localhost`.
 

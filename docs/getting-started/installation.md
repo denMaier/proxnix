@@ -62,11 +62,12 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 ## Step 1: Install on the Proxmox host
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
-Install the Nix daemon, enable `nix-command flakes`, and install `sops` before
-running the playbook. The playbook verifies those prerequisites and then copies
-the proxnix files from your local repo checkout to each remote Proxmox host over
-SSH. Run it from your workstation or another Ansible control machine, not from
-the target node itself.
+Install the Nix daemon before running the playbook. The playbook installs
+`sops` through apt, enables `nix-command flakes` for an existing Nix
+installation, verifies the prerequisites, and then copies the proxnix files
+from your local repo checkout to each remote Proxmox host over SSH. Run it from
+your workstation or another Ansible control machine, not from the target node
+itself.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml

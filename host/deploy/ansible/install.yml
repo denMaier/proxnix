@@ -151,12 +151,50 @@
       ansible.builtin.command: pveversion
       changed_when: false
 
+    - name: Install sops
+      ansible.builtin.apt:
+        name: sops
+        state: present
+        update_cache: true
+
+    - name: Check whether nix is installed
+      ansible.builtin.command: nix --version
+      register: proxnix_nix_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail when nix is missing
+      ansible.builtin.fail:
+        msg: "nix is not installed; install the Nix daemon on this Proxmox host before running proxnix"
+      when: proxnix_nix_check.rc != 0
+
+    - name: Ensure /etc/nix exists
+      ansible.builtin.file:
+        path: /etc/nix
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Enable nix-command and flakes
+      ansible.builtin.lineinfile:
+        path: /etc/nix/nix.conf
+        regexp: '^experimental-features\s*='
+        line: experimental-features = nix-command flakes
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Restart nix-daemon after nix.conf changes
+      ansible.builtin.systemd:
+        name: nix-daemon.service
+        state: restarted
+        daemon_reload: true
+      failed_when: false
+
     - name: Verify sops is installed on the target host
       ansible.builtin.command: sops --version
-      changed_when: false
-
-    - name: Verify nix is installed on the target host
-      ansible.builtin.command: nix --version
       changed_when: false
 
     - name: Verify nix-command and flakes are enabled

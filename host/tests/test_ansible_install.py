@@ -18,6 +18,10 @@ class AnsibleInstallTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("nix --version", playbook)
+        self.assertIn("name: sops", playbook)
+        self.assertIn("path: /etc/nix/nix.conf", playbook)
+        self.assertIn("experimental-features = nix-command flakes", playbook)
+        self.assertIn("nix is not installed; install the Nix daemon", playbook)
         self.assertIn('nix --extra-experimental-features "nix-command flakes" eval --expr true', playbook)
         self.assertIn("proxnix_authority_render.py", playbook)
         self.assertIn("proxnix_reconciler_state.py", playbook)
