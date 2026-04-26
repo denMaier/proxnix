@@ -1,4 +1,5 @@
 import os
+import json
 import stat
 import subprocess
 import tempfile
@@ -167,6 +168,136 @@ esac
             self.assertIn('"lastBuildStatus": "ok"', status)
             self.assertIn('"lastDeployStatus": "not-run"', status)
             self.assertIn('"currentSystem": null', status)
+
+    def test_seed_only_imports_closure_and_marks_status_seeded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/built-system-101",
+                        "currentSystem": None,
+                        "previousSystem": None,
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "not-run",
+                        "lastError": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                """#!/bin/sh
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+if [ "$4" = "nix-store" ] && [ "$5" = "--import" ]; then
+  cat >/dev/null
+  exit 0
+fi
+if [ "$4" = "test" ] && [ "$5" = "-x" ]; then
+  exit 0
+fi
+exit 2
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--seed-only", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 seeded /nix/store/built-system-101")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["lastDeployStatus"], "seeded")
+            self.assertIsNone(status["lastError"])
+
+    def test_seed_only_records_failed_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/built-system-101",
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "not-run",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "nix-store", "#!/bin/sh\nprintf '%s\\n' /nix/store/built-system-101\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\necho import failed >&2\nexit 1\n")
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--seed-only", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["lastDeployStatus"], "failed")
+            self.assertIn("closure seed failed", status["lastError"])
 
 
 if __name__ == "__main__":

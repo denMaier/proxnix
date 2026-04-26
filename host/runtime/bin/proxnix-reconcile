@@ -21,6 +21,7 @@ usage() {
 Usage:
   ${SELF_NAME} [--dry-run] [--vmid <id>] [--node-name <name>]
   ${SELF_NAME} --build-only --vmid <id> [--node-name <name>]
+  ${SELF_NAME} --seed-only --vmid <id>
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
 
@@ -238,6 +239,24 @@ write_build_status() {
   mv "$tmp" "${STATUS_DIR}/${vmid}.json"
 }
 
+update_deploy_status() {
+  local vmid="$1" deploy_status="$2" error="$3"
+  need_cmd jq
+  need_cmd date
+  local status_file="${STATUS_DIR}/${vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${vmid}; run --build-only first"
+  local tmp="${status_file}.tmp"
+  jq \
+    --arg lastDeployStatus "$deploy_status" \
+    --arg lastError "$error" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.lastDeployStatus = $lastDeployStatus
+      | .lastError = (if $lastError == "" then null else $lastError end)
+      | .updatedAt = $updatedAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
 build_only() {
   local selected_vmid="$1"
   [[ -n "$selected_vmid" ]] || die "--build-only requires --vmid"
@@ -279,8 +298,46 @@ build_only() {
   printf '%s built %s\n' "$selected_vmid" "$system_path"
 }
 
+seed_closure() {
+  local vmid="$1" system_path="$2"
+  need_cmd nix-store
+  need_cmd pct
+  need_cmd xargs
+
+  local closure_file="${LOCK_DIR}/closure-${vmid}.txt"
+  mkdir -p "$LOCK_DIR"
+  nix-store --query --requisites "$system_path" > "$closure_file"
+  xargs nix-store --export < "$closure_file" | pct exec "$vmid" -- nix-store --import
+  pct exec "$vmid" -- test -x "${system_path}/bin/switch-to-configuration"
+}
+
+seed_only() {
+  local selected_vmid="$1"
+  [[ -n "$selected_vmid" ]] || die "--seed-only requires --vmid"
+  need_cmd jq
+  need_cmd flock
+  take_global_lock
+  take_container_lock "$selected_vmid"
+
+  local status_file="${STATUS_DIR}/${selected_vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${selected_vmid}; run --build-only first"
+  local desired_system
+  desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"
+  [[ -n "$desired_system" ]] || die "status for VMID ${selected_vmid} does not contain desiredSystem"
+
+  local seed_output
+  if ! seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${seed_output}"
+    printf '%s seed failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+
+  update_deploy_status "$selected_vmid" "seeded" ""
+  printf '%s seeded %s\n' "$selected_vmid" "$desired_system"
+}
+
 main() {
-  local vmid="" dry_run=0 build_only=0 rollback=0 show_status=0
+  local vmid="" dry_run=0 build_only=0 seed_only=0 rollback=0 show_status=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -290,6 +347,10 @@ main() {
         ;;
       --build-only)
         build_only=1
+        shift
+        ;;
+      --seed-only)
+        seed_only=1
         shift
         ;;
       --vmid)
@@ -341,7 +402,12 @@ main() {
     return
   fi
 
-  die "seed/activation support is not implemented yet; use --dry-run or --build-only --vmid <id>"
+  if [[ "$seed_only" -eq 1 ]]; then
+    seed_only "$vmid"
+    return
+  fi
+
+  die "activation support is not implemented yet; use --dry-run, --build-only, or --seed-only"
 }
 
 main "$@"
