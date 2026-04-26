@@ -19,6 +19,8 @@ from proxnix_workstation.publish_cli import (
     do_rsync,
     host_report_data,
     materialize_head_site,
+    reconcile_remote_command,
+    run_remote_reconcile,
     should_report_change,
     write_publish_revision,
 )
@@ -27,9 +29,14 @@ from proxnix_workstation.publish_cli import (
 class _FakeSession:
     def __init__(self, host: str = "root@node1") -> None:
         self.host = host
+        self.commands: list[str] = []
 
     def rsync_ssh_command(self) -> str:
         return "ssh -o BatchMode=yes"
+
+    def run(self, command: str, *, check: bool = True, capture_output: bool = True):
+        self.commands.append(command)
+        return CompletedProcess(args=["ssh", self.host, command], returncode=0, stdout="ok\n", stderr="")
 
 
 def _test_config() -> WorkstationConfig:
@@ -222,6 +229,26 @@ class PublishCliTests(unittest.TestCase):
         self.assertEqual(data["updates"], 1)
         self.assertEqual(data["deletes"], 1)
         self.assertEqual(data["changes"][0]["action"], "create")
+
+    def test_reconcile_remote_command_narrows_to_vmid(self) -> None:
+        command = reconcile_remote_command(PublishOptions(reconcile=True, target_vmid="101"))
+
+        self.assertEqual(command, "proxnix-reconcile --vmid 101")
+
+    def test_reconcile_remote_command_uses_dry_run(self) -> None:
+        command = reconcile_remote_command(PublishOptions(dry_run=True, reconcile=True))
+
+        self.assertEqual(command, "proxnix-reconcile --dry-run")
+
+    def test_run_remote_reconcile_reports_exit_code_and_output(self) -> None:
+        session = _FakeSession()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = run_remote_reconcile(session, PublishOptions(reconcile=True, target_vmid="101"))
+
+        self.assertEqual(session.commands, ["proxnix-reconcile --vmid 101"])
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(result["stdout"], "ok\n")
 
     def test_do_rsync_preserves_trailing_slash_for_directory_contents(self) -> None:
         session = _FakeSession()

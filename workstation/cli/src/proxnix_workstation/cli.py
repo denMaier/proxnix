@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -47,6 +48,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "sync",
             "diff",
             "publish",
+            "deploy",
+            "deploy-status",
             "doctor",
             "validation",
             "secrets",
@@ -185,6 +188,58 @@ def _build_status_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_deploy_status_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="proxnix deploy-status", description="Read remote proxnix reconciler status")
+    parser.add_argument("--vmid", help="Restrict status to one VMID")
+    parser.add_argument("--host", action="append", dest="option_hosts", help="Remote host; may be repeated")
+    parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope")
+    parser.add_argument("hosts", nargs="*", help="Remote hosts, defaults to configured hosts")
+    return parser
+
+
+def _run_deploy_status(args: argparse.Namespace) -> int:
+    from .ssh_ops import SSHSession
+
+    config = load_workstation_config(args.config)
+    hosts = [*(args.option_hosts or []), *list(args.hosts)] if (args.option_hosts or args.hosts) else list(config.hosts)
+    if not hosts:
+        raise ProxnixWorkstationError("no publish hosts configured")
+    if args.vmid is not None and not args.vmid.isdigit():
+        raise ProxnixWorkstationError(f"container VMID must be numeric: {args.vmid}")
+
+    results: list[dict[str, object]] = []
+    exit_code = 0
+    with tempfile.TemporaryDirectory(prefix="proxnix-status.") as temp_dir:
+        temp_root = Path(temp_dir)
+        for host in hosts:
+            with SSHSession(config, host, temp_root=temp_root) as session:
+                command = "proxnix-reconcile --status"
+                if args.vmid is not None:
+                    command = f"{command} --vmid {shlex.quote(args.vmid)}"
+                completed = session.run(command, check=False, capture_output=True)
+                if completed.returncode != 0 and exit_code == 0:
+                    exit_code = completed.returncode
+                results.append(
+                    {
+                        "host": host,
+                        "command": command,
+                        "exitCode": completed.returncode,
+                        "stdout": completed.stdout,
+                        "stderr": completed.stderr,
+                    }
+                )
+
+    if args.json:
+        print_json(ok({"exitCode": exit_code, "hosts": results}))
+    else:
+        for result in results:
+            if result["stdout"]:
+                print(str(result["stdout"]).rstrip())
+            if result["stderr"]:
+                print(str(result["stderr"]).rstrip())
+    return exit_code
+
+
 def _run_site_json(fn) -> int:
     try:
         print_json(ok(fn()))
@@ -312,7 +367,12 @@ def main(argv: list[str] | None = None) -> int:
             site_args.config = args.config
             return _run_site(site_args)
 
-        if args.command in {"sync", "diff", "publish"}:
+        if args.command == "deploy-status":
+            status_args = _build_deploy_status_parser().parse_args(_strip_remainder_prefix(args.args))
+            status_args.config = args.config
+            return _run_deploy_status(status_args)
+
+        if args.command in {"sync", "diff", "publish", "deploy"}:
             from .publish_cli import main as publish_main
 
             publish_args = args.args
@@ -322,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "diff":
                 prog = "proxnix diff"
                 publish_args = ["--dry-run", "--report-changes", *args.args]
+            elif args.command == "deploy":
+                prog = "proxnix deploy"
+                publish_args = ["--reconcile", *args.args]
             return _forward(publish_main, publish_args, config=args.config, accepts_config=True, prog=prog)
         if args.command in {"doctor", "validation"}:
             from .doctor_cli import main as doctor_main

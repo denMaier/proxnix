@@ -324,6 +324,8 @@ Unified workstation entrypoint for the workstation-authoritative proxnix flows.
 
 ```bash
 proxnix config show
+proxnix deploy --host root@node1 --vmid 100
+proxnix deploy-status root@node1 --vmid 100
 proxnix secrets ls 120
 proxnix publish --vmid 120
 proxnix doctor --site-only

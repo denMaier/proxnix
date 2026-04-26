@@ -52,6 +52,7 @@ class PublishOptions:
     report_changes: bool = False
     config_only: bool = False
     target_vmid: str | None = None
+    reconcile: bool = False
 
 
 @dataclass(frozen=True)
@@ -499,6 +500,30 @@ def host_report_data(host: str, report: list[tuple[str, PurePosixPath]]) -> dict
     }
 
 
+def reconcile_remote_command(options: PublishOptions) -> str:
+    command = ["proxnix-reconcile"]
+    if options.dry_run:
+        command.append("--dry-run")
+    if options.target_vmid is not None:
+        command.extend(["--vmid", options.target_vmid])
+    return shlex.join(command)
+
+
+def run_remote_reconcile(session: SSHSession, options: PublishOptions) -> dict[str, object]:
+    command = reconcile_remote_command(options)
+    completed = session.run(command, check=False, capture_output=True)
+    if completed.stdout:
+        print(completed.stdout.rstrip())
+    if completed.stderr:
+        print(completed.stderr.rstrip())
+    return {
+        "command": command,
+        "exitCode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+
 def do_rsync(
     session: SSHSession,
     config: WorkstationConfig,
@@ -781,7 +806,9 @@ def build_parser(*, prog: str = "proxnix-publish") -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--report-changes", action="store_true")
     parser.add_argument("--config-only", action="store_true")
+    parser.add_argument("--reconcile", action="store_true", help="Run proxnix-reconcile on each host after publish")
     parser.add_argument("--vmid")
+    parser.add_argument("--host", action="append", dest="option_hosts", help="Remote host; may be repeated")
     parser.add_argument("--container-config")
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON result")
     parser.add_argument("hosts", nargs="*")
@@ -797,6 +824,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
         report_changes=args.report_changes or args.json,
         config_only=args.config_only,
         target_vmid=args.vmid,
+        reconcile=args.reconcile,
     )
 
     if args.container_config is not None:
@@ -808,9 +836,10 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
 
     try:
         host_results: list[dict[str, object]] = []
+        exit_code = 0
         with stream_context:
             site_paths = need_publish_tools(config, config_only=options.config_only)
-            hosts = list(args.hosts) if args.hosts else list(config.hosts)
+            hosts = [*(args.option_hosts or []), *list(args.hosts)] if (args.option_hosts or args.hosts) else list(config.hosts)
             if not hosts:
                 raise ProxnixWorkstationError("no publish hosts configured")
 
@@ -838,25 +867,33 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-publish") -> int
                         if not options.config_only and have_host_relay_private_key(config, provider, source.site_paths):
                             stage_relay_identities_into_tree(config, source.site_paths, options, relay_tree)
                         report = publish_selected_host(session, config, options, relay_tree)
-                        host_results.append(host_report_data(host, report))
+                        host_data = host_report_data(host, report)
+                        if options.reconcile:
+                            reconcile_result = run_remote_reconcile(session, options)
+                            host_data["reconcile"] = reconcile_result
+                            reconcile_exit = int(reconcile_result["exitCode"])
+                            if reconcile_exit != 0 and exit_code == 0:
+                                exit_code = reconcile_exit
+                        host_results.append(host_data)
 
             if not args.json:
-                print("Publish complete")
+                print("Publish complete" if exit_code == 0 else "Publish complete; reconcile failed")
 
         if args.json:
             print_json(
                 json_ok(
                     {
-                        "exitCode": 0,
+                        "exitCode": exit_code,
                         "dryRun": options.dry_run,
                         "configOnly": options.config_only,
+                        "reconcile": options.reconcile,
                         "vmid": options.target_vmid,
                         "hosts": host_results,
                         "output": output.getvalue().strip(),
                     }
                 )
             )
-        return 0
+        return exit_code
     except (ConfigError, PlanningError, ProxnixWorkstationError) as exc:
         if args.json:
             print_json(
