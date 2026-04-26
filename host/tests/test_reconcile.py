@@ -839,6 +839,7 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
         self.assertIn("proxnix-reconcile-seed-offline", RECONCILE_SEED.read_text(encoding="utf-8"))
         self.assertIn("nix copy", RECONCILE_SEED_OFFLINE.read_text(encoding="utf-8"))
         self.assertIn("--activate-only", RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
+        self.assertIn("--start-stopped", RECONCILE.read_text(encoding="utf-8"))
 
     def test_seed_wrapper_rejects_stopped_container_without_rootfs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -943,6 +944,64 @@ esac
             self.assertEqual(status["hostActivatedSystem"], "/nix/store/desired-system-101")
             self.assertEqual(status["previousSystem"], "/nix/store/old-system-101")
             self.assertEqual(status["lastDeployStatus"], "ok")
+
+    def test_activate_only_rejects_stopped_container_without_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/desired-system-101",
+                        "currentSystem": "/nix/store/old-system-101",
+                        "previousSystem": None,
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "seeded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "pct",
+                """#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\n' 'status: stopped'
+  exit 0
+fi
+if [ "$1" = "start" ]; then
+  exit 9
+fi
+exit 2
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE_ACTIVATE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("pass --start-stopped", result.stderr)
 
     def test_full_reconcile_activates_and_records_previous_system(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1785,7 +1844,7 @@ esac
             )
 
             result = subprocess.run(
-                [str(RECONCILE), "--vmid", "101", "--recreate-missing"],
+                [str(RECONCILE), "--vmid", "101", "--recreate-missing", "--start-stopped"],
                 check=False,
                 env=env,
                 text=True,

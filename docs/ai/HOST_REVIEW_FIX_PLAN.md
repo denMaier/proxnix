@@ -73,13 +73,13 @@ Addresses findings #7, #8, #10.
 
 Addresses findings #4, #5, #9, #12.
 
-- [ ] `seed_closure` callers no longer use `if !` errexit-suppression pattern;
+- [x] `seed_closure` callers no longer use `if !` errexit-suppression pattern;
       explicit `rc=$?` propagation
-- [ ] `nix-store --query --requisites … | xargs …` switched to NUL-delimited
+- [x] `nix-store --query --requisites … | xargs …` switched to NUL-delimited
       with `xargs -0 -r`; defensive non-empty assertion on requisites
-- [ ] Auto-start of stopped CTs gated behind `--start-stopped` flag (or env)
-- [ ] `proxnix-reconcile main()`: rename local `container` → `container_id`
-- [ ] `proxnix-create-lxc`: rename `HOSTNAME` → `CT_HOSTNAME`
+- [x] Auto-start of stopped CTs gated behind `--start-stopped` flag (or env)
+- [x] `proxnix-reconcile main()`: rename local `container` → `container_id`
+- [x] `proxnix-create-lxc`: rename `HOSTNAME` → `CT_HOSTNAME`
 
 ---
 

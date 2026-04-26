@@ -104,6 +104,11 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("proxnix-reconcile-activate", activate)
         self.assertIn("proxnix-reconciler-state", activate)
         self.assertIn("proxnix-host-uninstall", activate)
+        create_lxc = (
+            ROOT / "host" / "runtime" / "bin" / "proxnix-create-lxc"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CT_HOSTNAME=", create_lxc)
+        self.assertNotIn("\nHOSTNAME=", create_lxc)
 
     def test_uninstall_removes_proxnix_host_profile(self) -> None:
         uninstall = (ROOT / "host" / "install" / "uninstall.sh").read_text(

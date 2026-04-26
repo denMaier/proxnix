@@ -46,7 +46,7 @@ init_bins() {
 }
 
 VMID=""
-HOSTNAME=""
+CT_HOSTNAME=""
 TEMPLATE=""
 STORAGE=""
 DISK="8"
@@ -311,8 +311,8 @@ inspect_existing_container() {
     die "container VMID ${VMID} already exists with hostname ${existing_hostname}; rerun with --cleanup-existing only if you intend to replace it"
   fi
 
-  if [[ "$existing_hostname" != "$HOSTNAME" ]]; then
-    die "container VMID ${VMID} already exists with hostname ${existing_hostname}; --cleanup-existing only replaces an existing CT when its hostname matches --hostname ${HOSTNAME}"
+  if [[ "$existing_hostname" != "$CT_HOSTNAME" ]]; then
+    die "container VMID ${VMID} already exists with hostname ${existing_hostname}; --cleanup-existing only replaces an existing CT when its hostname matches --hostname ${CT_HOSTNAME}"
   fi
 
   EXISTING_HOSTNAME="$existing_hostname"
@@ -320,7 +320,7 @@ inspect_existing_container() {
 
 validate_inputs() {
   [[ "$VMID" =~ ^[0-9]+$ ]] || die "--vmid must be numeric"
-  [[ -n "$HOSTNAME" ]] || die "--hostname is required"
+  [[ -n "$CT_HOSTNAME" ]] || die "--hostname is required"
   [[ -n "$STORAGE" ]] || die "--storage is required"
   [[ "$DISK" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--disk must be a size in GB"
   [[ "$MEMORY" =~ ^[0-9]+$ ]] || die "--memory must be numeric"
@@ -381,7 +381,7 @@ print_plan() {
   echo "proxnix NixOS LXC plan"
   echo "======================"
   info "VMID:           ${VMID}"
-  info "Hostname:       ${HOSTNAME}"
+  info "Hostname:       ${CT_HOSTNAME}"
   info "Template:       ${template_display}"
   info "Rootfs:         ${storage_display}:${DISK}"
   info "Memory / swap:  ${MEMORY} / ${SWAP} MB"
@@ -457,7 +457,7 @@ parse_args() {
         shift 2
         ;;
       --hostname)
-        HOSTNAME="${2:?missing value for --hostname}"
+        CT_HOSTNAME="${2:?missing value for --hostname}"
         shift 2
         ;;
       --template)
@@ -548,7 +548,7 @@ prompt_for_missing_values() {
   default_vmid="$(next_vmid_default)"
 
   prompt_if_empty VMID "VMID" "$default_vmid"
-  prompt_if_empty HOSTNAME "Hostname"
+  prompt_if_empty CT_HOSTNAME "Hostname"
   prompt_if_empty DISK "Disk size in GB" "$DISK"
   prompt_if_empty MEMORY "Memory in MB" "$MEMORY"
   prompt_if_empty SWAP "Swap in MB" "$SWAP"
@@ -569,7 +569,7 @@ create_container() {
   pct_create_cmd=(
     "$PCT_BIN" create "$VMID" "$TEMPLATE"
     --ostype nixos
-    --hostname "$HOSTNAME"
+    --hostname "$CT_HOSTNAME"
     --rootfs "${STORAGE}:${DISK}"
     --memory "$MEMORY"
     --swap "$SWAP"

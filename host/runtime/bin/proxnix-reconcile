@@ -28,6 +28,7 @@ Usage:
   ${SELF_NAME} --vmid <id> --recreate-missing
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
+  ${SELF_NAME} --vmid <id> --start-stopped
 
 Dry-run renders and evaluates the authority manifest, then prints planned
 container actions without building, starting, stopping, creating, or modifying
@@ -652,8 +653,9 @@ seed_closure() {
 
   local closure_file="${LOCK_DIR}/closure-${vmid}.txt"
   mkdir -p "$LOCK_DIR"
-  nix-store --query --requisites "$system_path" > "$closure_file"
-  xargs nix-store --export < "$closure_file" | pct exec "$vmid" -- nix-store --import
+  nix-store --query --requisites "$system_path" | tr '\n' '\0' > "$closure_file"
+  [[ -s "$closure_file" ]] || die "nix-store returned no requisites for ${system_path}"
+  xargs -0 -r nix-store --export < "$closure_file" | pct exec "$vmid" -- nix-store --import
   pct exec "$vmid" -- test -x "${system_path}/bin/switch-to-configuration"
 }
 
@@ -674,8 +676,12 @@ seed_only() {
   desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"
   [[ -n "$desired_system" ]] || die "status for VMID ${selected_vmid} does not contain desiredSystem"
 
-  local seed_output
-  if ! seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
+  local seed_output seed_rc
+  set +e
+  seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"
+  seed_rc=$?
+  set -e
+  if [[ "$seed_rc" -ne 0 ]]; then
     update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${seed_output}"
     printf '%s seed failed\n' "$selected_vmid" >&2
     return 2
@@ -758,13 +764,16 @@ ensure_container_exists() {
 }
 
 ensure_container_running_for_exec() {
-  local vmid="$1" state=""
+  local vmid="$1" start_stopped="$2" state=""
   need_cmd pct
   need_cmd sleep
   need_cmd awk
   need_cmd seq
   state="$(pct status "$vmid" 2>/dev/null | awk '{ print $2 }' || true)"
   if [[ "$state" != "running" ]]; then
+    if [[ "$start_stopped" != "1" ]]; then
+      die "VMID ${vmid} is ${state:-not-running}; pass --start-stopped to start it for activation"
+    fi
     pct start "$vmid"
   fi
 
@@ -819,13 +828,17 @@ reconcile_build_phase() {
 
 reconcile_seed_phase() {
   local selected_vmid="$1" desired_system="$2"
-  local seed_output
+  local seed_output seed_rc
   if ! is_local_container "$selected_vmid"; then
     update_lost_locality_status "$selected_vmid" "seed"
     printf '%s lost locality\n' "$selected_vmid" >&2
     return 2
   fi
-  if ! seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
+  set +e
+  seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"
+  seed_rc=$?
+  set -e
+  if [[ "$seed_rc" -ne 0 ]]; then
     update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${seed_output}"
     printf '%s seed failed\n' "$selected_vmid" >&2
     return 2
@@ -860,7 +873,7 @@ reconcile_activate_phase() {
 }
 
 activate_only() {
-  local selected_vmid="$1"
+  local selected_vmid="$1" start_stopped="$2"
   [[ -n "$selected_vmid" ]] || die "--activate-only requires --vmid"
   need_cmd jq
   need_cmd flock
@@ -878,7 +891,7 @@ activate_only() {
   previous_system="$(jq -r '.previousSystem // empty' "$status_file")"
   [[ -n "$desired_system" ]] || die "status for VMID ${selected_vmid} does not contain desiredSystem"
 
-  ensure_container_running_for_exec "$selected_vmid"
+  ensure_container_running_for_exec "$selected_vmid" "$start_stopped"
   live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
   if [[ -n "$live_current" && "$live_current" != "$desired_system" ]]; then
     previous_system="$live_current"
@@ -888,7 +901,7 @@ activate_only() {
 }
 
 reconcile_selected() {
-  local selected_vmid="$1" recreate_missing="$2"
+  local selected_vmid="$1" recreate_missing="$2" start_stopped="$3"
   [[ -n "$selected_vmid" ]] || die "full reconcile currently requires --vmid"
   need_cmd jq
   need_cmd nix
@@ -916,7 +929,7 @@ reconcile_selected() {
   desired_system="$(manifest_system "$selected_vmid" "$manifest")"
   [[ -n "$desired_system" ]] || die "manifest for VMID ${selected_vmid} is missing system"
 
-  ensure_container_running_for_exec "$selected_vmid"
+  ensure_container_running_for_exec "$selected_vmid" "$start_stopped"
   live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
   status_file="${STATUS_DIR}/${selected_vmid}.json"
   prior_previous=""
@@ -941,7 +954,7 @@ reconcile_selected() {
 }
 
 reconcile_all_running() {
-  local recreate_missing="$1"
+  local recreate_missing="$1" start_stopped="$2"
   need_cmd jq
   need_cmd pct
   need_cmd awk
@@ -970,12 +983,12 @@ reconcile_all_running() {
       printf '%s skip %s\n' "$vmid" "${state:-not-running}"
       continue
     fi
-    reconcile_selected "$vmid" "$recreate_missing"
+    reconcile_selected "$vmid" "$recreate_missing" "$start_stopped"
   done
 }
 
 rollback_container() {
-  local selected_vmid="$1"
+  local selected_vmid="$1" start_stopped="$2"
   [[ -n "$selected_vmid" ]] || die "--rollback requires --vmid"
   need_cmd jq
   need_cmd flock
@@ -992,9 +1005,13 @@ rollback_container() {
   previous_system="$(jq -r '.previousSystem // empty' "$status_file")"
   [[ -n "$previous_system" ]] || die "status for VMID ${selected_vmid} does not contain previousSystem"
 
-  ensure_container_running_for_exec "$selected_vmid"
-  local rollback_output
-  if ! rollback_output="$(seed_closure "$selected_vmid" "$previous_system" 2>&1)"; then
+  ensure_container_running_for_exec "$selected_vmid" "$start_stopped"
+  local rollback_output rollback_rc
+  set +e
+  rollback_output="$(seed_closure "$selected_vmid" "$previous_system" 2>&1)"
+  rollback_rc=$?
+  set -e
+  if [[ "$rollback_rc" -ne 0 ]]; then
     update_deploy_status "$selected_vmid" "rollback-failed" "rollback seed failed: ${rollback_output}"
     printf '%s rollback seed failed\n' "$selected_vmid" >&2
     return 2
@@ -1015,7 +1032,7 @@ rollback_container() {
 }
 
 main() {
-  local vmid="" dry_run=0 build_only=0 seed_only=0 activate_only=0 rollback=0 show_status=0 recreate_missing=0
+  local vmid="" dry_run=0 build_only=0 seed_only=0 activate_only=0 rollback=0 show_status=0 recreate_missing=0 start_stopped="${PROXNIX_RECONCILE_START_STOPPED:-0}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1037,6 +1054,10 @@ main() {
         ;;
       --recreate-missing)
         recreate_missing=1
+        shift
+        ;;
+      --start-stopped)
+        start_stopped=1
         shift
         ;;
       --vmid)
@@ -1079,7 +1100,7 @@ main() {
   fi
 
   if [[ "$rollback" -eq 1 ]]; then
-    rollback_container "$vmid"
+    rollback_container "$vmid" "$start_stopped"
     return
   fi
 
@@ -1099,14 +1120,14 @@ main() {
   fi
 
   if [[ "$activate_only" -eq 1 ]]; then
-    activate_only "$vmid"
+    activate_only "$vmid" "$start_stopped"
     return
   fi
 
   if [[ -n "$vmid" ]]; then
-    reconcile_selected "$vmid" "$recreate_missing"
+    reconcile_selected "$vmid" "$recreate_missing" "$start_stopped"
   else
-    reconcile_all_running "$recreate_missing"
+    reconcile_all_running "$recreate_missing" "$start_stopped"
   fi
 }
 
