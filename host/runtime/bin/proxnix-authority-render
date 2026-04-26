@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Render /var/lib/proxnix/authority from the legacy relay cache.
+
+set -euo pipefail
+
+exec /usr/bin/env python3 /usr/local/lib/proxnix/proxnix_authority_render.py "$@"

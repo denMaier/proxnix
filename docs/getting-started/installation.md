@@ -31,8 +31,10 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/share/lxc/hooks/nixos-proxnix-mount`
 - `/usr/share/lxc/hooks/nixos-proxnix-poststop`
 - `/usr/local/lib/proxnix/pve-conf-to-nix.py`
+- `/usr/local/lib/proxnix/proxnix_authority_render.py`
 - `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
+- `/usr/local/sbin/proxnix-authority-render`
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
 - `/usr/local/sbin/proxnix-reconcile`

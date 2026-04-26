@@ -167,9 +167,11 @@ check_host_files() {
       "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
       "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
       "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" \
+      "$PROXNIX_LIB_DIR/proxnix_authority_render.py" \
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
+      "$PROXNIX_SBIN_DIR/proxnix-authority-render" \
       "$PROXNIX_SBIN_DIR/proxnix-reconcile" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \

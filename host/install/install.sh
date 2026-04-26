@@ -19,6 +19,8 @@
 #   /usr/share/lxc/hooks/nixos-proxnix-prestart — pre-start render hook
 #   /usr/share/lxc/hooks/nixos-proxnix-mount    — mount-time sync hook
 #   /usr/local/lib/proxnix/pve-conf-to-nix.py   — local runtime helper
+#   /usr/local/lib/proxnix/proxnix_authority_render.py
+#                                               — authority renderer library
 #   /usr/local/lib/proxnix/nixos-proxnix-common.sh
 #                                               — shared hook helper
 #   /usr/local/lib/proxnix/proxnix-secrets-guest
@@ -26,6 +28,7 @@
 #   /usr/local/lib/proxnix/install-manifest.txt — installed-file manifest
 #   /usr/local/lib/proxnix/install-info.txt     — local install metadata
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
+#   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
 #
@@ -220,6 +223,8 @@ do_install "$RUNTIME_DIR/lxc/hooks/nixos-proxnix-poststop" \
 
 action "Local runtime helper → $PROXNIX_LIB_DIR/"
 do_install "$RUNTIME_DIR/lib/pve-conf-to-nix.py" "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" "755"
+do_install "$RUNTIME_DIR/lib/proxnix_authority_render.py" \
+           "$PROXNIX_LIB_DIR/proxnix_authority_render.py" "755"
 do_install "$RUNTIME_DIR/lxc/hooks/nixos-proxnix-common.sh" \
            "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" "644"
 do_install "$RUNTIME_DIR/lib/proxnix-secrets-guest" \
@@ -230,6 +235,7 @@ do_install "$RUNTIME_DIR/lib/proxnix-secrets-guest" \
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
 
@@ -276,12 +282,14 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/share/lxc/hooks/nixos-proxnix-mount
 /usr/share/lxc/hooks/nixos-proxnix-poststop
 /usr/local/lib/proxnix/pve-conf-to-nix.py
+/usr/local/lib/proxnix/proxnix_authority_render.py
 /usr/local/lib/proxnix/nixos-proxnix-common.sh
 /usr/local/lib/proxnix/proxnix-secrets-guest
 /usr/local/lib/proxnix/install-manifest.txt
 /usr/local/lib/proxnix/install-info.txt
 /usr/local/sbin/proxnix-doctor
 /usr/local/sbin/proxnix-create-lxc
+/usr/local/sbin/proxnix-authority-render
 /usr/local/sbin/proxnix-reconcile
 /usr/local/sbin/proxnix-uninstall
 /etc/systemd/system/proxnix-gc.service
@@ -303,6 +311,7 @@ operations.
 
 Installed local commands:
 - proxnix-create-lxc
+- proxnix-authority-render
 - proxnix-doctor
 - proxnix-reconcile
 - proxnix-uninstall

@@ -273,6 +273,17 @@ proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```
 
+### `proxnix-authority-render`
+
+Render the compatibility authority wrapper under `/var/lib/proxnix/authority`
+from the legacy relay cache and local `/etc/pve/lxc/*.conf` files.
+
+```bash
+proxnix-authority-render
+proxnix-authority-render --print-manifest
+proxnix-authority-render --node-name pve1
+```
+
 ### `proxnix-create-lxc`
 
 Create a NixOS LXC on a Proxmox host that is ready for proxnix management.

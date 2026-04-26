@@ -26,8 +26,11 @@ This page maps every important proxnix path by role.
 | `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `proxnix-workstation` from the template |
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/cli/pyproject.toml` |
 | `host/runtime/lib/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
+| `host/runtime/lib/proxnix_authority_render.py` | Renders the generated host authority wrapper |
+| `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
+| `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
 | `host/runtime/nix/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
@@ -102,6 +105,8 @@ These paths are the published host-side state on the Proxmox node. The workstati
 ├── security-policy.nix                host-enforced security policy
 ├── configuration.nix                  NixOS entrypoint
 ├── site.nix                           published site override
+├── authority/                         generated host authority flake wrapper
+├── status/                            reconciler status JSON
 └── containers/
     ├── _template/                     shared managed Nix template snippets
     └── <vmid>/
