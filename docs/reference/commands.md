@@ -266,12 +266,14 @@ Sample output for a healthy relay-backed container:
 Host-side reconciler entrypoint. The phase-1 command installs status plumbing
 and host prerequisite validation. Dry-run renders and evaluates the generated
 authority manifest, then prints planned actions without building or modifying
-containers. Builds, closure seeding, and activation are added in later
-reconciler phases.
+containers. `--build-only --vmid <id>` builds one selected system closure and
+writes `/var/lib/proxnix/status/<vmid>.json` without activating it. Closure
+seeding and activation are added in later reconciler phases.
 
 ```bash
 proxnix-reconcile --dry-run
 proxnix-reconcile --dry-run --vmid 100
+proxnix-reconcile --build-only --vmid 100
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```

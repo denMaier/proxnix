@@ -20,6 +20,7 @@ usage() {
   cat >&2 <<EOF
 Usage:
   ${SELF_NAME} [--dry-run] [--vmid <id>] [--node-name <name>]
+  ${SELF_NAME} --build-only --vmid <id> [--node-name <name>]
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
 
@@ -37,6 +38,15 @@ die() {
 need_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "${cmd} not found"
+}
+
+json_or_null_arg() {
+  local value="$1"
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+  else
+    printf 'null\n'
+  fi
 }
 
 render_authority() {
@@ -83,6 +93,13 @@ take_global_lock() {
   mkdir -p "$LOCK_DIR"
   exec 9>"${LOCK_DIR}/reconcile.lock"
   flock -n 9 || die "another proxnix-reconcile run is active"
+}
+
+take_container_lock() {
+  local vmid="$1"
+  mkdir -p "$LOCK_DIR"
+  exec 8>"${LOCK_DIR}/reconcile-${vmid}.lock"
+  flock -n 8 || die "another proxnix-reconcile run is active for VMID ${vmid}"
 }
 
 status() {
@@ -190,13 +207,89 @@ dry_run() {
   done
 }
 
+write_build_status() {
+  local vmid="$1" hostname="$2" source_revision="$3" desired_system="$4" current_system="$5" previous_system="$6" last_deploy_status="$7"
+  need_cmd jq
+  need_cmd date
+  mkdir -p "$STATUS_DIR"
+
+  local tmp="${STATUS_DIR}/${vmid}.json.tmp"
+  jq -n \
+    --argjson vmid "$vmid" \
+    --arg hostname "$hostname" \
+    --argjson sourceRevision "$(json_or_null_arg "$source_revision")" \
+    --arg desiredSystem "$desired_system" \
+    --arg currentSystem "$current_system" \
+    --arg previousSystem "$previous_system" \
+    --arg lastDeployStatus "${last_deploy_status:-not-run}" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      vmid: $vmid,
+      hostname: $hostname,
+      sourceRevision: $sourceRevision,
+      desiredSystem: $desiredSystem,
+      currentSystem: (if $currentSystem == "" then null else $currentSystem end),
+      previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      lastBuildStatus: "ok",
+      lastDeployStatus: $lastDeployStatus,
+      lastError: null,
+      updatedAt: $updatedAt
+    }' > "$tmp"
+  mv "$tmp" "${STATUS_DIR}/${vmid}.json"
+}
+
+build_only() {
+  local selected_vmid="$1"
+  [[ -n "$selected_vmid" ]] || die "--build-only requires --vmid"
+  need_cmd jq
+  need_cmd nix
+  need_cmd flock
+  take_global_lock
+  take_container_lock "$selected_vmid"
+  render_authority
+
+  local manifest
+  if ! manifest="$(eval_node_manifest)"; then
+    die "failed to evaluate node manifest for ${NODE_NAME}"
+  fi
+  if ! jq -e --arg vmid "$selected_vmid" '.containers[$vmid] != null' >/dev/null <<<"$manifest"; then
+    die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
+  fi
+
+  local system_attr system_path hostname source_revision status_file current_system previous_system last_deploy_status
+  system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
+  [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
+  hostname="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].hostname // ("ct" + $vmid)' <<<"$manifest")"
+  source_revision="$(jq -c --arg vmid "$selected_vmid" '.containers[$vmid].sourceRevision // null' <<<"$manifest")"
+
+  system_path="$(nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}")"
+  [[ -n "$system_path" ]] || die "nix build produced no output path for ${system_attr}"
+
+  status_file="${STATUS_DIR}/${selected_vmid}.json"
+  current_system=""
+  previous_system=""
+  last_deploy_status="not-run"
+  if [[ -f "$status_file" ]]; then
+    current_system="$(jq -r '.currentSystem // empty' "$status_file" 2>/dev/null || true)"
+    previous_system="$(jq -r '.previousSystem // empty' "$status_file" 2>/dev/null || true)"
+    last_deploy_status="$(jq -r '.lastDeployStatus // "not-run"' "$status_file" 2>/dev/null || true)"
+  fi
+
+  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$current_system" "$previous_system" "$last_deploy_status"
+  printf '%s built %s\n' "$selected_vmid" "$system_path"
+}
+
 main() {
-  local vmid="" dry_run=0 rollback=0 show_status=0
+  local vmid="" dry_run=0 build_only=0 rollback=0 show_status=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run)
         dry_run=1
+        shift
+        ;;
+      --build-only)
+        build_only=1
         shift
         ;;
       --vmid)
@@ -243,7 +336,12 @@ main() {
     return
   fi
 
-  die "build/seed/activation support is not implemented yet; use --dry-run"
+  if [[ "$build_only" -eq 1 ]]; then
+    build_only "$vmid"
+    return
+  fi
+
+  die "seed/activation support is not implemented yet; use --dry-run or --build-only --vmid <id>"
 }
 
 main "$@"
