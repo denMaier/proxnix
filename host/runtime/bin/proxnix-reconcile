@@ -251,6 +251,14 @@ write_build_status() {
       desiredSystem: $desiredSystem,
       currentSystem: (if $currentSystem == "" then null else $currentSystem end),
       previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      desired_system: $desiredSystem,
+      current_system: (if $currentSystem == "" then null else $currentSystem end),
+      container_is_local: true,
+      host_has_closure: true,
+      container_has_closure: (if $currentSystem == $desiredSystem then true else false end),
+      shared_cache_has_closure: null,
+      pending_cache_upload: true,
+      protected_by_host_gc_root: true,
       lastBuildStatus: "ok",
       lastDeployStatus: $lastDeployStatus,
       lastError: null,
@@ -273,6 +281,14 @@ write_activation_status() {
     '.desiredSystem = $desiredSystem
       | .currentSystem = $desiredSystem
       | .previousSystem = (if $previousSystem == "" then .previousSystem else $previousSystem end)
+      | .desired_system = $desiredSystem
+      | .current_system = $desiredSystem
+      | .container_is_local = true
+      | .host_has_closure = true
+      | .container_has_closure = true
+      | .shared_cache_has_closure = (.shared_cache_has_closure // null)
+      | .pending_cache_upload = (.pending_cache_upload // true)
+      | .protected_by_host_gc_root = true
       | .lastBuildStatus = "ok"
       | .lastDeployStatus = "ok"
       | .lastError = null
@@ -314,6 +330,14 @@ write_noop_status() {
       desiredSystem: $desiredSystem,
       currentSystem: (if $currentSystem == "" then null else $currentSystem end),
       previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      desired_system: $desiredSystem,
+      current_system: (if $currentSystem == "" then null else $currentSystem end),
+      container_is_local: true,
+      host_has_closure: null,
+      container_has_closure: true,
+      shared_cache_has_closure: null,
+      pending_cache_upload: false,
+      protected_by_host_gc_root: false,
       lastBuildStatus: $lastBuildStatus,
       lastDeployStatus: "noop-current",
       lastError: null,
@@ -348,6 +372,14 @@ write_build_failed_status() {
       desiredSystem: $desiredSystem,
       currentSystem: (if $currentSystem == "" then null else $currentSystem end),
       previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      desired_system: $desiredSystem,
+      current_system: (if $currentSystem == "" then null else $currentSystem end),
+      container_is_local: true,
+      host_has_closure: false,
+      container_has_closure: false,
+      shared_cache_has_closure: null,
+      pending_cache_upload: false,
+      protected_by_host_gc_root: false,
       lastBuildStatus: "failed",
       lastDeployStatus: "build-failed",
       lastError: $lastError,
@@ -367,6 +399,8 @@ write_rollback_status() {
     --arg currentSystem "$rollback_system" \
     --arg rolledBackAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.currentSystem = $currentSystem
+      | .current_system = $currentSystem
+      | .container_has_closure = true
       | .lastDeployStatus = "rollback-ok"
       | .lastError = null
       | .rolledBackAt = $rolledBackAt
