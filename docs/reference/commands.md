@@ -255,10 +255,10 @@ Sample output for a healthy relay-backed container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   INFO  state: running
-  OK    guest file present: /etc/nixos/configuration.nix
+  OK    guest file present: /var/lib/proxnix/build-input/configuration.nix
   OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
   OK    guest container age identity present
-  OK    applied managed config hash matches current hash
+  INFO  legacy managed config hash is informational because reconciler status exists
 ```
 
 ### `proxnix-reconcile`
@@ -272,10 +272,12 @@ falling back to `pct status <vmid>` when the cluster view is unavailable.
 Non-local targets are reported as `skip not-local`.
 
 `--build-only --vmid <id>` builds one selected local system closure and
-writes `/var/lib/proxnix/status/<vmid>.json` without activating it.
-`--seed-only --vmid <id>` imports the recorded desired closure into the target
-CT and verifies `switch-to-configuration` exists. `--activate-only --vmid <id>`
-activates the recorded desired system and verifies `/run/current-system`.
+writes `/var/lib/proxnix/status/<vmid>.json` without activating it. If the
+recorded current system already equals the evaluated desired system, it exits
+as `noop-current` without running `nix build`. `--seed-only --vmid <id>`
+imports the recorded desired closure into a running target CT and verifies
+`switch-to-configuration` exists. `--activate-only --vmid <id>` activates the
+recorded desired system in a running CT and verifies `/run/current-system`.
 `--vmid <id>` is the orchestration command: evaluate desired path, skip as
 `noop-current` if `/run/current-system` already matches, otherwise build, seed,
 activate, verify, and write status. `--recreate-missing` creates a CT only when
@@ -285,17 +287,22 @@ The phase commands are also exposed as separate host commands:
 
 - `proxnix-reconcile-build --vmid <id>`
 - `proxnix-reconcile-seed --vmid <id>`
+- `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`
 - `proxnix-reconcile-activate --vmid <id>`
 
 Use those commands when you want to drive build, seed, and activation separately.
-`proxnix-reconcile --vmid <id>` remains the command that runs all three phases.
+`proxnix-reconcile --vmid <id>` remains the command that runs all three phases
+for a running CT.
 
-Normal convergence is not run by a full-host timer. Container starts trigger
-`proxnix-reconcile@<vmid>.service` from the LXC pre-start hook, and explicit
-operator/workstation flows can run `proxnix-reconcile --vmid <id>` or start the
-template service directly. `proxnix-reconcile.service` remains available for an
-explicit all-local-container run, but no `proxnix-reconcile.timer` is installed
-or enabled.
+Normal convergence is not run by a full-host timer. For a stopped CT start,
+the LXC pre-start hook runs `proxnix-reconcile-build --vmid <id>`, the mount
+hook runs `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`,
+and the guest `proxnix-boot-activate.service` activates the staged
+`next-system` at boot. Explicit operator/workstation flows can still run
+`proxnix-reconcile --vmid <id>` or start `proxnix-reconcile@<id>.service` for a
+running CT. `proxnix-reconcile.service` remains available for an explicit
+all-local-container run, but no `proxnix-reconcile.timer` is installed or
+enabled.
 
 ```bash
 proxnix-reconcile --dry-run
@@ -310,6 +317,7 @@ proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 proxnix-reconcile-build --vmid 100
 proxnix-reconcile-seed --vmid 100
+proxnix-reconcile-seed-offline --vmid 100 --rootfs /run/lxc/100/rootfs
 proxnix-reconcile-activate --vmid 100
 systemctl start proxnix-reconcile@100.service
 ```

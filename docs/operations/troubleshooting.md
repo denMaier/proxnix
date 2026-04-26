@@ -10,15 +10,15 @@ Most proxnix problems can be diagnosed by checking these in order:
    journalctl -t lxc-<vmid>-start -n 50   # raw LXC hook output, also useful with pct start <vmid> --debug
    ```
 
-2. **Guest apply service:** Did the config get applied?
+2. **Guest boot activation:** Did the seeded closure activate?
    ```bash
-   pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b
+   pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
    ```
 
-3. **Config hash:** Are the hashes in sync?
+3. **Reconciler status:** Does the recorded desired system match the guest?
    ```bash
-   pct exec <vmid> -- cat /var/lib/proxnix/runtime/current-config-hash
-   pct exec <vmid> -- cat /var/lib/proxnix/runtime/applied-config-hash
+   proxnix-reconcile --status --vmid <vmid>
+   pct exec <vmid> -- readlink -f /run/current-system
    ```
 
 4. **Doctor:** Run the full health check:
@@ -28,19 +28,20 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 ---
 
-## Automatic first rebuild does not finish
+## Boot activation does not finish
 
-Check the first-boot apply service log:
+Check the boot activation service log:
 
 ```bash
-pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b
+pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
 ```
 
-If you need to retry manually inside the guest:
+If you need to debug manually inside the guest, inspect the host-rendered build
+input snapshot:
 
 ```bash
 pct enter <vmid>
-/root/proxnix-bootstrap.sh
+nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix
 ```
 
 ## First rebuild fails during automatic bootstrap
@@ -192,25 +193,25 @@ This is the expected behavior, not a bug. See [day-2 operations](day-2.md).
 
 ## The guest still uses old config after restart
 
-Inside the guest, compare:
+From the host, compare:
 
 ```bash
-cat /var/lib/proxnix/runtime/current-config-hash
-cat /var/lib/proxnix/runtime/applied-config-hash
+proxnix-reconcile --status --vmid <vmid>
+pct exec <vmid> -- readlink -f /run/current-system
 ```
 
-If they differ, inspect the generated service:
+If they differ, inspect activation:
 
 ```bash
-systemctl status proxnix-apply-config.service
-journalctl -u proxnix-apply-config.service -b
+pct exec <vmid> -- systemctl status proxnix-boot-activate.service
+pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
 ```
 
 Common causes:
 
-- The rebuild failed (check the journal for Nix evaluation errors)
-- Not enough RAM to complete the rebuild
-- Network issues preventing Nix from fetching packages
+- The host build failed before seeding
+- Offline closure seeding failed in the mount hook
+- Boot activation failed and reverted to `previous-system`
 
 ## The hooks seem broken on one node
 

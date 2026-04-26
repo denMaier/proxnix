@@ -4,8 +4,9 @@ Use native services when the application maps well to an existing NixOS module.
 
 The authoritative source lives in your workstation-owned site repo under
 `containers/<vmid>/dropins/*.nix`. `proxnix-publish` syncs those files to the
-node-local relay cache, and the guest imports them from
-`/var/lib/proxnix/config/managed/dropins/` during activation.
+node-local relay cache, and the Proxmox host imports them while building the
+guest system closure. A copied debug snapshot is available inside the guest at
+`/var/lib/proxnix/build-input/`.
 
 ## Quick example
 
@@ -32,7 +33,7 @@ proxnix-publish --vmid <vmid>
 pct restart <vmid>
 ```
 
-After the restart and guest rebuild, nginx is serving on guest port `8080`.
+After the restart and boot activation, nginx is serving on guest port `8080`.
 
 ## Main input file
 

@@ -2,7 +2,7 @@
 
 This page covers normal operational tasks after initial bootstrap.
 
-> **Key principle:** proxnix stages config only at container startup. Every host-side change requires a container restart to take effect. There is no live-reload mechanism — this is by design.
+> **Key principle:** proxnix builds and stages desired systems from the host. Every host-side change requires a container restart or explicit host reconcile to take effect. There is no live-reload mechanism — this is by design.
 
 ## Change networking or SSH keys
 
@@ -23,16 +23,17 @@ Edit one of these on the host:
 - `dropins/*.nix`
 - `dropins/*.{sh,py}`
 
-Then restart the container so proxnix re-stages and syncs the managed tree:
+Then restart the container so proxnix rebuilds if needed, refreshes the debug
+build-input snapshot, seeds the closure, and activates it on boot:
 
 ```bash
 pct restart <vmid>
 ```
 
-Watch the rebuild:
+Watch activation:
 
 ```bash
-pct exec <vmid> -- journalctl -u proxnix-apply-config.service -b -f
+pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b -f
 ```
 
 ## Change container workloads
@@ -93,7 +94,8 @@ Sample output for a healthy container:
 
 [ct 100]
   OK    ostype=nixos
-  OK    applied managed config hash matches current hash
+  OK    guest file present: /var/lib/proxnix/build-input/configuration.nix
+  INFO  legacy managed config hash is informational because reconciler status exists
   OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
 
 Summary: 0 fail(s), 0 warning(s)

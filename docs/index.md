@@ -10,7 +10,7 @@ Proxnix manages NixOS LXC containers from the Proxmox host.
 > workflows are usable, but the hosted Manager Web and NixOS deployment module
 > are new and should be tested in a lab or non-critical environment first.
 
-Instead of logging into each guest and hand-editing its configuration, proxnix renders the desired guest state on the host, stages it under `/run/proxnix/<vmid>/`, copies and binds the managed pieces into the guest root filesystem during container startup, and lets the guest apply the new configuration only when the managed hash changed.
+Instead of logging into each guest and hand-editing its production configuration, proxnix renders the desired guest system on the host, builds the NixOS closure on the Proxmox node, seeds that closure into the container, and activates the exact system path. The guest receives secrets, helper/file drop-ins, runtime markers, and a read-only debug snapshot of the host build input.
 
 ## Who this is for
 
@@ -45,14 +45,14 @@ There are four main layers:
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
 2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
 3. **Host authority and build**: the Proxmox node renders a local authority wrapper, evaluates the desired CT system, and builds the NixOS closure
-4. **Host-side activation**: the CT start path or an explicit `proxnix-reconcile` run seeds the closure into the CT and activates the exact system path
+4. **Seed and activation**: a stopped CT is seeded during the LXC mount hook and activates the exact system path on guest boot; a running CT can be seeded and activated explicitly with `proxnix-reconcile`
 
 ## The guest is not a black box
 
 While the host is the *source of truth* for your declarative config, the guest is a **full NixOS system**.
 
-- **Experimentation loop**: You can `pct enter <vmid>` for debugging, but normal proxnix convergence is owned by `proxnix-reconcile` on the Proxmox host.
-- **Persistent state**: Managed configuration is overwritten on restart, but **guest-local state is persistent**. Databases in `/var/lib/`, the Nix store, and any unmanaged files like `/etc/nixos/local.nix` survive reboots.
+- **Experimentation loop**: You can `pct enter <vmid>` for debugging and point a manual rebuild at `/var/lib/proxnix/build-input/configuration.nix`, but normal proxnix builds and seeding are owned by the Proxmox host.
+- **Persistent state**: The build-input snapshot is refreshed on restart, but **guest-local state is persistent**. Databases in `/var/lib/`, the Nix store, and any unmanaged files like `/etc/nixos/local.nix` survive reboots.
 - **Live debugging**: You can install temporary packages with `nix-shell -p` or check logs with `journalctl` just like on any other NixOS host.
 
 ```
@@ -64,27 +64,27 @@ While the host is the *source of truth* for your declarative config, the guest i
 │       ▼                                                         │
 │  ┌─────────────────────┐    ┌──────────────────────────────┐    │
 │  │  pre-start hook      │───▶│  /run/proxnix/<vmid>/        │    │
-│  │  render desired state│    │  rendered/ secrets/ runtime/ │    │
+│  │  render + build      │    │  rendered/ secrets/ runtime/ │    │
 │  └─────────────────────┘    └──────────┬───────────────────┘    │
 │                                         │                       │
 │                                         ▼                       │
 │                              ┌─────────────────────┐            │
 │                              │  mount hook          │            │
-│                              │  sync into rootfs    │            │
+│                              │  sync + seed rootfs  │            │
 │                              └──────────┬──────────┘            │
 │                                         │                       │
 ├─────────────────────────────────────────┼───────────────────────┤
 │                     Guest (NixOS LXC)   │                       │
 │                                         ▼                       │
 │                              ┌─────────────────────┐            │
-│                              │  compare config hash │            │
-│                              │  changed? ──▶ rebuild│            │
-│                              │  same?   ──▶ skip    │            │
+│                              │  boot activate unit  │            │
+│                              │  switch next-system  │            │
+│                              │  verify or revert    │            │
 │                              └─────────────────────┘            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> **Important design decision:** proxnix stages config at container startup only, not while the container is running. After changing any host-side file, you must restart the CT for the change to take effect.
+> **Important design decision:** proxnix stages build inputs at container startup only, not while the container is running. After changing any host-side file, restart the CT or run an explicit host reconcile for the change to take effect.
 
 ## Read this first
 

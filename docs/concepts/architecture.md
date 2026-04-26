@@ -1,17 +1,17 @@
 # Architecture
 
-proxnix is built around a strict host-render / guest-apply split.
+proxnix is built around a strict host-build / guest-activate split.
 
 ## The core idea
 
-The Proxmox host always decides what the guest should look like before the guest starts running. The guest only receives already-rendered state and applies it when necessary.
+The Proxmox host always decides what the guest should look like before the guest starts running. The guest receives an already-built system closure, activates that exact path, and keeps a copied build-input snapshot only for debugging.
 
 That gives proxnix these properties:
 
 - the host remains the control plane
 - the guest remains a normal NixOS system
-- container startup can stage config, secrets, systemd units, and helper scripts in one place
-- repeated starts are cheap because the guest compares hashes before rebuilding
+- container startup can stage secrets, helper scripts, file drop-ins, and debug build inputs in one place
+- repeated starts are cheap because the guest does not rebuild during normal convergence
 
 ## Lifecycle
 
@@ -25,27 +25,27 @@ That gives proxnix these properties:
   │     Run pve-conf-to-nix.py                   │
   │     Stage secrets, scripts                    │
   │     Compute diagnostic config hash            │
+  │     Build desired NixOS closure if needed     │
   │     Output: /run/proxnix/<vmid>/              │
   └──────────────────────┬──────────────────────┘
                          │
                          ▼
   ┌─────────────────────────────────────────────┐
   │  2. mount hook (host, writes to guest rootfs)│
-  │     Copy /etc/nixos/configuration.nix         │
-  │     Bind /var/lib/proxnix/config/managed/     │
+  │     Rsync build-input debug snapshot          │
   │     Copy root-only secrets into /var/lib/proxnix/secrets/ │
+  │     Seed desired closure into stopped rootfs   │
   │     Remove legacy guest rebuild service       │
   │     Reconcile Podman secrets.json             │
   └──────────────────────┬──────────────────────┘
                          │
                          ▼
   ┌─────────────────────────────────────────────┐
-  │  3. host reconciler                          │
-  │     Evaluate authority manifest              │
-  │     Build desired NixOS closure              │
-  │     Seed closure into CT                     │
+  │  3. guest boot activation                     │
+  │     Read /var/lib/proxnix/runtime/next-system │
   │     Activate exact system path               │
   │     Verify /run/current-system               │
+  │     Revert to previous-system on failure      │
   └─────────────────────────────────────────────┘
 ```
 
@@ -75,11 +75,10 @@ Important stage subtrees:
 
 | Path | Contents |
 |------|----------|
-| `bind/config/{configuration.nix,managed/...}` | Desired NixOS config tree hashed by the host |
+| `bind/config/{configuration.nix,managed/...}` | Desired NixOS config tree used by the host build and copied into the guest debug snapshot |
 | `bind/runtime/{current-config-hash,vmid}` | Diagnostic markers |
 | `bind/secrets/` | Compiled encrypted per-container runtime store plus staged identity |
 | `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
-| `copy/etc/nixos/configuration.nix` | Copied guest entrypoint |
 
 The pre-start hook copies the node-local managed Nix files, runs
 `pve-conf-to-nix.py`, pulls in host-side drop-ins, stages the compiled
@@ -89,18 +88,17 @@ the rendered managed tree.
 ### 3. Mount hook syncs the stage into the guest rootfs
 
 The mount hook is the only proxnix hook that writes into the guest filesystem.
-`/etc/nixos/configuration.nix` and guest runtime helpers are copied into place.
-The managed Nix tree under
-`/var/lib/proxnix/config/managed/` plus diagnostic runtime markers under
-`/var/lib/proxnix/runtime/` are wired in from the stage read-only. Secret files
-are copied into the guest as root-owned regular files.
+It does not install `/etc/nixos/configuration.nix` and does not bind a managed
+Nix tree into the guest. Instead it `rsync`s the rendered host build input into
+`/var/lib/proxnix/build-input/` as a non-authoritative debug snapshot. Runtime
+markers under `/var/lib/proxnix/runtime/` are wired in from the stage read-only.
+Secret files are copied into the guest as root-owned regular files.
 
 It exposes the staged assets into places such as:
 
 | Stage source | Guest destination |
 |-------------|-------------------|
-| `copy/etc/nixos/configuration.nix` | `/etc/nixos/configuration.nix` |
-| `bind/config/managed/` | `/var/lib/proxnix/config/managed/` |
+| `bind/config/` | `/var/lib/proxnix/build-input/` |
 | `bind/runtime/current-config-hash` | `/var/lib/proxnix/runtime/current-config-hash` |
 | `bind/runtime/vmid` | `/var/lib/proxnix/runtime/vmid` |
 | `copy/runtime/bin/*` | `/var/lib/proxnix/runtime/bin/` |
@@ -108,7 +106,7 @@ It exposes the staged assets into places such as:
 
 It also removes legacy `proxnix-apply-config` service files if they are present.
 
-### 4. Host reconciler activates the desired system
+### 4. Reconciler phases activate the desired system
 
 `proxnix-reconcile` runs on the Proxmox node. It renders the authority wrapper,
 evaluates cluster-level `proxnix.containers` through the node view at
@@ -119,6 +117,21 @@ local CTs are built on the Proxmox node, protected with a host GC root, imported
 into the CT, activated by exact system path, verified through
 `/run/current-system`, and summarized under `/var/lib/proxnix/status/`.
 
+The phases are split into commands:
+
+- `proxnix-reconcile-build` evaluates and builds the desired closure.
+- `proxnix-reconcile-seed` imports the closure into a running CT.
+- `proxnix-reconcile-seed-offline` copies the closure into a mounted stopped CT rootfs and writes `/var/lib/proxnix/runtime/next-system`.
+- `proxnix-reconcile-activate` switches a running CT to the recorded desired system.
+
+For a stopped CT, start convergence follows the LXC lifecycle. The pre-start
+hook renders guest inputs and runs the build phase. The mount hook seeds the
+closure into the rootfs. The guest `proxnix-boot-activate.service` consumes
+`next-system`, runs `switch-to-configuration switch`, verifies
+`/run/current-system`, and reverts to `previous-system` if activation fails.
+For a running CT, explicit reconcile commands keep using `pct exec` for seed
+and activation; there is no guest activation timer.
+
 Shared Nix cache access is acceleration, not a runtime dependency. If a stale
 system can be built locally while the cache is unavailable, deployment can
 continue and the closure is marked for a later `proxnix-cache-reconcile` upload.
@@ -128,30 +141,28 @@ live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status
 files remain the operator-facing status surface.
 
 Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
-hook stages guest inputs and then asynchronously starts
-`proxnix-reconcile@<vmid>.service`; that service waits briefly for the CT to
-become runnable and then reconciles only that VMID. Operators and workstation
-deploys can still trigger explicit reconciliation with `proxnix-reconcile
---vmid <id>` or `systemctl start proxnix-reconcile@<id>.service`. The only
-remaining proxnix timers are for stale stage-dir cleanup and shared-cache upload
-retry.
+hook no longer starts a full reconcile service. Operators and workstation
+deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
+<id>` or `systemctl start proxnix-reconcile@<id>.service` when they want the
+running-CT path. The only remaining proxnix timers are for stale stage-dir
+cleanup and shared-cache upload retry.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.
 
 ## Persistent state and experimentation
 
-While `/etc/nixos/configuration.nix` and `/var/lib/proxnix/config/managed/`
-are host-managed and refreshed on restart, proxnix **does not touch other
-parts of the guest rootfs**.
+While `/var/lib/proxnix/build-input/` is refreshed on restart as a debug
+snapshot, proxnix **does not use guest Nix config for normal convergence** and
+does not touch unrelated parts of the guest rootfs.
 
 - **`/var/lib/`**: Databases and application data stay persistent.
-- **`/etc/nixos/local.nix`**: This is an unmanaged sandbox for debugging. Normal proxnix convergence does not evaluate config inside the guest.
+- **`/etc/nixos/local.nix`**: This is an unmanaged sandbox for debugging. A manual `nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix` can use it, but normal proxnix convergence does not evaluate config inside the guest.
 - **Experimental changes**: Commit final configuration to the workstation-owned site repo, publish it, then run `proxnix deploy` or `proxnix-reconcile` on the host.
 
-## What `configuration.nix` imports
+## What the build-input snapshot imports
 
-The guest entrypoint is intentionally small. It imports:
+The debug snapshot entrypoint is intentionally small. It imports:
 
 - `base.nix` — install-layer guest baseline: LXC adjustments, age setup, login summary
 - `common.nix` — proxnix option module for the shared operator baseline
@@ -161,7 +172,7 @@ The guest entrypoint is intentionally small. It imports:
 - every top-level managed drop-in `*.nix`
 - optional `/etc/nixos/local.nix`
 
-That last file is the escape hatch for guest-only experimentation. proxnix does not manage it.
+That last file is the escape hatch for guest-only experimentation. proxnix does not manage it and does not use it for host-side production builds.
 
 `base.nix`, `common.nix`, and `security-policy.nix` are separate on purpose:
 

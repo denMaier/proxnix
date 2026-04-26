@@ -35,10 +35,11 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
 | `host/runtime/bin/proxnix-reconcile-seed` | Host-side seed phase command |
+| `host/runtime/bin/proxnix-reconcile-seed-offline` | Stopped-CT rootfs seed phase command |
 | `host/runtime/bin/proxnix-reconcile-activate` | Host-side activate phase command |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
 | `host/runtime/systemd/proxnix-reconcile.service` | Explicit all-local-container reconcile service |
-| `host/runtime/systemd/proxnix-reconcile@.service` | Event/explicit per-VMID reconcile service triggered by LXC pre-start |
+| `host/runtime/systemd/proxnix-reconcile@.service` | Explicit per-VMID running-CT reconcile service |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
 | `host/runtime/nix/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
@@ -169,6 +170,7 @@ specific to the shell-installer path.
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build            build phase command
 ├── proxnix-reconcile-seed             seed phase command
+├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
 ├── proxnix-reconcile-activate         activate phase command
 ├── proxnix-reconciler-state           local state journal helper
 └── proxnix-uninstall                  local uninstall helper
@@ -176,10 +178,11 @@ specific to the shell-installer path.
 
 ## Stage directory on the host (tmpfs)
 
-Created by the pre-start hook. The mount hook binds the managed config/runtime
-markers from here, copies guest-visible files into place, copies secret files
-into the guest as root-owned regular files, and the post-stop hook removes the
-tree after the container stops:
+Created by the pre-start hook. The mount hook copies the rendered build input
+from here into a guest debug snapshot with `rsync`, binds runtime markers,
+copies guest-visible helper files into place, copies secret files into the
+guest as root-owned regular files, and the post-stop hook removes the tree
+after the container stops:
 
 ```text
 /run/proxnix/<vmid>/
@@ -204,19 +207,18 @@ tree after the container stops:
     ├── runtime/
     │   └── bin/
     └── etc/
-        └── nixos/configuration.nix
 ```
 
 ## Managed paths inside the guest
 
 ```text
 /etc/nixos/
-├── configuration.nix                  copied host-managed entrypoint
 └── local.nix                          guest-only escape hatch (unmanaged)
 
 /var/lib/proxnix/
-├── config/
-│   └── managed/                       host-managed modules (read-only bind mount)
+├── build-input/                       rsync-copied debug snapshot, not activation authority
+│   ├── configuration.nix
+│   └── managed/
 │       ├── base.nix
 │       ├── common.nix
 │       ├── security-policy.nix
@@ -238,9 +240,6 @@ tree after the container stops:
 /etc/secrets/.ids/                     Podman secret ID→name mappings
 /var/lib/containers/storage/secrets/
 └── secrets.json                       Podman secret registry
-
-/root/
-└── proxnix-bootstrap.sh              manual recovery helper for first rebuild
 ```
 
 ## Workstation paths

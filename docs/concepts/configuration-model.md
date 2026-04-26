@@ -74,9 +74,9 @@ containers/
       app.nix
 ```
 
-The marker file just selects which shared template tree proxnix stages into
-`/var/lib/proxnix/config/managed/_template/` for that guest. Your container drop-in still
-imports it explicitly, for example:
+The marker file just selects which shared template tree proxnix includes in the
+host build input for that guest. Your container drop-in still imports it
+explicitly, for example:
 
 ```nix
 imports = [ ../_template/postgres-common ];
@@ -99,8 +99,10 @@ import any shared container module layer, such as `quadlet-nix`, from
 
 - `proxmox.nix`
 
-The shared entrypoint imports them from `/var/lib/proxnix/config/managed/`, after the install
-layer (`base.nix`, `common.nix`) and optional `site.nix`.
+The shared entrypoint imports them from the host-rendered build input, after
+the install layer (`base.nix`, `common.nix`) and optional `site.nix`. A copied
+debug snapshot of that input is available inside a running guest at
+`/var/lib/proxnix/build-input/`.
 
 ## When to use which mechanism
 

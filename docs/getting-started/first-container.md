@@ -143,25 +143,28 @@ pct start 100
 
 At this point proxnix has already:
 
-1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/` and triggered `proxnix-reconcile@100.service`
-2. Run the **mount hook** — copied `/etc/nixos/configuration.nix`, bound the managed tree under `/var/lib/proxnix/config/managed/`, and copied root-only secret files into `/var/lib/proxnix/secrets/`
-3. Removed any legacy guest-side `proxnix-apply-config` service files
+1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/` and ran `proxnix-reconcile-build --vmid 100`
+2. Run the **mount hook** — copied the rendered build input into `/var/lib/proxnix/build-input/` with `rsync`, copied root-only secret files into `/var/lib/proxnix/secrets/`, and ran `proxnix-reconcile-seed-offline --vmid 100 --rootfs <mounted-rootfs>`
+3. Run the guest **`proxnix-boot-activate.service`** — activated the staged `next-system` and verified `/run/current-system`
+4. Removed any legacy guest-side `proxnix-apply-config` service files
 
-The Proxmox node now owns activation through `proxnix-reconcile`.
+The Proxmox node owns builds and seeding. A stopped container activates the
+preseeded closure during boot; a running container can still be reconciled
+explicitly from the host.
 
 ## 4. Deploy the desired system
 
-If you want to force convergence immediately instead of waiting for the
-pre-start-triggered service, run the host reconciler for the CT:
+If the CT is already running and you want to force convergence immediately, run
+the host reconciler for the CT:
 
 ```bash
 proxnix-reconcile --vmid 100
 ```
 
 The host evaluates the generated authority, builds the desired NixOS closure,
-imports it into the CT without guest networking, activates the exact system
-path, and records status under `/var/lib/proxnix/status/100.json`. The same
-per-VMID path is also available as `systemctl start
+imports it into the running CT without guest networking, activates the exact
+system path, and records status under `/var/lib/proxnix/status/100.json`. The
+same per-VMID running-CT path is also available as `systemctl start
 proxnix-reconcile@100.service`.
 
 If the CT is already running the evaluated desired system, the command exits as
@@ -170,22 +173,22 @@ shared cache is unavailable but the host can build the desired closure locally,
 the CT can still converge and the host will retry cache upload later through
 `proxnix-cache-reconcile.timer`.
 
-If the automatic apply fails, check:
+If activation fails, check:
 
-- Is there enough RAM? (at least 2 GB)
-- Does the container have internet access? (`ping 1.1.1.1`)
-- Can DNS resolve? (`ping nixos.org`)
+- Did the host build complete? (`proxnix-reconcile --status --vmid 100`)
+- Did offline seeding complete in the mount hook logs?
+- Did `proxnix-boot-activate.service` revert to `previous-system`?
 
-You can retry manually inside the guest if needed:
+You can test the copied build input manually inside the guest if needed:
 
 ```bash
 pct enter 100
-/root/proxnix-bootstrap.sh
+nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix
 ```
 
 ### What you should see when done
 
-When you log in after the first boot apply finishes, you'll see:
+When you log in after boot activation finishes, you'll see:
 
 - The proxnix MOTD with managed paths and useful commands
 - A login summary showing IP, memory, disk, and basic runtime status
@@ -241,10 +244,10 @@ Expected output for a healthy container:
   OK    guest container age identity present
   OK    guest container age identity is a root-owned 0600 regular file
   ...
-  OK    guest file present: /etc/nixos/configuration.nix
-  OK    guest file present: /var/lib/proxnix/config/managed/base.nix
+  OK    guest file present: /var/lib/proxnix/build-input/configuration.nix
+  OK    guest file present: /var/lib/proxnix/build-input/managed/base.nix
   ...
-  OK    applied managed config hash matches current hash
+  INFO  legacy managed config hash is informational because reconciler status exists
 
 Summary: 0 fail(s), 0 warning(s)
 ```

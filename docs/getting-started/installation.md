@@ -40,6 +40,7 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/sbin/proxnix-reconcile`
 - `/usr/local/sbin/proxnix-reconcile-build`
 - `/usr/local/sbin/proxnix-reconcile-seed`
+- `/usr/local/sbin/proxnix-reconcile-seed-offline`
 - `/usr/local/sbin/proxnix-reconcile-activate`
 - `/usr/local/sbin/proxnix-cache-reconcile`
 - `proxnix-gc.service` and `proxnix-gc.timer`
