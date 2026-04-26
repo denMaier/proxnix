@@ -239,6 +239,29 @@ write_build_status() {
   mv "$tmp" "${STATUS_DIR}/${vmid}.json"
 }
 
+write_activation_status() {
+  local vmid="$1" desired_system="$2" previous_system="$3"
+  need_cmd jq
+  need_cmd date
+  local status_file="${STATUS_DIR}/${vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${vmid}; run --build-only first"
+  local tmp="${status_file}.tmp"
+  jq \
+    --arg desiredSystem "$desired_system" \
+    --arg previousSystem "$previous_system" \
+    --arg activatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.desiredSystem = $desiredSystem
+      | .currentSystem = $desiredSystem
+      | .previousSystem = (if $previousSystem == "" then .previousSystem else $previousSystem end)
+      | .lastBuildStatus = "ok"
+      | .lastDeployStatus = "ok"
+      | .lastError = null
+      | .activatedAt = $activatedAt
+      | .updatedAt = $activatedAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
 update_deploy_status() {
   local vmid="$1" deploy_status="$2" error="$3"
   need_cmd jq
@@ -255,6 +278,24 @@ update_deploy_status() {
       | .updatedAt = $updatedAt' \
     "$status_file" > "$tmp"
   mv "$tmp" "$status_file"
+}
+
+build_manifest_system() {
+  local selected_vmid="$1" manifest="$2"
+  local system_attr
+  system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
+  [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
+  nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
+}
+
+manifest_hostname() {
+  local selected_vmid="$1" manifest="$2"
+  jq -r --arg vmid "$selected_vmid" '.containers[$vmid].hostname // ("ct" + $vmid)' <<<"$manifest"
+}
+
+manifest_source_revision() {
+  local selected_vmid="$1" manifest="$2"
+  jq -c --arg vmid "$selected_vmid" '.containers[$vmid].sourceRevision // null' <<<"$manifest"
 }
 
 build_only() {
@@ -275,14 +316,11 @@ build_only() {
     die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
   fi
 
-  local system_attr system_path hostname source_revision status_file current_system previous_system last_deploy_status
-  system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
-  [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
-  hostname="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].hostname // ("ct" + $vmid)' <<<"$manifest")"
-  source_revision="$(jq -c --arg vmid "$selected_vmid" '.containers[$vmid].sourceRevision // null' <<<"$manifest")"
-
-  system_path="$(nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}")"
-  [[ -n "$system_path" ]] || die "nix build produced no output path for ${system_attr}"
+  local system_path hostname source_revision status_file current_system previous_system last_deploy_status
+  hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
+  source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
+  system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
+  [[ -n "$system_path" ]] || die "nix build produced no output path for VMID ${selected_vmid}"
 
   status_file="${STATUS_DIR}/${selected_vmid}.json"
   current_system=""
@@ -334,6 +372,109 @@ seed_only() {
 
   update_deploy_status "$selected_vmid" "seeded" ""
   printf '%s seeded %s\n' "$selected_vmid" "$desired_system"
+}
+
+ensure_container_running_for_exec() {
+  local vmid="$1" state=""
+  need_cmd pct
+  need_cmd sleep
+  need_cmd awk
+  need_cmd seq
+  state="$(pct status "$vmid" 2>/dev/null | awk '{ print $2 }' || true)"
+  if [[ "$state" != "running" ]]; then
+    pct start "$vmid"
+  fi
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if pct exec "$vmid" -- true >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  die "VMID ${vmid} did not become ready for pct exec"
+}
+
+current_system() {
+  local vmid="$1"
+  pct exec "$vmid" -- readlink -f /run/current-system 2>/dev/null || true
+}
+
+activate_system() {
+  local vmid="$1" system_path="$2"
+  pct exec "$vmid" -- "${system_path}/bin/switch-to-configuration" switch
+}
+
+verify_system() {
+  local vmid="$1" system_path="$2" current
+  current="$(current_system "$vmid" | tr -d '\r\n')"
+  [[ "$current" == "$system_path" ]]
+}
+
+reconcile_selected() {
+  local selected_vmid="$1"
+  [[ -n "$selected_vmid" ]] || die "full reconcile currently requires --vmid"
+  need_cmd jq
+  need_cmd nix
+  need_cmd flock
+  need_cmd pct
+  take_global_lock
+  take_container_lock "$selected_vmid"
+  render_authority
+
+  local manifest
+  if ! manifest="$(eval_node_manifest)"; then
+    die "failed to evaluate node manifest for ${NODE_NAME}"
+  fi
+  if ! jq -e --arg vmid "$selected_vmid" '.containers[$vmid] != null' >/dev/null <<<"$manifest"; then
+    die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
+  fi
+
+  local system_path hostname source_revision status_file live_current previous_system prior_previous
+  hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
+  source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
+  system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
+  [[ -n "$system_path" ]] || die "nix build produced no output path"
+
+  ensure_container_running_for_exec "$selected_vmid"
+  live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
+  status_file="${STATUS_DIR}/${selected_vmid}.json"
+  prior_previous=""
+  if [[ -f "$status_file" ]]; then
+    prior_previous="$(jq -r '.previousSystem // empty' "$status_file" 2>/dev/null || true)"
+  fi
+
+  if [[ "$live_current" == "$system_path" ]]; then
+    write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$system_path" "$prior_previous" "ok"
+    printf '%s noop current system matches desired\n' "$selected_vmid"
+    return
+  fi
+
+  previous_system="$prior_previous"
+  if [[ -n "$live_current" && "$live_current" != "$system_path" ]]; then
+    previous_system="$live_current"
+  fi
+  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$live_current" "$previous_system" "not-run"
+
+  local deploy_output
+  if ! deploy_output="$(seed_closure "$selected_vmid" "$system_path" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${deploy_output}"
+    printf '%s seed failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! deploy_output="$(activate_system "$selected_vmid" "$system_path" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "failed" "activation failed: ${deploy_output}"
+    printf '%s activation failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! verify_system "$selected_vmid" "$system_path"; then
+    update_deploy_status "$selected_vmid" "failed" "activation verification failed"
+    printf '%s activation verification failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+
+  write_activation_status "$selected_vmid" "$system_path" "$previous_system"
+  printf '%s activated %s\n' "$selected_vmid" "$system_path"
 }
 
 main() {
@@ -407,7 +548,7 @@ main() {
     return
   fi
 
-  die "activation support is not implemented yet; use --dry-run, --build-only, or --seed-only"
+  reconcile_selected "$vmid"
 }
 
 main "$@"

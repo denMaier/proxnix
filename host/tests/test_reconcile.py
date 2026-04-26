@@ -299,6 +299,123 @@ exit 2
             self.assertEqual(status["lastDeployStatus"], "failed")
             self.assertIn("closure seed failed", status["lastError"])
 
+    def test_full_reconcile_activates_and_records_previous_system(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            marker = Path(tmp) / "activated"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":{"commit":"abc123"},"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/built-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    if [ -f {marker} ]; then
+      printf '%s\\n' /nix/store/built-system-101
+    else
+      printf '%s\\n' /nix/store/old-system-101
+    fi
+    ;;
+  nix-store)
+    cat >/dev/null
+    ;;
+  test)
+    exit 0
+    ;;
+  /nix/store/built-system-101/bin/switch-to-configuration)
+    touch {marker}
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 activated /nix/store/built-system-101")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["desiredSystem"], "/nix/store/built-system-101")
+            self.assertEqual(status["currentSystem"], "/nix/store/built-system-101")
+            self.assertEqual(status["previousSystem"], "/nix/store/old-system-101")
+            self.assertEqual(status["lastDeployStatus"], "ok")
+            self.assertIsNone(status["lastError"])
+
 
 if __name__ == "__main__":
     unittest.main()
