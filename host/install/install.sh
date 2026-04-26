@@ -32,6 +32,9 @@
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
+#   /usr/local/sbin/proxnix-reconcile-build     — host-side build phase
+#   /usr/local/sbin/proxnix-reconcile-seed      — host-side seed phase
+#   /usr/local/sbin/proxnix-reconcile-activate  — host-side activate phase
 #   /usr/local/sbin/proxnix-reconciler-state    — reconciler SQLite journal helper
 #   /usr/local/sbin/proxnix-cache-reconcile     — shared cache upload reconciler
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
@@ -266,6 +269,9 @@ do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" 
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile-activate" "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconciler-state" "$PROXNIX_SBIN_DIR/proxnix-reconciler-state" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-cache-reconcile" "$PROXNIX_SBIN_DIR/proxnix-cache-reconcile" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
@@ -332,6 +338,9 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-create-lxc
 /usr/local/sbin/proxnix-authority-render
 /usr/local/sbin/proxnix-reconcile
+/usr/local/sbin/proxnix-reconcile-build
+/usr/local/sbin/proxnix-reconcile-seed
+/usr/local/sbin/proxnix-reconcile-activate
 /usr/local/sbin/proxnix-reconciler-state
 /usr/local/sbin/proxnix-cache-reconcile
 /usr/local/sbin/proxnix-uninstall
@@ -359,6 +368,9 @@ Installed local commands:
 - proxnix-authority-render
 - proxnix-doctor
 - proxnix-reconcile
+- proxnix-reconcile-build
+- proxnix-reconcile-seed
+- proxnix-reconcile-activate
 - proxnix-reconciler-state
 - proxnix-cache-reconcile
 - proxnix-uninstall

@@ -8,6 +8,9 @@ from pathlib import Path
 
 
 RECONCILE = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile"
+RECONCILE_BUILD = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-build"
+RECONCILE_SEED = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-seed"
+RECONCILE_ACTIVATE = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-activate"
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -451,6 +454,92 @@ exit 2
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
             self.assertEqual(status["lastDeployStatus"], "failed")
             self.assertIn("closure seed failed", status["lastError"])
+
+    def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
+        self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
+        self.assertIn("--seed-only", RECONCILE_SEED.read_text(encoding="utf-8"))
+        self.assertIn("--activate-only", RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
+
+    def test_activate_only_activates_recorded_desired_system(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            marker = Path(tmp) / "activated"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/desired-system-101",
+                        "currentSystem": "/nix/store/old-system-101",
+                        "previousSystem": None,
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "seeded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    if [ -f {marker} ]; then
+      printf '%s\\n' /nix/store/desired-system-101
+    else
+      printf '%s\\n' /nix/store/old-system-101
+    fi
+    ;;
+  /nix/store/desired-system-101/bin/switch-to-configuration)
+    touch {marker}
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE_ACTIVATE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 activated /nix/store/desired-system-101")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["currentSystem"], "/nix/store/desired-system-101")
+            self.assertEqual(status["previousSystem"], "/nix/store/old-system-101")
+            self.assertEqual(status["lastDeployStatus"], "ok")
 
     def test_full_reconcile_activates_and_records_previous_system(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

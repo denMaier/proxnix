@@ -35,6 +35,12 @@ class HostPackagingTests(unittest.TestCase):
 
         self.assertIn("systemd/proxnix-reconcile.service", package_common)
         self.assertIn("systemd/proxnix-reconcile@.service", package_common)
+        self.assertIn("bin/proxnix-reconcile-build", package_common)
+        self.assertIn("bin/proxnix-reconcile-seed", package_common)
+        self.assertIn("bin/proxnix-reconcile-activate", package_common)
+        self.assertIn("proxnix-reconcile-build", install_sh)
+        self.assertIn("proxnix-reconcile-seed", install_sh)
+        self.assertIn("proxnix-reconcile-activate", install_sh)
         self.assertIn('do_systemd_service "proxnix-reconcile"', install_sh)
         self.assertIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)

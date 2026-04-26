@@ -173,6 +173,9 @@ check_host_files() {
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
       "$PROXNIX_SBIN_DIR/proxnix-authority-render" \
       "$PROXNIX_SBIN_DIR/proxnix-reconcile" \
+      "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" \
+      "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed" \
+      "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
       "$NIXLXC_DIR/security-policy.nix" \

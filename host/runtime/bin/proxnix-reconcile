@@ -24,6 +24,7 @@ Usage:
   ${SELF_NAME} [--dry-run] [--vmid <id>] [--node-name <name>]
   ${SELF_NAME} --build-only --vmid <id> [--node-name <name>]
   ${SELF_NAME} --seed-only --vmid <id>
+  ${SELF_NAME} --activate-only --vmid <id>
   ${SELF_NAME} --vmid <id> --recreate-missing
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
@@ -720,6 +721,99 @@ verify_system() {
   [[ "$current" == "$system_path" ]]
 }
 
+reconcile_build_phase() {
+  local selected_vmid="$1" manifest="$2" desired_system="$3" hostname="$4" source_revision="$5" live_current="$6" previous_system="$7"
+  local build_output built_system
+  if ! build_output="$(build_manifest_system "$selected_vmid" "$manifest" 2>&1)"; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build failed: ${build_output}"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  built_system="$(tr -d '\r\n' <<<"$build_output")"
+  if [[ -z "$built_system" ]]; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced no output path"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if [[ "$built_system" != "$desired_system" ]]; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced ${built_system}, expected ${desired_system}"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  protect_host_closure "$selected_vmid" "$desired_system"
+  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
+}
+
+reconcile_seed_phase() {
+  local selected_vmid="$1" desired_system="$2"
+  local seed_output
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "seed"
+    printf '%s lost locality\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! seed_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${seed_output}"
+    printf '%s seed failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  update_deploy_status "$selected_vmid" "seeded" ""
+}
+
+reconcile_activate_phase() {
+  local selected_vmid="$1" desired_system="$2" previous_system="$3"
+  local deploy_output
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "activation"
+    printf '%s lost locality\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! deploy_output="$(activate_system "$selected_vmid" "$desired_system" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "failed" "activation failed: ${deploy_output}"
+    printf '%s activation failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! verify_system "$selected_vmid" "$desired_system"; then
+    update_deploy_status "$selected_vmid" "failed" "activation verification failed"
+    printf '%s activation verification failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "current status update"
+    printf '%s lost locality\n' "$selected_vmid" >&2
+    return 2
+  fi
+  write_activation_status "$selected_vmid" "$desired_system" "$previous_system"
+}
+
+activate_only() {
+  local selected_vmid="$1"
+  [[ -n "$selected_vmid" ]] || die "--activate-only requires --vmid"
+  need_cmd jq
+  need_cmd flock
+  need_cmd pct
+  take_global_lock
+  take_container_lock "$selected_vmid"
+  if ! selected_container_is_local_or_skip "$selected_vmid"; then
+    return
+  fi
+
+  local status_file="${STATUS_DIR}/${selected_vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${selected_vmid}; run --build-only first"
+  local desired_system previous_system live_current
+  desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"
+  previous_system="$(jq -r '.previousSystem // empty' "$status_file")"
+  [[ -n "$desired_system" ]] || die "status for VMID ${selected_vmid} does not contain desiredSystem"
+
+  ensure_container_running_for_exec "$selected_vmid"
+  live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
+  if [[ -n "$live_current" && "$live_current" != "$desired_system" ]]; then
+    previous_system="$live_current"
+  fi
+  reconcile_activate_phase "$selected_vmid" "$desired_system" "$previous_system"
+  printf '%s activated %s\n' "$selected_vmid" "$desired_system"
+}
+
 reconcile_selected() {
   local selected_vmid="$1" recreate_missing="$2"
   [[ -n "$selected_vmid" ]] || die "full reconcile currently requires --vmid"
@@ -743,7 +837,7 @@ reconcile_selected() {
     return
   fi
 
-  local desired_system built_system hostname source_revision status_file live_current previous_system prior_previous
+  local desired_system hostname source_revision status_file live_current previous_system prior_previous
   hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
   source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
   desired_system="$(manifest_system "$selected_vmid" "$manifest")"
@@ -767,59 +861,9 @@ reconcile_selected() {
   if [[ -n "$live_current" && "$live_current" != "$desired_system" ]]; then
     previous_system="$live_current"
   fi
-  local build_output
-  if ! build_output="$(build_manifest_system "$selected_vmid" "$manifest" 2>&1)"; then
-    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build failed: ${build_output}"
-    printf '%s build failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  built_system="$(tr -d '\r\n' <<<"$build_output")"
-  if [[ -z "$built_system" ]]; then
-    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced no output path"
-    printf '%s build failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if [[ "$built_system" != "$desired_system" ]]; then
-    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced ${built_system}, expected ${desired_system}"
-    printf '%s build failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  protect_host_closure "$selected_vmid" "$desired_system"
-  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
-
-  local deploy_output
-  if ! is_local_container "$selected_vmid"; then
-    update_lost_locality_status "$selected_vmid" "seed"
-    printf '%s lost locality\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if ! deploy_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
-    update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${deploy_output}"
-    printf '%s seed failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if ! is_local_container "$selected_vmid"; then
-    update_lost_locality_status "$selected_vmid" "activation"
-    printf '%s lost locality\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if ! deploy_output="$(activate_system "$selected_vmid" "$desired_system" 2>&1)"; then
-    update_deploy_status "$selected_vmid" "failed" "activation failed: ${deploy_output}"
-    printf '%s activation failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if ! verify_system "$selected_vmid" "$desired_system"; then
-    update_deploy_status "$selected_vmid" "failed" "activation verification failed"
-    printf '%s activation verification failed\n' "$selected_vmid" >&2
-    return 2
-  fi
-  if ! is_local_container "$selected_vmid"; then
-    update_lost_locality_status "$selected_vmid" "current status update"
-    printf '%s lost locality\n' "$selected_vmid" >&2
-    return 2
-  fi
-
-  write_activation_status "$selected_vmid" "$desired_system" "$previous_system"
+  reconcile_build_phase "$selected_vmid" "$manifest" "$desired_system" "$hostname" "$source_revision" "$live_current" "$previous_system"
+  reconcile_seed_phase "$selected_vmid" "$desired_system"
+  reconcile_activate_phase "$selected_vmid" "$desired_system" "$previous_system"
   printf '%s activated %s\n' "$selected_vmid" "$desired_system"
 }
 
@@ -864,7 +908,7 @@ rollback_container() {
 }
 
 main() {
-  local vmid="" dry_run=0 build_only=0 seed_only=0 rollback=0 show_status=0 recreate_missing=0
+  local vmid="" dry_run=0 build_only=0 seed_only=0 activate_only=0 rollback=0 show_status=0 recreate_missing=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -878,6 +922,10 @@ main() {
         ;;
       --seed-only)
         seed_only=1
+        shift
+        ;;
+      --activate-only)
+        activate_only=1
         shift
         ;;
       --recreate-missing)
@@ -940,6 +988,11 @@ main() {
 
   if [[ "$seed_only" -eq 1 ]]; then
     seed_only "$vmid"
+    return
+  fi
+
+  if [[ "$activate_only" -eq 1 ]]; then
+    activate_only "$vmid"
     return
   fi
 

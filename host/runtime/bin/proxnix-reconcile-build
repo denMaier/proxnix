@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Build the desired system closure for one proxnix-managed CT.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${SCRIPT_DIR}/proxnix-reconcile" --build-only "$@"
