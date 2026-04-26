@@ -28,3 +28,7 @@ nav:
   - Reference:
       - Commands: reference/commands.md
       - Files and Directories: reference/files-and-directories.md
+  - Design Notes:
+      - Host Nix Reconciler Pivot Plan: ai/HOST_NIX_RECONCILER_PIVOT_PLAN.md
+      - Host Review Fix Plan: ai/HOST_REVIEW_FIX_PLAN.md
+      - Reconciler State Model Plan: ai/RECONCILER_STATE_MODEL_PLAN.md
