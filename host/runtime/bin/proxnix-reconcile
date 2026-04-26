@@ -427,6 +427,25 @@ update_deploy_status() {
   mv "$tmp" "$status_file"
 }
 
+update_lost_locality_status() {
+  local vmid="$1" phase="$2"
+  need_cmd jq
+  need_cmd date
+  local status_file="${STATUS_DIR}/${vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${vmid}; run --build-only first"
+  local tmp="${status_file}.tmp"
+  jq \
+    --arg phase "$phase" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.local = false
+      | .container_is_local = false
+      | .lastDeployStatus = "lost-locality"
+      | .lastError = ("container locality lost before " + $phase)
+      | .updatedAt = $updatedAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
 build_manifest_system() {
   local selected_vmid="$1" manifest="$2"
   local system_attr
@@ -750,9 +769,19 @@ reconcile_selected() {
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
 
   local deploy_output
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "seed"
+    printf '%s lost locality\n' "$selected_vmid" >&2
+    return 2
+  fi
   if ! deploy_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
     update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${deploy_output}"
     printf '%s seed failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "activation"
+    printf '%s lost locality\n' "$selected_vmid" >&2
     return 2
   fi
   if ! deploy_output="$(activate_system "$selected_vmid" "$desired_system" 2>&1)"; then
@@ -763,6 +792,11 @@ reconcile_selected() {
   if ! verify_system "$selected_vmid" "$desired_system"; then
     update_deploy_status "$selected_vmid" "failed" "activation verification failed"
     printf '%s activation verification failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! is_local_container "$selected_vmid"; then
+    update_lost_locality_status "$selected_vmid" "current status update"
+    printf '%s lost locality\n' "$selected_vmid" >&2
     return 2
   fi
 

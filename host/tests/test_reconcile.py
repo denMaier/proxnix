@@ -792,6 +792,232 @@ esac
             self.assertTrue(status["pending_cache_upload"])
             self.assertTrue(status["protected_by_host_gc_root"])
 
+    def test_full_reconcile_stops_when_locality_is_lost_before_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            status_calls = Path(tmp) / "status-calls"
+            import_marker = Path(tmp) / "import-called"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/desired-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/desired-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                "#!/bin/sh\ncase \"$1\" in --query) printf '%s\\n' /nix/store/desired-system-101 ;; --export) printf exported ;; *) exit 2 ;; esac\n",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  count=0
+  [ -f {status_calls} ] && count=$(cat {status_calls})
+  count=$((count + 1))
+  printf '%s\\n' "$count" > {status_calls}
+  if [ "$count" -ge 3 ]; then
+    exit 1
+  fi
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    printf '%s\\n' /nix/store/old-system-101
+    ;;
+  nix-store)
+    touch {import_marker}
+    exit 99
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), "101 lost locality")
+            self.assertFalse(import_marker.exists(), "seed should not start after locality loss")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertFalse(status["local"])
+            self.assertFalse(status["container_is_local"])
+            self.assertEqual(status["lastDeployStatus"], "lost-locality")
+            self.assertIn("before seed", status["lastError"])
+
+    def test_full_reconcile_stops_when_locality_is_lost_before_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            status_calls = Path(tmp) / "status-calls"
+            activation_marker = Path(tmp) / "activation-called"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/desired-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/desired-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/desired-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  count=0
+  [ -f {status_calls} ] && count=$(cat {status_calls})
+  count=$((count + 1))
+  printf '%s\\n' "$count" > {status_calls}
+  if [ "$count" -ge 4 ]; then
+    exit 1
+  fi
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    printf '%s\\n' /nix/store/old-system-101
+    ;;
+  nix-store)
+    cat >/dev/null
+    exit 0
+    ;;
+  test)
+    exit 0
+    ;;
+  /nix/store/desired-system-101/bin/switch-to-configuration)
+    touch {activation_marker}
+    exit 99
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), "101 lost locality")
+            self.assertFalse(activation_marker.exists(), "activation should not run after locality loss")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertFalse(status["container_is_local"])
+            self.assertEqual(status["lastDeployStatus"], "lost-locality")
+            self.assertIn("before activation", status["lastError"])
+
     def test_recreate_missing_calls_create_lxc_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
