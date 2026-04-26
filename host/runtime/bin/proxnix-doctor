@@ -345,11 +345,11 @@ check_container() {
   fi
 
   for guest_file in \
-    /etc/nixos/configuration.nix \
-    /var/lib/proxnix/config/managed/base.nix \
-    /var/lib/proxnix/config/managed/common.nix \
-    /var/lib/proxnix/config/managed/security-policy.nix \
-    /var/lib/proxnix/config/managed/proxmox.nix \
+    /var/lib/proxnix/build-input/configuration.nix \
+    /var/lib/proxnix/build-input/managed/base.nix \
+    /var/lib/proxnix/build-input/managed/common.nix \
+    /var/lib/proxnix/build-input/managed/security-policy.nix \
+    /var/lib/proxnix/build-input/managed/proxmox.nix \
     /var/lib/proxnix/runtime/vmid \
     /var/lib/proxnix/runtime/current-config-hash \
     /var/lib/proxnix/runtime/bin/proxnix-secrets
@@ -361,10 +361,10 @@ check_container() {
     fi
   done
 
-  if guest_test "$vmid" -L /etc/nixos/configuration.nix >/dev/null 2>&1; then
-    fail "/etc/nixos/configuration.nix is a symlink; expected a copied regular file"
+  if guest_test "$vmid" -L /var/lib/proxnix/build-input/configuration.nix >/dev/null 2>&1; then
+    fail "/var/lib/proxnix/build-input/configuration.nix is a symlink; expected an rsync-copied regular file"
   else
-    ok "/etc/nixos/configuration.nix is materialized as a regular file"
+    ok "/var/lib/proxnix/build-input/configuration.nix is materialized as a regular file"
   fi
 
   local guest_vmid
