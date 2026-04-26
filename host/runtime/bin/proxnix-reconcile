@@ -90,7 +90,9 @@ eval_node_manifest() {
   need_cmd nix
   local attr
   attr="$(node_attr_fragment)"
-  nix eval --json "${AUTHORITY_DIR}#${attr}"
+  local lock_args=()
+  [[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
+  nix eval "${lock_args[@]}" --json "${AUTHORITY_DIR}#${attr}"
 }
 
 is_local_container() {
@@ -463,7 +465,9 @@ build_manifest_system() {
   local system_attr
   system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
   [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
-  nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
+  local lock_args=()
+  [[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
+  nix build "${lock_args[@]}" --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
 }
 
 protect_host_closure() {

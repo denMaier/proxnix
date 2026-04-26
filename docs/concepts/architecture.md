@@ -137,11 +137,13 @@ and activation; there is no guest activation timer.
 
 Build reuse is optimized per host. Each host should keep a golden-template
 build warm so container-specific builds mostly reuse already-realized store
-paths. When the workstation publishes a site `flake.lock`, the host carries it
-into `/var/lib/proxnix/authority/flake.lock`, so golden and CT builds resolve
-the same nixpkgs revision. Build failures before seeding leave the CT's current
-generation untouched. Local coordination details such as build observations,
-attempts, and GC protection live in
+paths. `flake.lock` is optional. When the workstation publishes one, the host
+carries it into `/var/lib/proxnix/authority/flake.lock`, so golden and CT builds
+resolve the same pinned nixpkgs revision. When no lock is published, host
+builds run with `--no-write-lock-file` and follow the configured nixpkgs branch
+at build time. Build failures before seeding leave the CT's current generation
+untouched. Local coordination details such as build observations, attempts, and
+GC protection live in
 `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status files remain
 the operator-facing status surface.
 

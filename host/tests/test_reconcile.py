@@ -70,7 +70,56 @@ printf '%s\n' /nix/store/golden-template-system
                 "#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel",
                 nix_args_file.read_text(encoding="utf-8"),
             )
+            self.assertIn("--no-write-lock-file", nix_args_file.read_text(encoding="utf-8"))
             self.assertEqual(os.readlink(gcroots / "golden-template"), "/nix/store/golden-template-system")
+
+    def test_golden_template_build_uses_published_lock_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            authority = root / "authority"
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (root / "flake.lock").write_text('{"nodes":{}}\n', encoding="utf-8")
+
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+printf '%s\n' "$*" > "$PROXNIX_NIX_ARGS_FILE"
+printf '%s\n' /nix/store/golden-template-system
+""",
+            )
+
+            env = os.environ.copy()
+            nix_args_file = Path(tmp) / "nix-args"
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_AUTHORITY_DIR": str(authority),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_NODE_NAME": "pve1",
+                    "PROXNIX_NIX_ARGS_FILE": str(nix_args_file),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE_BUILD_GOLDEN)],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((authority / "flake.lock").read_text(encoding="utf-8"), '{"nodes":{}}\n')
+            self.assertNotIn("--no-write-lock-file", nix_args_file.read_text(encoding="utf-8"))
 
     def test_dry_run_prints_planned_actions_for_selected_vmid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -530,7 +530,9 @@ are ignored.
 If the site has a committed `flake.lock`, publish also copies it to
 `/var/lib/proxnix/flake.lock`. The host authority renderer then carries that
 lock into `/var/lib/proxnix/authority/flake.lock`, making the golden-template
-build and every CT build use the same locked Nix inputs.
+build and every CT build use the same locked Nix inputs. If no `flake.lock` is
+published, host builds stay in rolling mode and use `--no-write-lock-file`, so
+the generated authority does not silently pin itself.
 
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 

@@ -88,7 +88,9 @@ done
 need_cmd nix
 render_authority
 
-system_path="$(nix build --print-out-paths "${AUTHORITY_DIR}#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel")"
+lock_args=()
+[[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
+system_path="$(nix build "${lock_args[@]}" --print-out-paths "${AUTHORITY_DIR}#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel")"
 system_path="$(tr -d '\r\n' <<<"$system_path")"
 [[ -n "$system_path" ]] || die "nix build produced no output path"
 protect_golden_closure "$system_path"
