@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+from subprocess import CompletedProcess
 
 from proxnix_workstation.cli import main as cli_main
 from proxnix_workstation.manager_api import attach_secret_group, build_config_state, build_status
@@ -15,6 +16,45 @@ from proxnix_workstation.manager_api import delete_container_bundle, detach_secr
 
 
 class ManagerApiTests(unittest.TestCase):
+    def test_reconcile_cli_runs_remote_reconcile_for_selected_vmid(self) -> None:
+        class FakeSSHSession:
+            commands: list[tuple[str, str]] = []
+
+            def __init__(self, config, host, temp_root=None) -> None:
+                self.host = host
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def run(self, command: str, *, check: bool = True, capture_output: bool = True):
+                self.commands.append((self.host, command))
+                return CompletedProcess(args=["ssh", self.host, command], returncode=0, stdout="ok\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = root / "config"
+            config.write_text("PROXNIX_HOSTS='root@node1 root@node2'\n", encoding="utf-8")
+
+            output = StringIO()
+            with patch("proxnix_workstation.ssh_ops.SSHSession", FakeSSHSession):
+                with redirect_stdout(output):
+                    exit_code = cli_main(["--config", str(config), "reconcile", "--vmid", "120", "--json"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                FakeSSHSession.commands,
+                [
+                    ("root@node1", "proxnix-reconcile --vmid 120"),
+                    ("root@node2", "proxnix-reconcile --vmid 120"),
+                ],
+            )
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["data"]["vmid"], "120")
+
     def test_build_status_reports_site_containers_and_groups(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

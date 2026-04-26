@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import shlex
 import tempfile
@@ -48,6 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "sync",
             "diff",
             "publish",
+            "reconcile",
             "deploy",
             "deploy-status",
             "doctor",
@@ -195,6 +198,58 @@ def _build_deploy_status_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope")
     parser.add_argument("hosts", nargs="*", help="Remote hosts, defaults to configured hosts")
     return parser
+
+
+def _build_reconcile_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="proxnix reconcile", description="Run remote host-side reconciliation")
+    parser.add_argument("--vmid", help="Restrict reconcile to one VMID")
+    parser.add_argument("--host", action="append", dest="option_hosts", help="Remote host; may be repeated")
+    parser.add_argument("--dry-run", action="store_true", help="Render and plan without building or modifying containers")
+    parser.add_argument("--json", action="store_true", help="Emit a structured JSON envelope")
+    parser.add_argument("hosts", nargs="*", help="Remote hosts, defaults to configured hosts")
+    return parser
+
+
+def _run_reconcile(args: argparse.Namespace) -> int:
+    from .publish_cli import PublishOptions, run_remote_reconcile
+    from .ssh_ops import SSHSession
+
+    config = load_workstation_config(args.config)
+    hosts = [*(args.option_hosts or []), *list(args.hosts)] if (args.option_hosts or args.hosts) else list(config.hosts)
+    if not hosts:
+        raise ProxnixWorkstationError("no publish hosts configured")
+    if args.vmid is not None and not args.vmid.isdigit():
+        raise ProxnixWorkstationError(f"container VMID must be numeric: {args.vmid}")
+
+    options = PublishOptions(dry_run=args.dry_run, target_vmid=args.vmid, reconcile=True)
+    results: list[dict[str, object]] = []
+    exit_code = 0
+    output = io.StringIO()
+    stream_context = contextlib.redirect_stdout(output) if args.json else contextlib.nullcontext()
+    with stream_context:
+        with tempfile.TemporaryDirectory(prefix="proxnix-reconcile.") as temp_dir:
+            temp_root = Path(temp_dir)
+            for host in hosts:
+                with SSHSession(config, host, temp_root=temp_root) as session:
+                    result = run_remote_reconcile(session, options)
+                    result["host"] = host
+                    if int(result["exitCode"]) != 0 and exit_code == 0:
+                        exit_code = int(result["exitCode"])
+                    results.append(result)
+
+    if args.json:
+        print_json(
+            ok(
+                {
+                    "exitCode": exit_code,
+                    "dryRun": args.dry_run,
+                    "vmid": args.vmid,
+                    "hosts": results,
+                    "output": output.getvalue().strip(),
+                }
+            )
+        )
+    return exit_code
 
 
 def _run_deploy_status(args: argparse.Namespace) -> int:
@@ -371,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
             status_args = _build_deploy_status_parser().parse_args(_strip_remainder_prefix(args.args))
             status_args.config = args.config
             return _run_deploy_status(status_args)
+
+        if args.command == "reconcile":
+            reconcile_args = _build_reconcile_parser().parse_args(_strip_remainder_prefix(args.args))
+            reconcile_args.config = args.config
+            return _run_reconcile(reconcile_args)
 
         if args.command in {"sync", "diff", "publish", "deploy"}:
             from .publish_cli import main as publish_main
