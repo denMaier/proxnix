@@ -885,6 +885,131 @@ esac
             self.assertEqual(status["lastDeployStatus"], "ok")
             self.assertIsNone(status["lastError"])
 
+    def test_full_reconcile_without_vmid_only_processes_running_local_containers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            marker = Path(tmp) / "activated"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            (root / "containers" / "102").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+            (pve / "102.conf").write_text("ostype: nixos\nhostname: ct102\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","system":"/nix/store/built-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}},"102":{"vmid":102,"hostname":"ct102","system":"/nix/store/built-system-102","systemAttr":"nixosConfigurations.ct102.config.system.build.toplevel","pve":{"hostname":"ct102"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/built-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/dep-a /nix/store/built-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  case "$2" in
+    101) printf '%s\\n' 'status: running' ;;
+    102) printf '%s\\n' 'status: stopped' ;;
+    *) exit 2 ;;
+  esac
+  exit 0
+fi
+if [ "$1" != "exec" ] || [ "$2" != "101" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    if [ -f {marker} ]; then
+      printf '%s\\n' /nix/store/built-system-101
+    else
+      printf '%s\\n' /nix/store/old-system-101
+    fi
+    ;;
+  nix-store)
+    cat >/dev/null
+    ;;
+  test)
+    exit 0
+    ;;
+  /nix/store/built-system-101/bin/switch-to-configuration)
+    touch {marker}
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE)],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    "101 activated /nix/store/built-system-101",
+                    "102 skip stopped",
+                ],
+            )
+            self.assertTrue((status_dir / "101.json").is_file())
+            self.assertFalse((status_dir / "102.json").exists())
+
     def test_full_reconcile_skips_build_when_current_system_matches_desired(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"

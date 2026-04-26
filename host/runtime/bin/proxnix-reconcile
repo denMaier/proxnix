@@ -529,6 +529,12 @@ rootfs_disk_gb() {
   printf '%s\n' "$size"
 }
 
+container_state() {
+  local vmid="$1"
+  command -v pct >/dev/null 2>&1 || return 1
+  pct status "$vmid" 2>/dev/null | awk '{ print $2 }' || true
+}
+
 build_only() {
   local selected_vmid="$1"
   [[ -n "$selected_vmid" ]] || die "--build-only requires --vmid"
@@ -878,6 +884,40 @@ reconcile_selected() {
   printf '%s activated %s\n' "$selected_vmid" "$desired_system"
 }
 
+reconcile_all_running() {
+  local recreate_missing="$1"
+  need_cmd jq
+  need_cmd pct
+  need_cmd awk
+  render_authority
+
+  local manifest
+  if ! manifest="$(eval_node_manifest)"; then
+    die "failed to evaluate node manifest for ${NODE_NAME}"
+  fi
+
+  local vmids=()
+  mapfile -t vmids < <(jq -r '.containers | keys[]' <<<"$manifest" | sort -n)
+  if [[ ${#vmids[@]} -eq 0 ]]; then
+    printf 'no managed containers in proxnix.nodes.%s\n' "$NODE_NAME"
+    return
+  fi
+
+  local vmid state
+  for vmid in "${vmids[@]}"; do
+    if ! is_local_container "$vmid"; then
+      printf '%s skip not-local\n' "$vmid"
+      continue
+    fi
+    state="$(container_state "$vmid" | tr -d '\r\n')"
+    if [[ "$state" != "running" ]]; then
+      printf '%s skip %s\n' "$vmid" "${state:-not-running}"
+      continue
+    fi
+    reconcile_selected "$vmid" "$recreate_missing"
+  done
+}
+
 rollback_container() {
   local selected_vmid="$1"
   [[ -n "$selected_vmid" ]] || die "--rollback requires --vmid"
@@ -1007,7 +1047,11 @@ main() {
     return
   fi
 
-  reconcile_selected "$vmid" "$recreate_missing"
+  if [[ -n "$vmid" ]]; then
+    reconcile_selected "$vmid" "$recreate_missing"
+  else
+    reconcile_all_running "$recreate_missing"
+  fi
 }
 
 main "$@"
