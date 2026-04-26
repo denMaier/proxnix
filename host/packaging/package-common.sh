@@ -24,8 +24,11 @@ HOST_PACKAGE_FILES=(
   "lib/proxnix-secrets-guest:/usr/local/lib/proxnix/proxnix-secrets-guest:0755"
   "bin/proxnix-doctor:/usr/local/sbin/proxnix-doctor:0755"
   "bin/proxnix-create-lxc:/usr/local/sbin/proxnix-create-lxc:0755"
+  "bin/proxnix-reconcile:/usr/local/sbin/proxnix-reconcile:0755"
   "systemd/proxnix-gc.service:/etc/systemd/system/proxnix-gc.service:0644"
   "systemd/proxnix-gc.timer:/etc/systemd/system/proxnix-gc.timer:0644"
+  "systemd/proxnix-reconcile.service:/etc/systemd/system/proxnix-reconcile.service:0644"
+  "systemd/proxnix-reconcile.timer:/etc/systemd/system/proxnix-reconcile.timer:0644"
   "nix/base.nix:/var/lib/proxnix/base.nix:0644"
   "nix/common.nix:/var/lib/proxnix/common.nix:0644"
   "nix/security-policy.nix:/var/lib/proxnix/security-policy.nix:0644"
@@ -98,7 +101,9 @@ install_host_payload() {
     "${stage_root}/usr/share/doc/${PACKAGE_NAME}"
   install -d -m 0755 \
     "${stage_root}/var/lib/proxnix" \
-    "${stage_root}/var/lib/proxnix/containers"
+    "${stage_root}/var/lib/proxnix/authority" \
+    "${stage_root}/var/lib/proxnix/containers" \
+    "${stage_root}/var/lib/proxnix/status"
   install -d -m 0700 \
     "${stage_root}/var/lib/proxnix/private" \
     "${stage_root}/var/lib/proxnix/private/shared" \
@@ -120,12 +125,15 @@ This package installs the proxnix Proxmox-host runtime:
 
 - LXC config fragments and hooks
 - proxnix host helpers
+- the proxnix host reconciler
 - shared managed NixOS baseline files
-- the proxnix GC systemd timer
+- proxnix GC and reconciler systemd timers
 
 Published relay data remains outside the package payload:
 
 - /var/lib/proxnix/site.nix
+- /var/lib/proxnix/authority/
+- /var/lib/proxnix/status/
 - /var/lib/proxnix/containers/
 - /var/lib/proxnix/private/
 - /etc/proxnix/host_relay_identity

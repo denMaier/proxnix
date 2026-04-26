@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# proxnix-reconcile -- host-side reconciler entrypoint.
+#
+# Phase 1 only installs the command and validates host prerequisites. Later
+# phases fill in authority rendering, manifest evaluation, build, seed, and
+# activation.
+
+set -euo pipefail
+
+SELF_NAME="${0##*/}"
+NIXLXC_DIR="${PROXNIX_DIR:-/var/lib/proxnix}"
+AUTHORITY_DIR="${PROXNIX_AUTHORITY_DIR:-${NIXLXC_DIR}/authority}"
+STATUS_DIR="${PROXNIX_STATUS_DIR:-${NIXLXC_DIR}/status}"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  ${SELF_NAME} [--dry-run] [--vmid <id>]
+  ${SELF_NAME} --status [--vmid <id>]
+  ${SELF_NAME} --rollback --vmid <id>
+
+Host-side reconciliation is installed, but manifest/build/activation support is
+not implemented in this phase yet.
+EOF
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+status() {
+  local vmid=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --vmid)
+        [[ $# -ge 2 ]] || die "--vmid requires a value"
+        vmid="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown status argument: $1"
+        ;;
+    esac
+  done
+
+  if [[ -n "$vmid" ]]; then
+    [[ "$vmid" =~ ^[0-9]+$ ]] || die "invalid VMID: $vmid"
+    local path="${STATUS_DIR}/${vmid}.json"
+    [[ -f "$path" ]] || die "status not found for VMID ${vmid}: ${path}"
+    cat "$path"
+    printf '\n'
+    return
+  fi
+
+  if [[ ! -d "$STATUS_DIR" ]]; then
+    printf '[]\n'
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -s '.' "${STATUS_DIR}"/*.json 2>/dev/null || printf '[]\n'
+  else
+    local first=1 file
+    printf '['
+    for file in "${STATUS_DIR}"/*.json; do
+      [[ -f "$file" ]] || continue
+      if [[ "$first" -eq 0 ]]; then
+        printf ','
+      fi
+      first=0
+      cat "$file"
+    done
+    printf ']\n'
+  fi
+}
+
+main() {
+  local vmid="" dry_run=0 rollback=0 show_status=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      --vmid)
+        [[ $# -ge 2 ]] || die "--vmid requires a value"
+        vmid="$2"
+        [[ "$vmid" =~ ^[0-9]+$ ]] || die "invalid VMID: $vmid"
+        shift 2
+        ;;
+      --rollback)
+        rollback=1
+        shift
+        ;;
+      --status)
+        show_status=1
+        shift
+        status "$@"
+        return
+        ;;
+      -h|--help)
+        usage
+        return
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+
+  if [[ "$rollback" -eq 1 && -z "$vmid" ]]; then
+    die "--rollback requires --vmid"
+  fi
+
+  if [[ "$show_status" -eq 1 ]]; then
+    return
+  fi
+
+  if [[ "$dry_run" -eq 1 ]]; then
+    printf 'authority: %s\n' "$AUTHORITY_DIR"
+    printf 'status: %s\n' "$STATUS_DIR"
+    if [[ -n "$vmid" ]]; then
+      printf '%s reconcile unavailable: manifest support is not implemented yet\n' "$vmid"
+    else
+      printf 'reconcile unavailable: manifest support is not implemented yet\n'
+    fi
+    return 1
+  fi
+
+  die "host reconciler is installed, but manifest/build/activation support is not implemented yet"
+}
+
+main "$@"

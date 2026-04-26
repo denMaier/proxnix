@@ -14,6 +14,7 @@ Useful flags:
 |------|---------|
 | `--dry-run` | Preview what would be installed without writing anything |
 | `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
+| `--install-nix` | Install the Nix daemon when `nix` is missing |
 
 ### `host/deploy/ansible/install.yml`
 
@@ -235,6 +236,10 @@ proxnix-doctor --all
 proxnix-doctor --host-only
 ```
 
+Host-only checks include the Nix daemon, `nix-command`/flakes support, `/nix`
+free space, the authority and status directories, and the reconciler command
+plus timer unit.
+
 Exit codes:
 
 | Code | Meaning |
@@ -254,6 +259,18 @@ Sample output for a healthy relay-backed container:
   OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
   OK    guest container age identity present
   OK    applied managed config hash matches current hash
+```
+
+### `proxnix-reconcile`
+
+Host-side reconciler entrypoint. The phase-1 command installs status plumbing
+and host prerequisite validation; manifest evaluation, builds, closure seeding,
+and activation are added in later reconciler phases.
+
+```bash
+proxnix-reconcile --dry-run
+proxnix-reconcile --status
+proxnix-reconcile --status --vmid 100
 ```
 
 ### `proxnix-create-lxc`

@@ -7,10 +7,11 @@
 # /var/lib/proxnix on every node that should relay it.
 #
 # Usage:
-#   host/install.sh [--dry-run] [--force-shared]
+#   host/install.sh [--dry-run] [--force-shared] [--install-nix]
 #
 # --force-shared  deprecated compatibility flag; node-local config is written
 #                 on every install run
+# --install-nix   install the Nix daemon package when nix is missing
 #
 # Per-node runtime assets:
 #   /usr/share/lxc/config/nixos.common.conf     — auto-included for ostype=nixos
@@ -25,6 +26,7 @@
 #   /usr/local/lib/proxnix/install-manifest.txt — installed-file manifest
 #   /usr/local/lib/proxnix/install-info.txt     — local install metadata
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
+#   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
 #
 # Node-local proxnix data:
@@ -33,6 +35,8 @@
 #   /var/lib/proxnix/security-policy.nix        — shared host-enforced security policy
 #   /var/lib/proxnix/configuration.nix          — shared NixOS entrypoint
 #   /var/lib/proxnix/site.nix                   — optional site/data-repo override
+#   /var/lib/proxnix/authority/                 — host-owned authority wrapper
+#   /var/lib/proxnix/status/                    — reconciler status files
 #   /var/lib/proxnix/containers/                — per-container config relay cache
 #   /var/lib/proxnix/private/shared/            — shared encrypted secrets
 #   /var/lib/proxnix/private/containers/        — per-container encrypted secrets
@@ -46,6 +50,8 @@ PROXNIX_SBIN_DIR="/usr/local/sbin"
 SYSTEMD_UNIT_DIR="/etc/systemd/system"
 NIXLXC_DIR="/var/lib/proxnix"
 NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_AUTHORITY_DIR="/var/lib/proxnix/authority"
+PROXNIX_STATUS_DIR="/var/lib/proxnix/status"
 PROXNIX_STAGE_BASE_DIR="/run/proxnix"
 PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 PROXNIX_INSTALL_MANIFEST="${PROXNIX_LIB_DIR}/install-manifest.txt"
@@ -53,10 +59,13 @@ PROXNIX_INSTALL_INFO="${PROXNIX_LIB_DIR}/install-info.txt"
 
 DRY_RUN=0
 FORCE_SHARED=0
+INSTALL_NIX=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run)     DRY_RUN=1 ;;
         --force-shared) FORCE_SHARED=1 ;;
+        --install-nix) INSTALL_NIX=1 ;;
+        *) echo "ERROR: unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
 
@@ -125,6 +134,48 @@ do_write_text() {
     log "$dest"
 }
 
+install_nix_if_missing() {
+    if command -v nix >/dev/null 2>&1; then
+        log "nix present: $(command -v nix)"
+        return
+    fi
+
+    if [[ $INSTALL_NIX -ne 1 ]]; then
+        die "nix not found — install Nix daemon on this Proxmox host first, or rerun with --install-nix"
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] install Nix daemon with the official installer"
+        return
+    fi
+
+    command -v curl >/dev/null 2>&1 || die "curl not found; install curl or install Nix manually"
+    sh <(curl -L https://nixos.org/nix/install) --daemon --yes
+}
+
+ensure_nix_flakes() {
+    local nix_conf="/etc/nix/nix.conf"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] ensure nix-command and flakes are enabled in $nix_conf"
+        return
+    fi
+
+    mkdir -p /etc/nix
+    touch "$nix_conf"
+    if grep -Eq '^[[:space:]]*experimental-features[[:space:]]*=.*(^|[[:space:]])nix-command([[:space:]]|$).*' "$nix_conf" \
+        && grep -Eq '^[[:space:]]*experimental-features[[:space:]]*=.*(^|[[:space:]])flakes([[:space:]]|$).*' "$nix_conf"; then
+        log "nix-command and flakes already enabled"
+        return
+    fi
+
+    if grep -Eq '^[[:space:]]*experimental-features[[:space:]]*=' "$nix_conf"; then
+        sed -i -E '/^[[:space:]]*experimental-features[[:space:]]*=/ s/$/ nix-command flakes/' "$nix_conf"
+    else
+        printf '\nexperimental-features = nix-command flakes\n' >> "$nix_conf"
+    fi
+    log "enabled nix-command and flakes in $nix_conf"
+}
+
 # ── guards ────────────────────────────────────────────────────────────────────
 
 [[ "$(id -u)" -eq 0 ]] || die "Must be run as root."
@@ -135,6 +186,10 @@ echo ""
 echo "proxnix install"
 echo "==============="
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — no files will be written)"
+
+action "Host Nix runtime"
+install_nix_if_missing
+ensure_nix_flakes
 
 # ── LXC config files ──────────────────────────────────────────────────────────
 # Auto-included by lxc-start for every ostype=nixos container.
@@ -175,6 +230,7 @@ do_install "$RUNTIME_DIR/lib/proxnix-secrets-guest" \
 action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
@@ -184,6 +240,9 @@ do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755
 
 action "GC timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-gc"
+
+action "Reconciler timer → $SYSTEMD_UNIT_DIR/"
+do_systemd_timer "proxnix-reconcile"
 
 # ── Node-local proxnix data → /var/lib/proxnix/ ──────────────────────────────
 # Keep only data here, not runnable scripts. This repo owns the install layer;
@@ -197,6 +256,8 @@ if [[ $FORCE_SHARED -eq 1 ]]; then
 fi
 do_mkdir "$NIXLXC_DIR" "0755"
 do_mkdir "$NIXLXC_PRIV_DIR" "0700"
+do_mkdir "$PROXNIX_AUTHORITY_DIR" "0755"
+do_mkdir "$PROXNIX_STATUS_DIR" "0755"
 do_mkdir "$PROXNIX_HOST_STATE_DIR" "0700"
 do_mkdir "$PROXNIX_STAGE_BASE_DIR" "0711"
 do_install "$RUNTIME_DIR/nix/base.nix"          "$NIXLXC_DIR/base.nix"
@@ -221,9 +282,12 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/lib/proxnix/install-info.txt
 /usr/local/sbin/proxnix-doctor
 /usr/local/sbin/proxnix-create-lxc
+/usr/local/sbin/proxnix-reconcile
 /usr/local/sbin/proxnix-uninstall
 /etc/systemd/system/proxnix-gc.service
 /etc/systemd/system/proxnix-gc.timer
+/etc/systemd/system/proxnix-reconcile.service
+/etc/systemd/system/proxnix-reconcile.timer
 /var/lib/proxnix/base.nix
 /var/lib/proxnix/common.nix
 /var/lib/proxnix/security-policy.nix
@@ -240,6 +304,7 @@ operations.
 Installed local commands:
 - proxnix-create-lxc
 - proxnix-doctor
+- proxnix-reconcile
 - proxnix-uninstall
 
 Managed local runtime files are listed in:

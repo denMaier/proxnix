@@ -1,0 +1,8 @@
+[Unit]
+Description=Reconcile proxnix managed NixOS LXCs
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxnix-reconcile

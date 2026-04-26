@@ -35,7 +35,9 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
+- `/usr/local/sbin/proxnix-reconcile`
 - `proxnix-gc.service` and `proxnix-gc.timer`
+- `proxnix-reconcile.service` and `proxnix-reconcile.timer`
 
 ### Node-local relay cache
 
@@ -45,12 +47,18 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 - `/var/lib/proxnix/common.nix`
 - `/var/lib/proxnix/security-policy.nix`
 - `/var/lib/proxnix/configuration.nix`
+- `/var/lib/proxnix/authority/`
+- `/var/lib/proxnix/status/`
 - `/var/lib/proxnix/site.nix`
 - `/var/lib/proxnix/containers/`
 - `/etc/proxnix/host_relay_identity`
 - `/var/lib/proxnix/private/containers/`
 
 ## Step 1: Install on the Proxmox host
+
+Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
+Install the Nix daemon before installing `proxnix-host`, or use the shell
+installer's `--install-nix` flag when installing from a local checkout.
 
 Choose one of the supported installation paths. After installation, the node no
 longer depends on the original proxnix repo checkout for normal use or
@@ -117,6 +125,12 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/ho
 git clone <this repo>
 cd proxnix
 host/install.sh
+```
+
+If Nix is not installed yet:
+
+```bash
+host/install.sh --install-nix
 ```
 
 You can delete that checkout afterwards if you want. The installed node keeps

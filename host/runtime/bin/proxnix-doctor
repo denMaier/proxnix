@@ -17,6 +17,8 @@ set -euo pipefail
 
 NIXLXC_DIR="/var/lib/proxnix"
 NIXLXC_PRIV_DIR="/var/lib/proxnix/private"
+PROXNIX_AUTHORITY_DIR="/var/lib/proxnix/authority"
+PROXNIX_STATUS_DIR="/var/lib/proxnix/status"
 PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 LXC_CONFIG_DIR="/usr/share/lxc/config"
 LXC_HOOKS_DIR="/usr/share/lxc/hooks"
@@ -48,6 +50,9 @@ BASENAME_BIN=""
 SORT_BIN=""
 AWK_BIN=""
 SOPS_BIN=""
+NIX_BIN=""
+SYSTEMCTL_BIN=""
+DF_BIN=""
 
 init_bins() {
   ID_BIN="$(pick_bin /usr/bin/id /bin/id)" || die "id not found"
@@ -62,6 +67,9 @@ init_bins() {
   SORT_BIN="$(pick_bin /usr/bin/sort /bin/sort)" || die "sort not found"
   AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
   SOPS_BIN="$(command -v sops 2>/dev/null || true)"
+  NIX_BIN="$(command -v nix 2>/dev/null || true)"
+  SYSTEMCTL_BIN="$(command -v systemctl 2>/dev/null || true)"
+  DF_BIN="$(pick_bin /usr/bin/df /bin/df)" || die "df not found"
 }
 
 warns=0
@@ -105,6 +113,11 @@ guest_is_symlink() {
 guest_stat() {
   local vmid="$1" format="$2" path="$3"
   "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/stat" -c "$format" "$path"
+}
+
+guest_readlink() {
+  local vmid="$1" path="$2"
+  "$PCT_BIN" exec "$vmid" -- "${NIXOS_CURRENT_SYSTEM_BIN}/readlink" -f "$path"
 }
 
 conf_value() {
@@ -157,10 +170,13 @@ check_host_files() {
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
+      "$PROXNIX_SBIN_DIR/proxnix-reconcile" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
       "$NIXLXC_DIR/security-policy.nix" \
     "$NIXLXC_DIR/configuration.nix" \
+    "$PROXNIX_AUTHORITY_DIR" \
+    "$PROXNIX_STATUS_DIR" \
     "$NIXLXC_PRIV_DIR" \
     "$PROXNIX_HOST_STATE_DIR" \
     "$PROXNIX_HOST_STATE_DIR/host_relay_identity"
@@ -177,6 +193,55 @@ check_host_files() {
   else
     fail "sops not found on host; pre-start cannot decrypt relay-encrypted guest identities"
   fi
+
+  if [[ -n "$NIX_BIN" && -x "$NIX_BIN" ]]; then
+    ok "nix present: $NIX_BIN"
+    if "$NIX_BIN" --version >/dev/null 2>&1; then
+      ok "nix --version works"
+    else
+      fail "nix is present but nix --version failed"
+    fi
+    if "$NIX_BIN" --extra-experimental-features 'nix-command flakes' eval --expr true >/dev/null 2>&1; then
+      ok "nix-command and flakes are available"
+    else
+      fail "nix-command/flakes unavailable; enable experimental-features = nix-command flakes"
+    fi
+  else
+    fail "nix not found on host; host-side reconciliation requires the Nix daemon"
+  fi
+
+  if [[ -n "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]]; then
+    ok "systemctl present: $SYSTEMCTL_BIN"
+    if "$SYSTEMCTL_BIN" is-active --quiet nix-daemon.service 2>/dev/null; then
+      ok "nix-daemon.service active"
+    else
+      fail "nix-daemon.service is not active"
+    fi
+    if [[ -f /etc/systemd/system/proxnix-reconcile.service ]]; then
+      ok "proxnix-reconcile.service installed"
+    else
+      fail "proxnix-reconcile.service missing"
+    fi
+    if [[ -f /etc/systemd/system/proxnix-reconcile.timer ]]; then
+      ok "proxnix-reconcile.timer installed"
+    else
+      fail "proxnix-reconcile.timer missing"
+    fi
+  else
+    fail "systemctl not found; cannot validate Nix daemon or reconciler timer"
+  fi
+
+  if [[ -d /nix ]]; then
+    local nix_avail
+    nix_avail="$("$DF_BIN" -Pk /nix | "$AWK_BIN" 'NR == 2 { print $4 }')"
+    if [[ -n "$nix_avail" && "$nix_avail" -ge 1048576 ]]; then
+      ok "/nix has at least 1 GiB available"
+    else
+      warn "/nix has less than 1 GiB available; host-side builds may fail"
+    fi
+  else
+    fail "/nix missing; host-side reconciliation requires a local Nix store"
+  fi
 }
 
 check_container() {
@@ -188,6 +253,7 @@ check_container() {
   local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.yaml"
   local user_yaml="${cdir}/user.yaml"
   local proxmox_yaml="${cdir}/proxmox.yaml"
+  local status_file="${PROXNIX_STATUS_DIR}/${vmid}.json"
   local dropin_dir="${cdir}/dropins"
   local mode state ostype ssh_keys
 
@@ -255,6 +321,19 @@ check_container() {
     return
   fi
 
+  if [[ -f "$status_file" ]]; then
+    local desired_system current_system
+    desired_system="$("$SED_BIN" -n 's/.*"desiredSystem"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$status_file" | "$HEAD_BIN" -n1)"
+    current_system="$(guest_readlink "$vmid" /run/current-system 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
+    if [[ -n "$desired_system" && "$current_system" == "$desired_system" ]]; then
+      ok "reconciler status desiredSystem matches /run/current-system"
+    elif [[ -n "$desired_system" ]]; then
+      fail "reconciler status desiredSystem (${desired_system}) does not match /run/current-system (${current_system:-unset})"
+    else
+      warn "reconciler status file exists but desiredSystem is missing: ${status_file}"
+    fi
+  fi
+
   for guest_file in \
     /etc/nixos/configuration.nix \
     /var/lib/proxnix/config/managed/base.nix \
@@ -308,7 +387,9 @@ check_container() {
   local current_hash applied_hash
   current_hash="$(guest_cat "$vmid" /var/lib/proxnix/runtime/current-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
   applied_hash="$(guest_cat "$vmid" /var/lib/proxnix/runtime/applied-config-hash 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
-  if [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
+  if [[ -f "$status_file" ]]; then
+    info "legacy managed config hash is informational because reconciler status exists"
+  elif [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
     ok "applied managed config hash matches current hash"
   else
     warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"

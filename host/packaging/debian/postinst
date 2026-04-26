@@ -18,8 +18,15 @@ if ! command -v sops >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v nix >/dev/null 2>&1; then
+  echo "proxnix-host: nix not found; install the Nix daemon on the Proxmox host first" >&2
+  exit 1
+fi
+
 ensure_mode /var/lib/proxnix 0755
+ensure_mode /var/lib/proxnix/authority 0755
 ensure_mode /var/lib/proxnix/containers 0755
+ensure_mode /var/lib/proxnix/status 0755
 ensure_mode /var/lib/proxnix/private 0700
 ensure_mode /var/lib/proxnix/private/shared 0700
 ensure_mode /var/lib/proxnix/private/containers 0700
@@ -28,6 +35,7 @@ ensure_mode /etc/proxnix 0700
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   systemctl daemon-reload || true
   systemctl enable --now proxnix-gc.timer || true
+  systemctl enable --now proxnix-reconcile.timer || true
 fi
 
 exit 0

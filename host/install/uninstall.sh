@@ -83,6 +83,7 @@ do_rm "$PROXNIX_INSTALL_INFO"
 action "Local admin helper"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-create-lxc"
+do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-uninstall"
 
 action "GC timer"
@@ -94,12 +95,23 @@ do_rm "$SYSTEMD_UNIT_DIR/proxnix-gc.service"
 if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi
+
+action "Reconciler timer"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl disable --now proxnix-reconcile.timer 2>/dev/null || true
+fi
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer"
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+fi
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 echo ""
 echo "Done."
 echo ""
-echo "  /var/lib/proxnix/ and /etc/proxnix/ were not touched."
+echo "  /var/lib/proxnix/, /var/lib/proxnix/authority/, /var/lib/proxnix/status/,"
+echo "  /nix, and /etc/proxnix/ were not touched."
 echo "  Published relay-cache config and secret material are still intact."
 echo ""
 echo "  To fully remove proxnix data from this node, delete:"
