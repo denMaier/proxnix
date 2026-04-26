@@ -550,12 +550,11 @@ build_only() {
     return
   fi
 
-  local system_path hostname source_revision status_file current_system previous_system last_deploy_status
+  local system_path desired_system hostname source_revision status_file current_system previous_system last_deploy_status
   hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
   source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
-  system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
-  [[ -n "$system_path" ]] || die "nix build produced no output path for VMID ${selected_vmid}"
-  protect_host_closure "$selected_vmid" "$system_path"
+  desired_system="$(manifest_system "$selected_vmid" "$manifest")"
+  [[ -n "$desired_system" ]] || die "manifest for VMID ${selected_vmid} is missing system"
 
   status_file="${STATUS_DIR}/${selected_vmid}.json"
   current_system=""
@@ -566,6 +565,18 @@ build_only() {
     previous_system="$(jq -r '.previousSystem // empty' "$status_file" 2>/dev/null || true)"
     last_deploy_status="$(jq -r '.lastDeployStatus // "not-run"' "$status_file" 2>/dev/null || true)"
   fi
+
+  if [[ "$current_system" == "$desired_system" ]]; then
+    write_noop_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$current_system" "$previous_system"
+    printf '%s noop current system matches desired\n' "$selected_vmid"
+    return
+  fi
+
+  system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
+  system_path="$(tr -d '\r\n' <<<"$system_path")"
+  [[ -n "$system_path" ]] || die "nix build produced no output path for VMID ${selected_vmid}"
+  [[ "$system_path" == "$desired_system" ]] || die "nix build produced ${system_path}, expected ${desired_system}"
+  protect_host_closure "$selected_vmid" "$system_path"
 
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$current_system" "$previous_system" "$last_deploy_status"
   printf '%s built %s\n' "$selected_vmid" "$system_path"

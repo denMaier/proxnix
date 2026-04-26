@@ -275,7 +275,7 @@ case "$1" in
 JSON
     ;;
   build)
-    printf '%s\n' /nix/store/built-system-101
+    printf '%s\n' /nix/store/eval-system-101
     ;;
   *)
     exit 2
@@ -305,10 +305,10 @@ esac
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "101 built /nix/store/built-system-101")
+            self.assertEqual(result.stdout.strip(), "101 built /nix/store/eval-system-101")
             status = (status_dir / "101.json").read_text(encoding="utf-8")
-            self.assertIn('"desiredSystem": "/nix/store/built-system-101"', status)
-            self.assertIn('"desired_system": "/nix/store/built-system-101"', status)
+            self.assertIn('"desiredSystem": "/nix/store/eval-system-101"', status)
+            self.assertIn('"desired_system": "/nix/store/eval-system-101"', status)
             self.assertIn('"host_has_closure": true', status)
             self.assertIn('"pending_cache_upload": true', status)
             self.assertIn('"protected_by_host_gc_root": true', status)
@@ -317,7 +317,87 @@ esac
             self.assertIn('"currentSystem": null', status)
             gcroot = root / "gcroots" / "deploy" / "101-desired"
             self.assertTrue(gcroot.is_symlink())
-            self.assertEqual(os.readlink(gcroot), "/nix/store/built-system-101")
+            self.assertEqual(os.readlink(gcroot), "/nix/store/eval-system-101")
+
+    def test_build_only_skips_when_status_is_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/system-101",
+                        "currentSystem": "/nix/store/system-101",
+                        "previousSystem": "/nix/store/previous-system-101",
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "ok",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\n[ \"$1\" = status ] && exit 0\nexit 2\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","system":"/nix/store/system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf 'unexpected build\\n' >&2
+    exit 9
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--build-only", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 noop current system matches desired")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["desiredSystem"], "/nix/store/system-101")
+            self.assertEqual(status["currentSystem"], "/nix/store/system-101")
+            self.assertEqual(status["previousSystem"], "/nix/store/previous-system-101")
+            self.assertEqual(status["lastDeployStatus"], "noop-current")
 
     def test_seed_only_imports_closure_and_marks_status_seeded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

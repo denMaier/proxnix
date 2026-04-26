@@ -21,7 +21,7 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn('disable_legacy_timer "proxnix-reconcile"', install_sh)
         self.assertIn("disable --now proxnix-reconcile.timer", postinst)
 
-    def test_reconcile_services_are_packaged_and_prestart_triggered(self) -> None:
+    def test_reconcile_services_are_packaged_and_prestart_builds(self) -> None:
         package_common = (ROOT / "host" / "packaging" / "package-common.sh").read_text(
             encoding="utf-8"
         )
@@ -42,7 +42,10 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn("proxnix-reconcile-seed", install_sh)
         self.assertIn("proxnix-reconcile-activate", install_sh)
         self.assertIn('do_systemd_service "proxnix-reconcile"', install_sh)
-        self.assertIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
+        self.assertIn('PROXNIX_PRESTART_BUILD:-1', prestart)
+        self.assertIn('proxnix-reconcile-build --vmid "$VMID"', prestart)
+        self.assertNotIn("PROXNIX_PRESTART_RECONCILE", prestart)
+        self.assertNotIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)
         self.assertIn("ExecStartPre=/bin/sleep 10", template_service)
 
