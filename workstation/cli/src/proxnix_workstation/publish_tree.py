@@ -42,9 +42,11 @@ def build_desired_config_tree(
 
     if target_vmid is None:
         _copy_file_if_present(site_paths.site_nix, destination_root / "site.nix")
+        _copy_file_if_present(site_paths.flake_lock, destination_root / "flake.lock")
         _copy_tree_if_present(site_paths.containers_dir, containers_destination)
         return destination_root
 
+    _copy_file_if_present(site_paths.flake_lock, destination_root / "flake.lock")
     _copy_tree_if_present(
         site_paths.containers_dir / "_template",
         containers_destination / "_template",

@@ -19,6 +19,8 @@ and GC decisions.
 Build reuse should be optimized locally on each host by keeping a
 golden-template build warm, so normal container builds reuse most store paths
 without needing cross-node closure transfer machinery.
+Committed site flake.lock is published to hosts and copied into the generated
+authority flake, so golden and CT builds share the same nixpkgs revision.
 
 ## current command names
   * 'proxnix-reconcile-build-golden'

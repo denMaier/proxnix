@@ -309,6 +309,8 @@ def render_authority(root: Path, authority: Path, pve_lxc_dir: Path, node_name: 
         copy_if_present(source, modules / filename)
 
     has_site = copy_if_present(root / "site.nix", legacy / "site.nix")
+    if not copy_if_present(root / "flake.lock", authority / "flake.lock"):
+        (authority / "flake.lock").unlink(missing_ok=True)
     atomic_write(
         modules / "proxnix-guest-base.nix",
         "\n".join(

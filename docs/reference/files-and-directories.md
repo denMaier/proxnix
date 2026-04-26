@@ -113,6 +113,7 @@ These paths are the published host-side state on the Proxmox node. The workstati
 ├── common.nix                         shared operator module
 ├── security-policy.nix                host-enforced security policy
 ├── configuration.nix                  NixOS entrypoint
+├── flake.lock                         optional published Nix input lock
 ├── site.nix                           published site override
 ├── authority/                         generated host authority flake wrapper
 ├── status/                            reconciler status JSON

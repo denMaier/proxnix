@@ -83,12 +83,13 @@ def _uses_embedded_site_secrets(config: WorkstationConfig) -> bool:
 
 def _head_paths_for_publish(config: WorkstationConfig, options: PublishOptions) -> list[str]:
     if options.target_vmid is None:
-        paths = ["site.nix", "containers"]
+        paths = ["site.nix", "flake.lock", "containers"]
         if _uses_embedded_site_secrets(config):
             paths.append("private")
         return paths
 
     paths = [
+        "flake.lock",
         "containers/_template",
         f"containers/{options.target_vmid}",
     ]
@@ -334,6 +335,7 @@ def build_publish_tree(config: WorkstationConfig, site_paths: SitePaths, options
 
     if options.target_vmid is None and site_paths.site_nix.is_file():
         _copy_file_if_present(site_paths.site_nix, root / "site.nix")
+    _copy_file_if_present(site_paths.flake_lock, root / "flake.lock")
 
     if options.target_vmid is not None:
         _copy_tree_if_present(site_paths.containers_dir / "_template", root / "containers" / "_template")
@@ -447,7 +449,11 @@ def stage_relay_identities_into_tree(
 
 
 def should_report_change(config: WorkstationConfig, path: PurePosixPath) -> bool:
-    if path in {config.remote_dir / "site.nix", config.remote_dir / "publish-revision.json"}:
+    if path in {
+        config.remote_dir / "site.nix",
+        config.remote_dir / "flake.lock",
+        config.remote_dir / "publish-revision.json",
+    }:
         return True
     try:
         path.relative_to(config.remote_dir / "containers")
@@ -676,6 +682,12 @@ def publish_host(
         report=report,
     )
 
+    flake_lock = tree / "flake.lock"
+    if flake_lock.is_file():
+        sync_file(session, config, flake_lock, config.remote_dir / "flake.lock", dry_run=options.dry_run, report=report)
+    else:
+        remove_remote_file(session, config, config.remote_dir / "flake.lock", dry_run=options.dry_run, report=report)
+
     sync_path(session, config, tree / "containers", config.remote_dir / "containers", dry_run=options.dry_run, report=report)
 
     if options.config_only:
@@ -742,6 +754,10 @@ def publish_vmid_host(
         dry_run=options.dry_run,
         report=report,
     )
+
+    flake_lock = tree / "flake.lock"
+    if flake_lock.is_file():
+        sync_file(session, config, flake_lock, config.remote_dir / "flake.lock", dry_run=options.dry_run, report=report)
 
     template_source = tree / "containers" / "_template"
     if template_source.is_dir():

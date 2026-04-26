@@ -26,6 +26,7 @@ class AuthorityRenderTests(unittest.TestCase):
             for name in ("base.nix", "common.nix", "security-policy.nix"):
                 (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
             (root / "site.nix").write_text("{ ... }: {}\n", encoding="utf-8")
+            (root / "flake.lock").write_text('{"nodes":{"nixpkgs":{}}}\n', encoding="utf-8")
             (root / "publish-revision.json").write_text(
                 '{"commit":"abc123","branch":"main","dirtyWorktreeIgnored":false}\n',
                 encoding="utf-8",
@@ -56,6 +57,7 @@ class AuthorityRenderTests(unittest.TestCase):
 
             self.assertEqual([manifest.vmid for manifest in manifests], ["101"])
             self.assertTrue((authority / "flake.nix").is_file())
+            self.assertEqual((authority / "flake.lock").read_text(encoding="utf-8"), '{"nodes":{"nixpkgs":{}}}\n')
             self.assertTrue((authority / "modules" / "proxnix-guest-base.nix").is_file())
             self.assertTrue((authority / "generated" / "legacy" / "site.nix").is_file())
             self.assertTrue((authority / "generated" / "containers" / "101" / "proxmox.nix").is_file())
@@ -99,6 +101,20 @@ class AuthorityRenderTests(unittest.TestCase):
             self.assertIn('"101" = {', manifest_nix)
             self.assertIn("local = false;", manifest_nix)
             self.assertIn("observedPveConfig = false;", manifest_nix)
+
+    def test_removes_stale_authority_flake_lock_when_site_lock_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            authority = root / "authority"
+            (root / "containers" / "101").mkdir(parents=True)
+            authority.mkdir(parents=True)
+            (authority / "flake.lock").write_text('{"stale":true}\n', encoding="utf-8")
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+
+            authority_render.render_authority(root, authority, Path(tmp) / "missing-pve", "pve1")
+
+            self.assertFalse((authority / "flake.lock").exists())
 
 
 if __name__ == "__main__":

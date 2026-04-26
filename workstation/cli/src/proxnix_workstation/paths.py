@@ -27,6 +27,10 @@ class SitePaths:
         return self.site_dir / "site.nix"
 
     @property
+    def flake_lock(self) -> Path:
+        return self.site_dir / "flake.lock"
+
+    @property
     def shared_store(self) -> Path:
         return self.private_dir / "shared" / "secrets.sops.yaml"
 

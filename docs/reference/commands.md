@@ -527,6 +527,11 @@ snapshot rather than the live worktree. It writes the deployed revision to
 untracked local changes exist, publish prints a warning because those changes
 are ignored.
 
+If the site has a committed `flake.lock`, publish also copies it to
+`/var/lib/proxnix/flake.lock`. The host authority renderer then carries that
+lock into `/var/lib/proxnix/authority/flake.lock`, making the golden-template
+build and every CT build use the same locked Nix inputs.
+
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 
 Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the shared `/var/lib/proxnix/containers/_template/` tree and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
