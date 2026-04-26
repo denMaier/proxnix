@@ -12,6 +12,7 @@ AUTHORITY_DIR="${PROXNIX_AUTHORITY_DIR:-${NIXLXC_DIR}/authority}"
 STATUS_DIR="${PROXNIX_STATUS_DIR:-${NIXLXC_DIR}/status}"
 PVE_LXC_DIR="${PROXNIX_PVE_LXC_DIR:-/etc/pve/lxc}"
 LOCK_DIR="${PROXNIX_RUN_DIR:-/run/proxnix}"
+GCROOT_DIR="${PROXNIX_GCROOT_DIR:-${NIXLXC_DIR}/gcroots/deploy}"
 NODE_NAME="${PROXNIX_NODE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
 AUTHORITY_RENDER="${PROXNIX_AUTHORITY_RENDER:-/usr/local/sbin/proxnix-authority-render}"
 CREATE_LXC="${PROXNIX_CREATE_LXC:-/usr/local/sbin/proxnix-create-lxc}"
@@ -400,6 +401,16 @@ build_manifest_system() {
   nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
 }
 
+protect_host_closure() {
+  local vmid="$1" system_path="$2"
+  mkdir -p "$GCROOT_DIR"
+  local root_path="${GCROOT_DIR}/${vmid}-desired"
+  local tmp_path="${root_path}.tmp.$$"
+  rm -f "$tmp_path"
+  ln -s "$system_path" "$tmp_path"
+  mv -f "$tmp_path" "$root_path"
+}
+
 manifest_system() {
   local selected_vmid="$1" manifest="$2"
   jq -r --arg vmid "$selected_vmid" '.containers[$vmid].system // empty' <<<"$manifest"
@@ -471,6 +482,7 @@ build_only() {
   source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
   system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
   [[ -n "$system_path" ]] || die "nix build produced no output path for VMID ${selected_vmid}"
+  protect_host_closure "$selected_vmid" "$system_path"
 
   status_file="${STATUS_DIR}/${selected_vmid}.json"
   current_system=""
@@ -700,6 +712,7 @@ reconcile_selected() {
     printf '%s build failed\n' "$selected_vmid" >&2
     return 2
   fi
+  protect_host_closure "$selected_vmid" "$desired_system"
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
 
   local deploy_output

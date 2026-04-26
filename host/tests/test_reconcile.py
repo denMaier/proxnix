@@ -208,6 +208,9 @@ esac
             self.assertIn('"lastBuildStatus": "ok"', status)
             self.assertIn('"lastDeployStatus": "not-run"', status)
             self.assertIn('"currentSystem": null', status)
+            gcroot = root / "gcroots" / "deploy" / "101-desired"
+            self.assertTrue(gcroot.is_symlink())
+            self.assertEqual(os.readlink(gcroot), "/nix/store/built-system-101")
 
     def test_seed_only_imports_closure_and_marks_status_seeded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -655,6 +658,114 @@ esac
             self.assertEqual(status["lastBuildStatus"], "failed")
             self.assertEqual(status["lastDeployStatus"], "build-failed")
             self.assertIn("nix build failed", status["lastError"])
+
+    def test_full_reconcile_keeps_gcroot_after_seed_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/desired-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' /nix/store/desired-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/dep-a /nix/store/desired-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                """#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    printf '%s\n' /nix/store/old-system-101
+    ;;
+  nix-store)
+    cat >/dev/null
+    printf '%s\n' 'import failed' >&2
+    exit 1
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), "101 seed failed")
+            gcroot = root / "gcroots" / "deploy" / "101-desired"
+            self.assertTrue(gcroot.is_symlink())
+            self.assertEqual(os.readlink(gcroot), "/nix/store/desired-system-101")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["lastDeployStatus"], "failed")
+            self.assertEqual(status["currentSystem"], "/nix/store/old-system-101")
 
     def test_recreate_missing_calls_create_lxc_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
