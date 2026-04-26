@@ -3,5 +3,64 @@
 
 set -euo pipefail
 
+SELF_NAME="${0##*/}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${SCRIPT_DIR}/proxnix-reconcile" --seed-only "$@"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  ${SELF_NAME} --vmid <id> [--rootfs </path/to/mounted/rootfs>]
+
+Seeds into a running CT with pct exec. When --rootfs is provided, or when pct
+reports the CT is stopped and --rootfs is provided, dispatches to the offline
+rootfs seed command instead.
+EOF
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+vmid=""
+rootfs=""
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid)
+      [[ $# -ge 2 ]] || die "--vmid requires a value"
+      vmid="$2"
+      args+=("$1" "$2")
+      shift 2
+      ;;
+    --rootfs)
+      [[ $# -ge 2 ]] || die "--rootfs requires a value"
+      rootfs="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$vmid" ]] || die "--vmid is required"
+[[ "$vmid" =~ ^[0-9]+$ ]] || die "invalid VMID: $vmid"
+
+if [[ -n "$rootfs" ]]; then
+  exec "${SCRIPT_DIR}/proxnix-reconcile-seed-offline" --vmid "$vmid" --rootfs "$rootfs"
+fi
+
+if command -v pct >/dev/null 2>&1; then
+  state="$(pct status "$vmid" 2>/dev/null | awk '{ print $2 }' || true)"
+  if [[ "$state" == "stopped" ]]; then
+    die "VMID ${vmid} is stopped; pass --rootfs <mounted-rootfs> or let the LXC mount hook run proxnix-reconcile-seed-offline"
+  fi
+fi
+
+exec "${SCRIPT_DIR}/proxnix-reconcile" --seed-only "${args[@]}"
