@@ -4,7 +4,7 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 
 ## Checklist
 
-- [ ] Install proxnix on every Proxmox node, preferably from the helper-script entrypoint that installs the `proxnix-host` Debian package, or by running `host/install.sh` locally on each node, or by running `ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml` once from your control machine
+- [ ] Install proxnix on every Proxmox node with `ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml` from your control machine
 - [ ] Create a separate workstation-owned site repo, or stop after workstation config if you only want a fresh host/bootstrap first
 - [ ] Configure your workstation for `proxnix-secrets` and `proxnix-publish`
 - [ ] Initialize the host relay identity
@@ -13,11 +13,8 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 ## What the node install does
 
 Every Proxmox node that may start proxnix-managed containers needs the same
-installed assets. The canonical path is the helper-script entrypoint, which
-downloads and installs the `proxnix-host` Debian package for the local
-architecture. You can also install the package manually, run `host/install.sh`
-directly on the node, or use `host/deploy/ansible/install.yml` from an Ansible
-control machine over SSH.
+installed assets. The only supported host deployment path is
+`host/deploy/ansible/install.yml` from an Ansible control machine over SSH.
 
 It installs two kinds of assets:
 
@@ -65,90 +62,11 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 ## Step 1: Install on the Proxmox host
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
-Install the Nix daemon before installing `proxnix-host`, or use the shell
-installer's `--install-nix` flag when installing from a local checkout.
-
-Choose one of the supported installation paths. After installation, the node no
-longer depends on the original proxnix repo checkout for normal use or
-uninstall.
-
-### Option A: Run the host helper script
-
-This is the preferred host install path. The helper script resolves the latest
-matching `proxnix-host` `.deb` for the node architecture, downloads it, and
-installs it with `apt`.
-
-Install the latest tagged release directly on the Proxmox node:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
-```
-
-Install a specific version:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
-```
-
-This keeps the user-facing install to one command while retaining package-owned
-upgrades and removal underneath.
-
-### Option B: Install the Debian package manually
-
-If you want to build the `.deb` locally from the repo root:
-
-```bash
-./host/packaging/package-deb.sh
-```
-
-Then install it on the Proxmox node:
-
-```bash
-apt install ./dist/proxnix-host_<version>_<arch>.deb
-```
-
-Remove it later with:
-
-```bash
-apt remove proxnix-host
-```
-
-See [Host Packages](../operations/host-packages.md).
-
-### Option C: Run the remote bootstrapper
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)"
-```
-
-Use `--dry-run` to preview what would be installed without writing anything:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)" -- --dry-run
-```
-
-### Option D: Run the shell installer from a local checkout
-
-```bash
-git clone <this repo>
-cd proxnix
-host/install.sh
-```
-
-If Nix is not installed yet:
-
-```bash
-host/install.sh --install-nix
-```
-
-You can delete that checkout afterwards if you want. The installed node keeps
-its own `proxnix-uninstall` command.
-
-### Option E: Deploy with Ansible over SSH
-
-Run this from your workstation or another Ansible control machine, not from the
-target node itself. The playbook copies the proxnix files from your local repo
-checkout to each remote Proxmox host over SSH.
+Install the Nix daemon, enable `nix-command flakes`, and install `sops` before
+running the playbook. The playbook verifies those prerequisites and then copies
+the proxnix files from your local repo checkout to each remote Proxmox host over
+SSH. Run it from your workstation or another Ansible control machine, not from
+the target node itself.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -349,22 +267,8 @@ That means each Proxmox host persistently stores only one plaintext relay key. G
 
 ## Upgrading proxnix files
 
-If the install repo changes `base.nix`, `common.nix`, `security-policy.nix`, or `configuration.nix`,
-reinstall proxnix on each node.
-
-If you are using the Debian package path, install the updated package:
-
-```bash
-apt install ./dist/proxnix-host_<version>_<arch>.deb
-```
-
-If you are still using the shell installer path:
-
-```bash
-host/install.sh
-```
-
-Or redeploy them remotely from your Ansible control machine:
+If the host runtime, hooks, systemd units, or shared Nix modules change, rerun
+the Ansible playbook from your control machine:
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -374,21 +278,15 @@ After upgrading, restart managed containers so they pick up the new hook/runtime
 
 ## Uninstalling
 
-To remove proxnix from a node but keep the published relay cache:
-
-```bash
-apt remove proxnix-host
-```
-
-If that node was installed with the shell installer rather than the package,
-use:
+To remove proxnix from a node but keep the published relay cache, use the
+uninstall helper installed by the Ansible playbook:
 
 ```bash
 proxnix-uninstall
 ```
 
-Both paths remove only the installed hooks, helpers, services, and timers. They
-intentionally leave `/var/lib/proxnix` and `/etc/proxnix` alone.
+This removes only the installed hooks, helpers, services, and timers. It
+intentionally leaves `/var/lib/proxnix` and `/etc/proxnix` alone.
 
 ## What you should have when done
 

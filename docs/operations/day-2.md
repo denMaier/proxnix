@@ -132,14 +132,12 @@ pct restart <vmid>
 
 Typical sequence:
 
-1. Build or fetch the latest `proxnix-host` package
-2. Install it on every node that should host proxnix-managed containers
-3. If you are still on the shell-installer path, run `host/install.sh` instead
-4. Restart managed containers as needed
+1. Rerun `host/deploy/ansible/install.yml` for every node that should host proxnix-managed containers
+2. Restart managed containers as needed
 
 Once a node is installed, it does not need to retain that repo checkout for
-normal operations. Package-installed nodes use `apt remove proxnix-host`; nodes
-installed with the shell installer use `proxnix-uninstall`.
+normal operations. Use `proxnix-uninstall` on the node to remove installed host
+runtime files while keeping relay data.
 
 ## Updating the admin password
 

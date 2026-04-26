@@ -141,10 +141,9 @@ Common tasks:
 - restart a CT after changing host-side proxnix files
 - run `proxnix doctor` from the workstation or `proxnix-doctor` from the host
 - manage workstation-side secrets with `proxnix secrets`
-- run the host helper-script installer when bootstrapping a Proxmox node
-- use the raw host `.deb` when you want manual or offline package control
-- cut annotated `v*` release tags to publish host and workstation artifacts
+- rerun the Ansible host deployment when bootstrapping or updating a Proxmox node
+- cut annotated `v*` release tags to publish workstation artifacts
 - refresh the Homebrew tap formula and cask when releasing Proxnix Manager
 - deploy Proxnix Manager Web behind a reverse auth proxy when you want shared browser access
 
-See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host packages](operations/host-packages.md), [Proxnix Manager](operations/proxnix-manager.md), [Proxnix Manager Web](operations/proxnix-manager-web.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).
+See [day-2 operations](operations/day-2.md), [LXC exercise lab](operations/lxc-exercise-lab.md), [host deployment](operations/host-packages.md), [Proxnix Manager](operations/proxnix-manager.md), [Proxnix Manager Web](operations/proxnix-manager-web.md), [releases](operations/releases.md), and [troubleshooting](operations/troubleshooting.md).

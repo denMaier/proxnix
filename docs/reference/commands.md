@@ -2,25 +2,13 @@
 
 ## Host commands
 
-### `host/install.sh`
-
-Install proxnix onto the current Proxmox node.
-After it finishes, the repo checkout is no longer required on that node for
-normal use or uninstall.
-
-Useful flags:
-
-| Flag | Purpose |
-|------|---------|
-| `--dry-run` | Preview what would be installed without writing anything |
-| `--force-shared` | Deprecated compatibility flag; ignored in node-local mode |
-| `--install-nix` | Install the Nix daemon when `nix` is missing |
-
 ### `host/deploy/ansible/install.yml`
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
-It copies files from this repo on the Ansible controller to the remote hosts in
-your inventory; it is not meant to run against `localhost`.
+This is the only supported host deployment path. It verifies Proxmox, `sops`,
+Nix, and flakes support, then copies files from this repo on the Ansible
+controller to the remote hosts in your inventory. It is not meant to run against
+`localhost`.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -46,45 +34,6 @@ publish + optional exercise.
 ```bash
 cp host/deploy/ansible/ai-agent-deploy.vars.example.yml host/deploy/ansible/ai-agent-deploy.vars.yml
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/ai-agent-deploy.yml -e @host/deploy/ansible/ai-agent-deploy.vars.yml
-```
-
-### `host/remote/github-install.sh`
-
-Curl-friendly wrapper for `install.sh`.
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)"
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/github-install.sh)" -- --dry-run
-```
-
-### `host/remote/install-host-package.sh`
-
-Canonical host helper-script install. It resolves and installs the published
-`proxnix-host` Debian package for the current node architecture:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
-```
-
-### `host/packaging/package-deb.sh`
-
-Build the Debian host package:
-
-```bash
-./host/packaging/package-deb.sh
-```
-
-Artifact output:
-
-```text
-dist/proxnix-host_<version>_<arch>.deb
-```
-
-Install the resulting package on a Proxmox node with:
-
-```bash
-apt install ./dist/proxnix-host_<version>_<arch>.deb
 ```
 
 ### `ci/install-git-hooks.sh`
@@ -212,15 +161,9 @@ This expects the tag version to match both `VERSION` and
 Remove proxnix's installed assets from the current Proxmox node. Leaves
 `/var/lib/proxnix` intact.
 
-This command is installed onto the host by `host/install.sh` and
-`host/deploy/ansible/install.yml`, so you do not need to keep the original repo
-checkout around just to uninstall proxnix.
-
-If the node was installed from the Debian package instead, remove it with:
-
-```bash
-apt remove proxnix-host
-```
+This command is installed onto the host by `host/deploy/ansible/install.yml`, so
+you do not need to keep the original repo checkout around just to uninstall
+proxnix.
 
 ### `host/uninstall.sh`
 

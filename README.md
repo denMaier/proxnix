@@ -14,19 +14,17 @@ Host-managed NixOS LXC containers for Proxmox.
 
 Proxnix turns Proxmox container metadata and host-side Nix modules into a staged NixOS configuration that is copied into the guest at boot. The guest then applies that configuration only when the managed config hash changes.
 
-This repository is the install/bootstrap layer. It owns the shared hooks,
+This repository is the host runtime and workstation tooling layer. It owns the shared hooks,
 helpers, and baseline Nix modules. Site-specific data is meant to live in a
 separate workstation-owned site repo and gets published into `/var/lib/proxnix/`
 on each Proxmox node as a relay cache.
 
-For host installs, the preferred distribution path is the helper-script style
-entrypoint under `host/remote/`, which installs the published `proxnix-host`
-Debian package for you. The `.deb` remains the underlying package-managed
-upgrade and uninstall path.
+Host installation is intentionally single-path: run the Ansible playbook in
+`host/deploy/ansible/install.yml` against every Proxmox node.
 
 ## Repo layout
 
-- `host/` contains the Proxmox host layer, with stable installer entrypoints plus grouped `runtime/`, `deploy/`, `packaging/`, `remote/`, and `extras/` sources.
+- `host/` contains the Proxmox host layer, with Ansible deployment, runtime sources, and optional extras.
 - `workstation/` contains the workstation-authoritative CLI, TUI, Proxnix Manager app, Nix flake, packaging scripts, and workstation module exports.
 - `docs/` contains shared human-facing documentation.
 

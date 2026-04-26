@@ -86,7 +86,7 @@ fi
 
 if [[ ! -f "$COMMON_LIB" ]]; then
     log "ERROR: ${COMMON_LIB} not found."
-    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    log "Run host/deploy/ansible/install.yml for this Proxmox node to install local runtime files."
     exit 1
 fi
 

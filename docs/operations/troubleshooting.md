@@ -215,30 +215,22 @@ Common causes:
 
 ## The hooks seem broken on one node
 
-Run the installer again on that node:
+Rerun the Ansible host deployment for that node:
 
 ```bash
-apt install ./proxnix-host_<version>_<arch>.deb
-```
-
-If that node still uses the shell installer path instead of the package, run:
-
-```bash
-host/install.sh
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
 The hooks and helper binaries are per-node assets. If a node was reinstalled or upgraded, the local files may be missing.
-The original repo checkout is not required after a successful install.
+The original repo checkout is not required on the Proxmox node after a successful install.
 
 ## Container migration to another node
 
 After migrating a container to a different Proxmox node, make sure proxnix is installed on that node:
 
 ```bash
-apt install ./proxnix-host_<version>_<arch>.deb
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
-
-If that node still uses the shell installer path instead of the package, run `host/install.sh` there instead.
 
 proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a container to another node, make sure that node has both proxnix installed and the expected `/var/lib/proxnix/` data for that container.
 

@@ -21,13 +21,12 @@ path.
 Ask these in one short batch before changing anything:
 
 1. How many Proxmox nodes should receive proxnix right now: one node or multiple nodes?
-2. Which host install path do you want: the published Debian package, a local repo checkout on the node, or Ansible from a control machine?
-3. Do you want `host-bootstrap` only for now, or the full workstation publish flow?
-4. Do you already have a workstation site repo, or should I create a new one?
-5. Do you want a full secrets-capable setup now, or a config-only bootstrap first?
-6. What SSH targets should I publish to, should I use a dedicated publish SSH identity, and if using `embedded-sops` what should I use as the SOPS master identity?
-7. Do you want me to stop at host validation, or also run the proxnix exercise harness for an end-to-end report?
-8. If I run the exercise harness, which Proxmox host should I target and which base VMID should I reserve for the disposable test containers?
+2. Do you want `host-bootstrap` only for now, or the full workstation publish flow?
+3. Do you already have a workstation site repo, or should I create a new one?
+4. Do you want a full secrets-capable setup now, or a config-only bootstrap first?
+5. What SSH targets should I publish to, should I use a dedicated publish SSH identity, and if using `embedded-sops` what should I use as the SOPS master identity?
+6. Do you want me to stop at host validation, or also run the proxnix exercise harness for an end-to-end report?
+7. If I run the exercise harness, which Proxmox host should I target and which base VMID should I reserve for the disposable test containers?
 
 If the answer is already available from local config or the current task
 context, present it as the proposed default and ask for confirmation instead of
@@ -38,7 +37,7 @@ asking blindly.
 Convert the answers into this working state before executing:
 
 - `install_scope = single-node | multi-node`
-- `install_method = deb-package | local-checkout | ansible`
+- `install_method = ansible`
 - `deployment_goal = host-bootstrap | full-publish`
 - `site_repo = existing | create-new`
 - `publish_mode = full | config-only`
@@ -52,11 +51,8 @@ Convert the answers into this working state before executing:
 
 Use these defaults unless the user asked for something else:
 
-- Prefer `deb-package` for a normal single-node or small-cluster install.
-- Prefer `ansible` when the user explicitly wants one command from a control
-  machine across multiple nodes.
-- Use `local-checkout` only when the agent is already running on the target
-  Proxmox host or the user explicitly wants the repo-local installer.
+- Use Ansible for host install. Do not offer package, curl, or local checkout
+  install paths.
 - Prefer `host-bootstrap` when the user wants a fresh start with the current
   repo state but plans to publish a real site repo later by hand.
 - Prefer `full` publish mode unless the user wants to defer SOPS and identities.
@@ -124,9 +120,8 @@ ansible-playbook \
   -e @host/deploy/ansible/ai-agent-deploy.vars.yml
 ```
 
-If the user chose `deb-package` or `local-checkout` instead of Ansible, keep
-using the supported host install path, then follow either the host-bootstrap or
-full-publish workstation steps that match the approved goal.
+After Ansible host install, follow either the host-bootstrap or full-publish
+workstation steps that match the approved goal.
 
 ## Execution flow
 
@@ -134,36 +129,6 @@ full-publish workstation steps that match the approved goal.
 
 Every node that may run proxnix-managed containers needs the host runtime
 installed locally.
-
-#### If `install_method=deb-package`
-
-Run on each Proxmox node:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)"
-```
-
-For a pinned version:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/denMaier/proxnix/main/host/remote/install-host-package.sh)" -- --version 0.1.0
-```
-
-#### If `install_method=local-checkout`
-
-From a checkout of this repo on the Proxmox node, as `root`:
-
-```bash
-host/install.sh
-```
-
-Use `--dry-run` first if the user wants a preview:
-
-```bash
-host/install.sh --dry-run
-```
-
-#### If `install_method=ansible`
 
 If `deployment_goal=host-bootstrap`, prefer:
 
@@ -590,8 +555,8 @@ Treat the deployment as successful only when all of these are true:
 
 ## What not to do
 
-- Do not invent deployment paths outside the Debian package, local
-  `host/install.sh`, `host/deploy/ansible/install.yml`, or `host/deploy/ansible/ai-agent-deploy.yml`
+- Do not invent deployment paths outside `host/deploy/ansible/install.yml` or
+  `host/deploy/ansible/ai-agent-deploy.yml`
 - Do not skip the initial questions and silently choose a secrets model or test
   scope
 - Do not treat host install success as enough; always run the verification steps

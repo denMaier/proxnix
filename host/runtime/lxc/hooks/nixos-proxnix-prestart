@@ -90,7 +90,7 @@ fi
 
 if [[ ! -f "$COMMON_LIB" ]]; then
     log "ERROR: ${COMMON_LIB} not found."
-    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    log "Run host/deploy/ansible/install.yml for this Proxmox node to install local runtime files."
     exit 1
 fi
 
@@ -165,7 +165,7 @@ log "Starting pre-start hook (PVE conf: ${PVE_CONF}, stage: ${STAGE_DIR})."
 
 if [[ ! -f "$PVE_CONF_TO_NIX" ]]; then
     log "ERROR: ${PVE_CONF_TO_NIX} not found."
-    log "Run host/install.sh on this Proxmox node to install local runtime files."
+    log "Run host/deploy/ansible/install.yml for this Proxmox node to install local runtime files."
     exit 1
 fi
 
@@ -188,14 +188,14 @@ for f in "${PROXNIX_SHARED_FILES[@]}"; do
     src="${NIXLXC_DIR}/${f}"
     if [[ ! -f "$src" ]]; then
         log "ERROR: missing required shared file: ${src}"
-        log "Run host/install.sh on the Proxmox host to restore proxnix shared files."
+    log "Run host/deploy/ansible/install.yml for this Proxmox node to restore proxnix shared files."
         exit 1
     fi
 done
 
 if [[ ! -f "$PROXNIX_SECRETS_GUEST_BIN" ]]; then
     log "ERROR: ${PROXNIX_SECRETS_GUEST_BIN} not found."
-    log "Run host/install.sh on the Proxmox host to restore proxnix runtime helpers."
+    log "Run host/deploy/ansible/install.yml for this Proxmox node to restore proxnix runtime helpers."
     exit 1
 fi
 

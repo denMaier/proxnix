@@ -145,7 +145,7 @@ in {
   ];
 
   # Shared cross-container operator baseline translated from the legacy
-  # Debian/Ansible bootstrap: admin user defaults, journald caps, timesync,
+  # Ansible bootstrap: admin user defaults, journald caps, timesync,
   # swappiness, and a few convenience packages. Forced security posture lives
   # in security-policy.nix so it stays easy to audit.
   proxnix.common.enable = lib.mkDefault true;

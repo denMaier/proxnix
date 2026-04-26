@@ -72,9 +72,9 @@ revision. If absent, host builds use rolling mode without writing a local lock.
 # Deployment
   # Hosts 
     * nix must be installed and flakes activated 
-    * then deploy as flake?!
-    * otherwise Ansible playbook deployment 
-    * drop completely deb-package and local install script, keep uninstall script
+    * Ansible playbook is the only supported host deployment path
+    * no deb-package, curl installer, or local install script
+    * keep uninstall script for cleanup
     
   # Workstation
     * CLI using pypi or nix or flake

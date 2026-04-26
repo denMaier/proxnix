@@ -6,13 +6,9 @@ This page maps every important proxnix path by role.
 
 | File | Purpose |
 |------|---------|
-| `host/install.sh` | Installs local hooks, helpers, and node-local proxnix files |
 | `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-uninstall` |
-| `host/deploy/ansible/install.yml` | Idempotent Ansible playbook that mirrors `host/install.sh` on one or more Proxmox nodes |
+| `host/deploy/ansible/install.yml` | Idempotent Ansible playbook that installs proxnix on one or more Proxmox nodes |
 | `host/deploy/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
-| `host/remote/github-install.sh` | Curl-friendly GitHub wrapper that downloads the repo archive and runs `host/install.sh` |
-| `host/remote/install-host-package.sh` | Helper-script style installer for the published `proxnix-host` Debian package |
-| `host/packaging/` | Debian packaging scripts and maintainer-script templates for the host runtime |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
 | `ci/project-version.sh` | Prints the canonical version from `VERSION` |
 | `ci/release-lib.sh` | Shared shell helpers for tag validation and release tagging |
@@ -60,7 +56,6 @@ This page maps every important proxnix path by role.
 | `workstation/cli/src/` | Publishable Python package source |
 | `workstation/manager/` | Proxnix Manager desktop app and hosted web UI |
 | `packaging/homebrew/` | Homebrew tap scaffolds for the `proxnix-workstation` formula and Proxnix Manager cask |
-| `.github/workflows/host-packages.yml` | GitHub Actions workflow for host Debian package builds and GitHub release assets |
 | `.github/workflows/pypi-publish.yml` | GitHub Actions workflow for workstation Python package builds and PyPI publishing |
 | `.github/workflows/proxnix-manager-dmg.yml` | GitHub Actions workflow for Proxnix Manager DMG builds and release assets |
 | `.github/workflows/proxnix-manager-linux.yml` | GitHub Actions workflow for Proxnix Manager Linux archive builds and release assets |
@@ -73,7 +68,6 @@ Current top-level layout:
 ```text
 .
 ├── host/
-│   ├── install.sh
 │   ├── uninstall.sh
 │   ├── install/
 │   ├── runtime/
@@ -86,8 +80,6 @@ Current top-level layout:
 │   ├── deploy/
 │   │   ├── ansible/install.yml
 │   │   └── inventory.proxmox.ini
-│   ├── packaging/
-│   ├── remote/github-install.sh
 │   └── extras/system/
 ├── workstation/
 │   ├── flake.nix
@@ -141,9 +133,9 @@ These paths are the published host-side state on the Proxmox node. The workstati
 
 ## Per-node runtime paths
 
-Package-installed nodes get the hook and helper paths below. The
+Ansible-installed nodes get the hook and helper paths below. The
 `install-manifest.txt`, `install-info.txt`, and `proxnix-uninstall` entries are
-specific to the shell-installer path.
+managed by the Ansible playbook.
 
 ```text
 /usr/share/lxc/config/

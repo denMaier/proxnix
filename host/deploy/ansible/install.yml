@@ -30,6 +30,16 @@
         mode: "0700"
       - path: "{{ proxnix_data_dir }}/containers"
         mode: "0755"
+      - path: "{{ proxnix_data_dir }}/authority"
+        mode: "0755"
+      - path: "{{ proxnix_data_dir }}/status"
+        mode: "0755"
+      - path: "{{ proxnix_data_dir }}/state"
+        mode: "0755"
+      - path: "{{ proxnix_data_dir }}/gcroots"
+        mode: "0755"
+      - path: "{{ proxnix_data_dir }}/gcroots/deploy"
+        mode: "0755"
       - path: "{{ proxnix_private_dir }}/shared"
         mode: "0700"
       - path: "{{ proxnix_private_dir }}/containers"
@@ -53,6 +63,12 @@
       - src: "{{ proxnix_host_runtime_root }}/lib/pve-conf-to-nix.py"
         dest: "{{ proxnix_lib_dir }}/pve-conf-to-nix.py"
         mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/lib/proxnix_authority_render.py"
+        dest: "{{ proxnix_lib_dir }}/proxnix_authority_render.py"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/lib/proxnix_reconciler_state.py"
+        dest: "{{ proxnix_lib_dir }}/proxnix_reconciler_state.py"
+        mode: "0755"
       - src: "{{ proxnix_host_runtime_root }}/lxc/hooks/nixos-proxnix-common.sh"
         dest: "{{ proxnix_lib_dir }}/nixos-proxnix-common.sh"
         mode: "0644"
@@ -65,14 +81,47 @@
       - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-create-lxc"
         dest: "{{ proxnix_sbin_dir }}/proxnix-create-lxc"
         mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-authority-render"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-authority-render"
+        mode: "0755"
       - src: "{{ proxnix_host_root }}/install/uninstall.sh"
         dest: "{{ proxnix_sbin_dir }}/proxnix-uninstall"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-gc"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-gc"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-build-golden"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-build-golden"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-build"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-build"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-seed"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-seed"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-seed-offline"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-seed-offline"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-activate"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-activate"
+        mode: "0755"
+      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconciler-state"
+        dest: "{{ proxnix_sbin_dir }}/proxnix-reconciler-state"
         mode: "0755"
       - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-gc.service"
         dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.service"
         mode: "0644"
       - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-gc.timer"
         dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.timer"
+        mode: "0644"
+      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-reconcile.service"
+        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-reconcile.service"
+        mode: "0644"
+      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-reconcile@.service"
+        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-reconcile@.service"
         mode: "0644"
       - src: "{{ proxnix_host_runtime_root }}/nix/base.nix"
         dest: "{{ proxnix_data_dir }}/base.nix"
@@ -96,7 +145,7 @@
           - (ansible_host | default(inventory_hostname)) not in ['localhost', '127.0.0.1', '::1']
         fail_msg: >-
           host/deploy/ansible/install.yml deploys proxnix to remote Proxmox hosts over SSH.
-          Use host/install.sh directly on the node for local installs.
+          Add the target node to the Ansible inventory and run this playbook from a control machine.
 
     - name: Verify the target is a Proxmox host
       ansible.builtin.command: pveversion
@@ -104,6 +153,14 @@
 
     - name: Verify sops is installed on the target host
       ansible.builtin.command: sops --version
+      changed_when: false
+
+    - name: Verify nix is installed on the target host
+      ansible.builtin.command: nix --version
+      changed_when: false
+
+    - name: Verify nix-command and flakes are enabled
+      ansible.builtin.command: nix --extra-experimental-features "nix-command flakes" eval --expr true
       changed_when: false
 
   tasks:
@@ -138,15 +195,28 @@
           /usr/share/lxc/hooks/nixos-proxnix-mount
           /usr/share/lxc/hooks/nixos-proxnix-poststop
           /usr/local/lib/proxnix/pve-conf-to-nix.py
+          /usr/local/lib/proxnix/proxnix_authority_render.py
+          /usr/local/lib/proxnix/proxnix_reconciler_state.py
           /usr/local/lib/proxnix/nixos-proxnix-common.sh
           /usr/local/lib/proxnix/proxnix-secrets-guest
           /usr/local/lib/proxnix/install-manifest.txt
           /usr/local/lib/proxnix/install-info.txt
           /usr/local/sbin/proxnix-doctor
           /usr/local/sbin/proxnix-create-lxc
+          /usr/local/sbin/proxnix-authority-render
+          /usr/local/sbin/proxnix-gc
+          /usr/local/sbin/proxnix-reconcile
+          /usr/local/sbin/proxnix-reconcile-build-golden
+          /usr/local/sbin/proxnix-reconcile-build
+          /usr/local/sbin/proxnix-reconcile-seed
+          /usr/local/sbin/proxnix-reconcile-seed-offline
+          /usr/local/sbin/proxnix-reconcile-activate
+          /usr/local/sbin/proxnix-reconciler-state
           /usr/local/sbin/proxnix-uninstall
           /etc/systemd/system/proxnix-gc.service
           /etc/systemd/system/proxnix-gc.timer
+          /etc/systemd/system/proxnix-reconcile.service
+          /etc/systemd/system/proxnix-reconcile@.service
           /var/lib/proxnix/base.nix
           /var/lib/proxnix/common.nix
           /var/lib/proxnix/security-policy.nix
@@ -166,8 +236,17 @@
           operations.
 
           Installed local commands:
+          - proxnix-authority-render
           - proxnix-create-lxc
           - proxnix-doctor
+          - proxnix-gc
+          - proxnix-reconcile
+          - proxnix-reconcile-build-golden
+          - proxnix-reconcile-build
+          - proxnix-reconcile-seed
+          - proxnix-reconcile-seed-offline
+          - proxnix-reconcile-activate
+          - proxnix-reconciler-state
           - proxnix-uninstall
 
           Managed local runtime files are listed in:
@@ -186,3 +265,10 @@
         enabled: true
         state: started
         daemon_reload: true
+
+    - name: Ensure legacy full reconcile timer is disabled
+      ansible.builtin.systemd:
+        name: proxnix-reconcile.timer
+        enabled: false
+        state: stopped
+      failed_when: false

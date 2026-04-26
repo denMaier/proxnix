@@ -4,7 +4,7 @@ The ergonomic release path is:
 
 1. install the repo-managed git hooks once
 2. run one release command with `patch`, `minor`, or `major`
-3. let GitHub Actions publish the host package, the workstation Python package, and the Proxnix Manager app assets from the pushed tag
+3. let GitHub Actions publish the workstation Python package and the Proxnix Manager app assets from the pushed tag
 4. render and update the Homebrew tap formula for `proxnix-workstation` and the cask for Proxnix Manager
 
 ## Install the git hooks
@@ -103,11 +103,12 @@ This only updates:
 
 Pushing a matching `v*` tag triggers:
 
-- [Host Packages](host-packages.md)
 - [Workstation Packages](workstation-packages.md)
 - [Proxnix Manager](proxnix-manager.md)
 
-Those workflows publish artifacts using the tag as the package version.
+Those workflows publish workstation and Manager artifacts using the tag as the
+package version. Host deployment is not package-published; rerun the Ansible
+playbook from the checked-out release you want to deploy.
 
 The macOS app workflow signs and notarizes the DMG only when the Apple
 Developer ID and notarization secrets are configured. Unsigned CI artifacts are

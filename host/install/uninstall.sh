@@ -1,7 +1,7 @@
 #!/bin/bash
 # uninstall.sh — Remove proxnix from a Proxmox node.
 #
-# Removes the per-node files installed by install.sh. This script is also
+# Removes the per-node files installed by the Ansible playbook. This script is also
 # installed onto the host as /usr/local/sbin/proxnix-uninstall so the original
 # repo checkout is not required for normal uninstall operations.
 # /var/lib/proxnix/ and /etc/proxnix/ are intentionally left untouched — they
