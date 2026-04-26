@@ -101,6 +101,7 @@ let
     printf '  Root FS:     %s\n\n' "''${fs_type:-unknown}"
 
     printf 'Host-built system\n'
+    printf '  Build input: /var/lib/proxnix/build-input/ (debug snapshot)\n'
     printf '  Runtime:     ${proxnixRuntimeBinDir}/* on PATH\n'
     printf '  Local hook:  /etc/nixos/local.nix (guest-only debugging)\n'
     if [ -n "$current" ]; then
@@ -359,6 +360,7 @@ in {
     ========
 
     Host-built system
+      /var/lib/proxnix/build-input/  debug snapshot
       ${proxnixRuntimeBinDir}/* on PATH
       /etc/nixos/local.nix  guest-only debugging
 

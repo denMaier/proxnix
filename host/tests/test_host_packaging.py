@@ -53,6 +53,8 @@ class HostPackagingTests(unittest.TestCase):
         self.assertNotIn("PROXNIX_PRESTART_RECONCILE", prestart)
         self.assertNotIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
         self.assertIn('proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"', mount)
+        self.assertIn("rsync -a --delete", mount)
+        self.assertIn("/var/lib/proxnix/build-input", mount)
         self.assertNotIn('copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix"', mount)
         self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)

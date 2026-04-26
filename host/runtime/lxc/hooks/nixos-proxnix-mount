@@ -154,6 +154,19 @@ copy_guest_file() {
     fi
 }
 
+sync_build_input_snapshot() {
+    if ! command -v rsync >/dev/null 2>&1; then
+        log "WARN: rsync is unavailable; skipping non-authoritative build-input snapshot."
+        return
+    fi
+    mkdir -p "$PROXNIX_BUILD_INPUT_DIR"
+    if ! rsync -a --delete --chown=0:0 --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "${BIND_CONFIG_DIR}/" "${PROXNIX_BUILD_INPUT_DIR}/"; then
+        log "WARN: failed to refresh non-authoritative build-input snapshot."
+        return
+    fi
+    log "Refreshed non-authoritative build-input snapshot at /var/lib/proxnix/build-input."
+}
+
 sync_bound_file_manifest() {
     local src_dir="$1" dest_dir="$2" manifest="$3"
     shift 3
@@ -261,6 +274,7 @@ remove_guest_path() {
 
 STAGE_DIR="$(proxnix_stage_dir "$VMID")"
 BIND_STAGE_DIR="${STAGE_DIR}/bind"
+BIND_CONFIG_DIR="${BIND_STAGE_DIR}/config"
 BIND_RUNTIME_DIR="${BIND_STAGE_DIR}/runtime"
 BIND_SECRETS_DIR="${BIND_STAGE_DIR}/secrets"
 BIND_QUADLET_DIR="${BIND_STAGE_DIR}/quadlet"
@@ -289,13 +303,14 @@ if [[ ! -d "$STAGE_DIR" ]]; then
     exit 1
 fi
 
-if [[ ! -d "$COPY_RUNTIME_BIN_DIR" || ! -f "${BIND_RUNTIME_DIR}/vmid" || ! -f "${BIND_RUNTIME_DIR}/current-config-hash" || -z "$DESIRED_CONFIG_HASH" ]]; then
+if [[ ! -d "$BIND_CONFIG_DIR" || ! -d "$COPY_RUNTIME_BIN_DIR" || ! -f "${BIND_RUNTIME_DIR}/vmid" || ! -f "${BIND_RUNTIME_DIR}/current-config-hash" || -z "$DESIRED_CONFIG_HASH" ]]; then
     log "ERROR: staged proxnix state is incomplete under ${STAGE_DIR}."
     exit 1
 fi
 log "Validated staged proxnix state (desired hash ${DESIRED_CONFIG_HASH})."
 
 PROXNIX_STATE_DIR="${ROOTFS}/var/lib/proxnix"
+PROXNIX_BUILD_INPUT_DIR="${PROXNIX_STATE_DIR}/build-input"
 PROXNIX_RUNTIME_DIR="${PROXNIX_STATE_DIR}/runtime"
 PROXNIX_RUNTIME_BIN_DIR="${PROXNIX_RUNTIME_DIR}/bin"
 PROXNIX_RUNTIME_MANIFEST_DIR="${PROXNIX_RUNTIME_DIR}/manifests"
@@ -308,9 +323,10 @@ PROXNIX_RUNTIME_VMID="${PROXNIX_RUNTIME_DIR}/vmid"
 PROXNIX_RUNTIME_BIN_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-runtime-bin.list"
 PROXNIX_SECRET_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-secrets.list"
 
-# Diagnostic desired-state markers, secrets, runtime helper scripts, and file
-# drop-ins are injected from the host. NixOS config is no longer staged into
-# the guest rootfs; the host build/seed path owns the evaluated closure.
+# Diagnostic desired-state markers, secrets, runtime helper scripts, file
+# drop-ins, and a non-authoritative build-input snapshot are injected from the
+# host. The snapshot supports manual debugging only; the host build/seed path
+# owns the evaluated closure.
 
 # Clean up any real /etc/systemd/system/ directory left by an older proxnix
 # version — NixOS setup-etc.pl requires it to be a symlink, not a directory.
@@ -340,6 +356,7 @@ else
 fi
 
 remove_guest_path "${PROXNIX_STATE_DIR}/config"
+sync_build_input_snapshot
 rm -f "${ROOTFS}/etc/nixos/configuration.nix"
 remove_guest_path "${ROOTFS}/etc/nixos/managed"
 rm -f "${ROOTFS}/etc/nixos/base.nix" "${ROOTFS}/etc/nixos/common.nix" "${ROOTFS}/etc/nixos/proxmox.nix"
