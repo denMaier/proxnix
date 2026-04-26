@@ -6,13 +6,14 @@
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
 This is the only supported host deployment path. It verifies Proxmox and Nix,
-enables flakes for an existing Nix installation, installs proxnix host tools
-through `/nix/var/nix/profiles/proxnix-host-tools`, exposes them through
-`/usr/local/bin`, then copies files from this repo on the Ansible controller to
-the remote hosts in your inventory. It is not meant to run against `localhost`.
-By default Nix must already be installed. To install Nix when missing,
-explicitly set `proxnix_nix_install_mode=determinate`; this uses the
-Determinate Systems installer.
+enables flakes for an existing Nix installation, stages the host flake source
+under `/var/lib/proxnix/install-source`, installs or upgrades
+`/nix/var/nix/profiles/proxnix-host`, and runs `proxnix-host-activate`. The
+activation command links the Nix-profile payload into the mutable Proxmox paths
+that LXC and systemd expect. It is not meant to run against `localhost`. By
+default Nix must already be installed. To install Nix when missing, explicitly
+set `proxnix_nix_install_mode=determinate`; this uses the Determinate Systems
+installer.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -161,18 +162,30 @@ Create an annotated release tag and optionally push it:
 This expects the tag version to match both `VERSION` and
 `workstation/cli/pyproject.toml`.
 
-### `proxnix-uninstall`
+### `proxnix-host-activate`
+
+Activate the Nix-installed proxnix host profile on a Proxmox node. It creates
+the host integration symlinks for LXC hooks, helper commands, host tools,
+shared Nix modules, and systemd units, then reloads systemd and enables the GC
+timer.
+
+This command is normally called by `host/deploy/ansible/install.yml`.
+
+### `proxnix-host-uninstall`
 
 Remove proxnix's installed assets from the current Proxmox node. Leaves
-`/var/lib/proxnix` intact.
+`/var/lib/proxnix` intact and removes the proxnix host profile.
 
 This command is installed onto the host by `host/deploy/ansible/install.yml`, so
 you do not need to keep the original repo checkout around just to uninstall
 proxnix.
 
+`proxnix-uninstall` is kept as a compatibility alias.
+
 ### `host/uninstall.sh`
 
-Repo-local source for the same uninstall logic shipped as `proxnix-uninstall`.
+Repo-local source for the same uninstall logic shipped as
+`proxnix-host-uninstall`.
 
 ### `proxnix-doctor <vmid>`
 

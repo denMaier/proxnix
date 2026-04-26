@@ -63,12 +63,13 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
 By default the playbook requires an existing Nix installation. It enables
-`nix-command flakes`, installs proxnix host tools through the
-`/nix/var/nix/profiles/proxnix-host-tools` Nix profile, exposes those tools
-through `/usr/local/bin`, verifies the prerequisites, and then copies the
-proxnix files from your local repo checkout to each remote Proxmox host over
-SSH. Run it from your workstation or another Ansible control machine, not from
-the target node itself.
+`nix-command flakes`, stages the host flake source under
+`/var/lib/proxnix/install-source`, installs or upgrades the
+`/nix/var/nix/profiles/proxnix-host` profile, runs `proxnix-host-activate`, and
+verifies the installed commands. Activation links the proxnix files from the
+Nix profile into the mutable Proxmox paths that LXC and systemd expect. Run the
+playbook from your workstation or another Ansible control machine, not from the
+target node itself.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -81,9 +82,9 @@ Systems installer explicitly:
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
 ```
 
-`proxnix-uninstall` removes the proxnix host tool symlinks and Nix profile, but
-does not remove Nix itself. For a Determinate-installed Nix, remove Nix
-separately with:
+`proxnix-host-uninstall` removes the proxnix host symlinks and Nix profile, but
+does not remove Nix itself. `proxnix-uninstall` is kept as a compatibility
+alias. For a Determinate-installed Nix, remove Nix separately with:
 
 ```bash
 /nix/nix-installer uninstall
@@ -299,11 +300,12 @@ To remove proxnix from a node but keep the published relay cache, use the
 uninstall helper installed by the Ansible playbook:
 
 ```bash
-proxnix-uninstall
+proxnix-host-uninstall
 ```
 
-This removes only the installed hooks, helpers, services, and timers. It
-intentionally leaves `/var/lib/proxnix` and `/etc/proxnix` alone.
+`proxnix-uninstall` is kept as a compatibility alias. This removes only the
+installed hooks, helpers, services, timers, and proxnix host profile. It
+intentionally leaves `/var/lib/proxnix` and `/etc/proxnix` state alone.
 
 ## What you should have when done
 

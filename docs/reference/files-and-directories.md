@@ -6,7 +6,9 @@ This page maps every important proxnix path by role.
 
 | File | Purpose |
 |------|---------|
-| `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-uninstall` |
+| `flake.nix` | Root host-runtime flake exposing `.#proxnix-host` |
+| `host/nix/proxnix-host.nix` | Nix package for the Proxmox host payload |
+| `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-host-uninstall` |
 | `host/deploy/ansible/install.yml` | Idempotent Ansible playbook that installs proxnix on one or more Proxmox nodes |
 | `host/deploy/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
@@ -133,9 +135,10 @@ These paths are the published host-side state on the Proxmox node. The workstati
 
 ## Per-node runtime paths
 
-Ansible-installed nodes get the hook and helper paths below. The
-`install-manifest.txt`, `install-info.txt`, and `proxnix-uninstall` entries are
-managed by the Ansible playbook.
+Ansible stages the host flake source under `/var/lib/proxnix/install-source`,
+installs `/nix/var/nix/profiles/proxnix-host`, and runs
+`proxnix-host-activate`. The paths below are symlinks into that profile, except
+for the local manifest and install metadata.
 
 ```text
 /usr/share/lxc/config/
@@ -168,7 +171,9 @@ managed by the Ansible playbook.
 ├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
 ├── proxnix-reconcile-activate         activate phase command
 ├── proxnix-reconciler-state           local state journal helper
-└── proxnix-uninstall                  local uninstall helper
+├── proxnix-host-activate              links the Nix profile payload into host paths
+├── proxnix-host-uninstall             local uninstall helper
+└── proxnix-uninstall                  compatibility alias
 ```
 
 ## Stage directory on the host (tmpfs)

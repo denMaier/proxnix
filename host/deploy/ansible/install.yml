@@ -6,151 +6,22 @@
 
   vars:
     proxnix_repo_root: "{{ playbook_dir }}/../../.."
-    proxnix_host_root: "{{ playbook_dir }}/../.."
-    proxnix_host_runtime_root: "{{ proxnix_host_root }}/runtime"
-    proxnix_lxc_config_dir: /usr/share/lxc/config
-    proxnix_lxc_hooks_dir: /usr/share/lxc/hooks
-    proxnix_lib_dir: /usr/local/lib/proxnix
-    proxnix_sbin_dir: /usr/local/sbin
-    proxnix_local_bin_dir: /usr/local/bin
-    proxnix_systemd_unit_dir: /etc/systemd/system
     proxnix_data_dir: /var/lib/proxnix
-    proxnix_private_dir: /var/lib/proxnix/private
-    proxnix_host_state_dir: /etc/proxnix
-    proxnix_install_manifest: "{{ proxnix_lib_dir }}/install-manifest.txt"
-    proxnix_install_info: "{{ proxnix_lib_dir }}/install-info.txt"
+    proxnix_install_source_dir: "{{ proxnix_data_dir }}/install-source"
+    proxnix_host_profile: /nix/var/nix/profiles/proxnix-host
+    proxnix_host_flake_ref: "{{ proxnix_install_source_dir }}#proxnix-host"
     # Valid values:
     # - require-existing: fail if Nix is absent
     # - determinate: install Nix with the Determinate Systems installer if absent
     proxnix_nix_install_mode: require-existing
     proxnix_determinate_nix_install_url: https://install.determinate.systems/nix
-    proxnix_host_tools_profile: /nix/var/nix/profiles/proxnix-host-tools
-    proxnix_host_tool_packages:
-      - nixpkgs#age
-      - nixpkgs#jq
-      - nixpkgs#rsync
-      - nixpkgs#sops
-    proxnix_host_tool_commands:
-      - age
-      - jq
-      - rsync
-      - sops
-    proxnix_directories:
-      - path: "{{ proxnix_lib_dir }}"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}"
-        mode: "0755"
-      - path: "{{ proxnix_private_dir }}"
-        mode: "0700"
-      - path: "{{ proxnix_host_state_dir }}"
-        mode: "0700"
-      - path: "{{ proxnix_data_dir }}/containers"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}/authority"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}/status"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}/state"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}/gcroots"
-        mode: "0755"
-      - path: "{{ proxnix_data_dir }}/gcroots/deploy"
-        mode: "0755"
-      - path: "{{ proxnix_private_dir }}/shared"
-        mode: "0700"
-      - path: "{{ proxnix_private_dir }}/containers"
-        mode: "0700"
-    proxnix_installed_files:
-      - src: "{{ proxnix_host_runtime_root }}/lxc/config/nixos.common.conf"
-        dest: "{{ proxnix_lxc_config_dir }}/nixos.common.conf"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/lxc/config/nixos.userns.conf"
-        dest: "{{ proxnix_lxc_config_dir }}/nixos.userns.conf"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/lxc/hooks/nixos-proxnix-prestart"
-        dest: "{{ proxnix_lxc_hooks_dir }}/nixos-proxnix-prestart"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lxc/hooks/nixos-proxnix-mount"
-        dest: "{{ proxnix_lxc_hooks_dir }}/nixos-proxnix-mount"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lxc/hooks/nixos-proxnix-poststop"
-        dest: "{{ proxnix_lxc_hooks_dir }}/nixos-proxnix-poststop"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lib/pve-conf-to-nix.py"
-        dest: "{{ proxnix_lib_dir }}/pve-conf-to-nix.py"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lib/proxnix_authority_render.py"
-        dest: "{{ proxnix_lib_dir }}/proxnix_authority_render.py"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lib/proxnix_reconciler_state.py"
-        dest: "{{ proxnix_lib_dir }}/proxnix_reconciler_state.py"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/lxc/hooks/nixos-proxnix-common.sh"
-        dest: "{{ proxnix_lib_dir }}/nixos-proxnix-common.sh"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/lib/proxnix-secrets-guest"
-        dest: "{{ proxnix_lib_dir }}/proxnix-secrets-guest"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-doctor"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-doctor"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-create-lxc"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-create-lxc"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-authority-render"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-authority-render"
-        mode: "0755"
-      - src: "{{ proxnix_host_root }}/install/uninstall.sh"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-uninstall"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-gc"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-gc"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-build-golden"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-build-golden"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-build"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-build"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-seed"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-seed"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-seed-offline"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-seed-offline"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconcile-activate"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconcile-activate"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/bin/proxnix-reconciler-state"
-        dest: "{{ proxnix_sbin_dir }}/proxnix-reconciler-state"
-        mode: "0755"
-      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-gc.service"
-        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.service"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-gc.timer"
-        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-gc.timer"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-reconcile.service"
-        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-reconcile.service"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/systemd/proxnix-reconcile@.service"
-        dest: "{{ proxnix_systemd_unit_dir }}/proxnix-reconcile@.service"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/nix/base.nix"
-        dest: "{{ proxnix_data_dir }}/base.nix"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/nix/common.nix"
-        dest: "{{ proxnix_data_dir }}/common.nix"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/nix/security-policy.nix"
-        dest: "{{ proxnix_data_dir }}/security-policy.nix"
-        mode: "0644"
-      - src: "{{ proxnix_host_runtime_root }}/nix/configuration.nix"
-        dest: "{{ proxnix_data_dir }}/configuration.nix"
-        mode: "0644"
+    proxnix_install_source_files:
+      - flake.nix
+      - VERSION
+    proxnix_install_source_dirs:
+      - host/runtime
+      - host/install
+      - host/nix
 
   pre_tasks:
     - name: Ensure this playbook targets remote SSH hosts
@@ -230,161 +101,74 @@
       ansible.builtin.command: nix --extra-experimental-features "nix-command flakes" eval --expr true
       changed_when: false
 
-    - name: Install proxnix host tools with Nix
-      ansible.builtin.shell: |
-        set -eu
-        profile={{ proxnix_host_tools_profile | quote }}
-        commands=({% for tool in proxnix_host_tool_commands %}{{ tool | quote }} {% endfor %})
-        packages=({% for package in proxnix_host_tool_packages %}{{ package | quote }} {% endfor %})
-        missing=()
-
-        for index in "${!commands[@]}"; do
-          tool="${commands[$index]}"
-          package="${packages[$index]}"
-          if [ ! -x "$profile/bin/$tool" ]; then
-            missing+=("$package")
-          fi
-        done
-
-        if [ "${#missing[@]}" -eq 0 ]; then
-          exit 0
-        fi
-
-        nix profile install --profile "$profile" "${missing[@]}"
-      args:
-        executable: /bin/bash
-      register: proxnix_host_tools_install
-      changed_when: proxnix_host_tools_install.stdout != "" or proxnix_host_tools_install.stderr != ""
-
-    - name: Expose proxnix host tools on PATH
-      ansible.builtin.file:
-        src: "{{ proxnix_host_tools_profile }}/bin/{{ item }}"
-        dest: "{{ proxnix_local_bin_dir }}/{{ item }}"
-        state: link
-        owner: root
-        group: root
-        force: false
-      loop: "{{ proxnix_host_tool_commands }}"
-
-    - name: Verify proxnix host tools are installed on the target host
-      ansible.builtin.command: "{{ item }} --version"
-      changed_when: false
-      loop: "{{ proxnix_host_tool_commands }}"
-
   tasks:
-    - name: Ensure proxnix-managed directories exist
+    - name: Reset proxnix host package source
       ansible.builtin.file:
-        path: "{{ item.path }}"
+        path: "{{ proxnix_install_source_dir }}"
+        state: absent
+
+    - name: Create proxnix host package source directories
+      ansible.builtin.file:
+        path: "{{ proxnix_install_source_dir }}/{{ item }}"
         state: directory
         owner: root
         group: root
-        mode: "{{ item.mode }}"
-      loop: "{{ proxnix_directories }}"
+        mode: "0755"
+      loop:
+        - ""
+        - host
 
-    - name: Install proxnix files
+    - name: Stage proxnix host flake files
       ansible.builtin.copy:
-        src: "{{ item.src }}"
-        dest: "{{ item.dest }}"
-        owner: root
-        group: root
-        mode: "{{ item.mode }}"
-      loop: "{{ proxnix_installed_files }}"
-
-    - name: Write proxnix install manifest
-      ansible.builtin.copy:
-        dest: "{{ proxnix_install_manifest }}"
+        src: "{{ proxnix_repo_root }}/{{ item }}"
+        dest: "{{ proxnix_install_source_dir }}/{{ item }}"
         owner: root
         group: root
         mode: "0644"
-        content: |
-          /usr/share/lxc/config/nixos.common.conf
-          /usr/share/lxc/config/nixos.userns.conf
-          /usr/share/lxc/hooks/nixos-proxnix-prestart
-          /usr/share/lxc/hooks/nixos-proxnix-mount
-          /usr/share/lxc/hooks/nixos-proxnix-poststop
-          /usr/local/lib/proxnix/pve-conf-to-nix.py
-          /usr/local/lib/proxnix/proxnix_authority_render.py
-          /usr/local/lib/proxnix/proxnix_reconciler_state.py
-          /usr/local/lib/proxnix/nixos-proxnix-common.sh
-          /usr/local/lib/proxnix/proxnix-secrets-guest
-          /usr/local/lib/proxnix/install-manifest.txt
-          /usr/local/lib/proxnix/install-info.txt
-          /usr/local/sbin/proxnix-doctor
-          /usr/local/sbin/proxnix-create-lxc
-          /usr/local/sbin/proxnix-authority-render
-          /usr/local/sbin/proxnix-gc
-          /usr/local/sbin/proxnix-reconcile
-          /usr/local/sbin/proxnix-reconcile-build-golden
-          /usr/local/sbin/proxnix-reconcile-build
-          /usr/local/sbin/proxnix-reconcile-seed
-          /usr/local/sbin/proxnix-reconcile-seed-offline
-          /usr/local/sbin/proxnix-reconcile-activate
-          /usr/local/sbin/proxnix-reconciler-state
-          /usr/local/sbin/proxnix-uninstall
-          /usr/local/bin/age
-          /usr/local/bin/jq
-          /usr/local/bin/rsync
-          /usr/local/bin/sops
-          /nix/var/nix/profiles/proxnix-host-tools
-          /etc/systemd/system/proxnix-gc.service
-          /etc/systemd/system/proxnix-gc.timer
-          /etc/systemd/system/proxnix-reconcile.service
-          /etc/systemd/system/proxnix-reconcile@.service
-          /var/lib/proxnix/base.nix
-          /var/lib/proxnix/common.nix
-          /var/lib/proxnix/security-policy.nix
-          /var/lib/proxnix/configuration.nix
+      loop: "{{ proxnix_install_source_files }}"
 
-    - name: Write proxnix install info
+    - name: Stage proxnix host flake directories
       ansible.builtin.copy:
-        dest: "{{ proxnix_install_info }}"
+        src: "{{ proxnix_repo_root }}/{{ item }}"
+        dest: "{{ proxnix_install_source_dir }}/{{ item | dirname }}"
         owner: root
         group: root
-        mode: "0644"
-        content: |
-          proxnix host install
-          ====================
+        mode: preserve
+      loop: "{{ proxnix_install_source_dirs }}"
 
-          This node no longer depends on the original proxnix repo checkout for normal
-          operations.
+    - name: Install or upgrade proxnix host profile
+      ansible.builtin.shell: |
+        set -eu
+        profile={{ proxnix_host_profile | quote }}
+        flake_ref={{ proxnix_host_flake_ref | quote }}
 
-          Installed local commands:
-          - proxnix-authority-render
-          - proxnix-create-lxc
-          - proxnix-doctor
-          - proxnix-gc
-          - proxnix-reconcile
-          - proxnix-reconcile-build-golden
-          - proxnix-reconcile-build
-          - proxnix-reconcile-seed
-          - proxnix-reconcile-seed-offline
-          - proxnix-reconcile-activate
-          - proxnix-reconciler-state
-          - proxnix-uninstall
+        if [ -e "$profile/manifest.json" ]; then
+          nix profile upgrade --no-write-lock-file --profile "$profile" '.*' || nix profile install --no-write-lock-file --profile "$profile" "$flake_ref"
+        else
+          nix profile install --no-write-lock-file --profile "$profile" "$flake_ref"
+        fi
+      args:
+        executable: /bin/bash
+      register: proxnix_host_profile_install
+      changed_when: proxnix_host_profile_install.stdout != "" or proxnix_host_profile_install.stderr != ""
 
-          Managed local runtime files are listed in:
-          {{ proxnix_install_manifest }}
+    - name: Activate proxnix host runtime
+      ansible.builtin.command: "{{ proxnix_host_profile }}/bin/proxnix-host-activate"
+      changed_when: true
 
-          Published relay data remains external:
-          - {{ proxnix_data_dir }}
-          - {{ proxnix_host_state_dir }}
+    - name: Verify proxnix host commands are installed
+      ansible.builtin.command: "{{ item }} --help"
+      changed_when: false
+      loop:
+        - proxnix-doctor
+        - proxnix-reconcile
+        - proxnix-host-activate
 
-          To remove only the installed proxnix runtime from this node, run:
-            proxnix-uninstall
-
-          proxnix-uninstall removes the proxnix host tool symlinks and profile.
-          It does not remove Nix itself.
-
-    - name: Enable proxnix GC timer
-      ansible.builtin.systemd:
-        name: proxnix-gc.timer
-        enabled: true
-        state: started
-        daemon_reload: true
-
-    - name: Ensure legacy full reconcile timer is disabled
-      ansible.builtin.systemd:
-        name: proxnix-reconcile.timer
-        enabled: false
-        state: stopped
-      failed_when: false
+    - name: Verify proxnix host tools are installed
+      ansible.builtin.command: "{{ item }} --version"
+      changed_when: false
+      loop:
+        - age
+        - jq
+        - rsync
+        - sops

@@ -73,8 +73,10 @@ revision. If absent, host builds use rolling mode without writing a local lock.
   # Hosts 
     * nix daemon must already be installed
     * optionally, Ansible can install Nix with Determinate installer when explicitly requested
-    * Ansible enables nix-command/flakes and installs proxnix host tools through a dedicated Nix profile
-    * Ansible playbook is the only supported host deployment path
+    * proxnix host runtime is a flake package installed into /nix/var/nix/profiles/proxnix-host
+    * proxnix-host-activate links the profile payload into Proxmox/systemd paths
+    * proxnix-host-uninstall removes those links and the proxnix host profile
+    * Ansible playbook is the only supported orchestrated host deployment path
     * no deb-package, curl installer, or local install script
     * keep uninstall script for cleanup
     

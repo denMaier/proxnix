@@ -136,8 +136,9 @@ Typical sequence:
 2. Restart managed containers as needed
 
 Once a node is installed, it does not need to retain that repo checkout for
-normal operations. Use `proxnix-uninstall` on the node to remove installed host
-runtime files while keeping relay data.
+normal operations. Use `proxnix-host-uninstall` on the node to remove installed
+host runtime files while keeping relay data. `proxnix-uninstall` remains as a
+compatibility alias.
 
 ## Updating the admin password
 
