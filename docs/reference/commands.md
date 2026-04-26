@@ -264,11 +264,14 @@ Sample output for a healthy relay-backed container:
 ### `proxnix-reconcile`
 
 Host-side reconciler entrypoint. The phase-1 command installs status plumbing
-and host prerequisite validation; manifest evaluation, builds, closure seeding,
-and activation are added in later reconciler phases.
+and host prerequisite validation. Dry-run renders and evaluates the generated
+authority manifest, then prints planned actions without building or modifying
+containers. Builds, closure seeding, and activation are added in later
+reconciler phases.
 
 ```bash
 proxnix-reconcile --dry-run
+proxnix-reconcile --dry-run --vmid 100
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```

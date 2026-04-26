@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # proxnix-reconcile -- host-side reconciler entrypoint.
 #
-# Phase 1 only installs the command and validates host prerequisites. Later
-# phases fill in authority rendering, manifest evaluation, build, seed, and
-# activation.
+# Host-side orchestration for authority rendering, manifest evaluation, builds,
+# closure seeding, and activation.
 
 set -euo pipefail
 
@@ -11,22 +10,79 @@ SELF_NAME="${0##*/}"
 NIXLXC_DIR="${PROXNIX_DIR:-/var/lib/proxnix}"
 AUTHORITY_DIR="${PROXNIX_AUTHORITY_DIR:-${NIXLXC_DIR}/authority}"
 STATUS_DIR="${PROXNIX_STATUS_DIR:-${NIXLXC_DIR}/status}"
+PVE_LXC_DIR="${PROXNIX_PVE_LXC_DIR:-/etc/pve/lxc}"
+LOCK_DIR="${PROXNIX_RUN_DIR:-/run/proxnix}"
+NODE_NAME="${PROXNIX_NODE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
+AUTHORITY_RENDER="${PROXNIX_AUTHORITY_RENDER:-/usr/local/sbin/proxnix-authority-render}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  ${SELF_NAME} [--dry-run] [--vmid <id>]
+  ${SELF_NAME} [--dry-run] [--vmid <id>] [--node-name <name>]
   ${SELF_NAME} --status [--vmid <id>]
   ${SELF_NAME} --rollback --vmid <id>
 
-Host-side reconciliation is installed, but manifest/build/activation support is
-not implemented in this phase yet.
+Dry-run renders and evaluates the authority manifest, then prints planned
+container actions without building, starting, stopping, creating, or modifying
+containers.
 EOF
 }
 
 die() {
   echo "error: $*" >&2
   exit 2
+}
+
+need_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "${cmd} not found"
+}
+
+render_authority() {
+  if [[ -x "$AUTHORITY_RENDER" ]]; then
+    "$AUTHORITY_RENDER" \
+      --root "$NIXLXC_DIR" \
+      --authority "$AUTHORITY_DIR" \
+      --pve-lxc-dir "$PVE_LXC_DIR" \
+      --node-name "$NODE_NAME" >/dev/null
+    return
+  fi
+
+  local repo_renderer="${SCRIPT_DIR}/../lib/proxnix_authority_render.py"
+  if [[ -f "$repo_renderer" ]]; then
+    need_cmd python3
+    python3 "$repo_renderer" \
+      --root "$NIXLXC_DIR" \
+      --authority "$AUTHORITY_DIR" \
+      --pve-lxc-dir "$PVE_LXC_DIR" \
+      --node-name "$NODE_NAME" >/dev/null
+    return
+  fi
+
+  die "proxnix-authority-render not found"
+}
+
+node_attr_fragment() {
+  if [[ "$NODE_NAME" =~ ^[A-Za-z_][A-Za-z0-9_\'-]*$ ]]; then
+    printf 'proxnix.nodes.%s\n' "$NODE_NAME"
+  else
+    printf 'proxnix.nodes."%s"\n' "${NODE_NAME//\"/\\\"}"
+  fi
+}
+
+eval_node_manifest() {
+  need_cmd nix
+  local attr
+  attr="$(node_attr_fragment)"
+  nix eval --json "${AUTHORITY_DIR}#${attr}"
+}
+
+take_global_lock() {
+  need_cmd flock
+  mkdir -p "$LOCK_DIR"
+  exec 9>"${LOCK_DIR}/reconcile.lock"
+  flock -n 9 || die "another proxnix-reconcile run is active"
 }
 
 status() {
@@ -79,6 +135,61 @@ status() {
   fi
 }
 
+dry_run() {
+  local selected_vmid="$1"
+  need_cmd jq
+  need_cmd readlink
+  take_global_lock
+  render_authority
+
+  local manifest
+  if ! manifest="$(eval_node_manifest)"; then
+    die "failed to evaluate node manifest for ${NODE_NAME}"
+  fi
+
+  local vmids=()
+  if [[ -n "$selected_vmid" ]]; then
+    if ! jq -e --arg vmid "$selected_vmid" '.containers[$vmid] != null' >/dev/null <<<"$manifest"; then
+      die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
+    fi
+    vmids=("$selected_vmid")
+  else
+    mapfile -t vmids < <(jq -r '.containers | keys[]' <<<"$manifest" | sort -n)
+  fi
+
+  if [[ ${#vmids[@]} -eq 0 ]]; then
+    printf 'no managed containers in proxnix.nodes.%s\n' "$NODE_NAME"
+    return
+  fi
+
+  local vmid conf status_file desired_system last_desired current_system
+  for vmid in "${vmids[@]}"; do
+    conf="${PVE_LXC_DIR}/${vmid}.conf"
+    status_file="${STATUS_DIR}/${vmid}.json"
+    desired_system="$(jq -r --arg vmid "$vmid" '.containers[$vmid].system // "unknown until build"' <<<"$manifest")"
+    last_desired=""
+    current_system=""
+    if [[ -f "$status_file" ]]; then
+      last_desired="$(jq -r '.desiredSystem // empty' "$status_file" 2>/dev/null || true)"
+      current_system="$(jq -r '.currentSystem // empty' "$status_file" 2>/dev/null || true)"
+    fi
+
+    if [[ "$last_desired" == "$desired_system" && -n "$current_system" && "$current_system" == "$desired_system" ]]; then
+      printf '%s noop current system matches desired\n' "$vmid"
+      continue
+    fi
+
+    printf '%s build %s\n' "$vmid" "$desired_system"
+    if [[ -f "$conf" ]]; then
+      printf '%s keep existing CT\n' "$vmid"
+    else
+      printf '%s create missing CT\n' "$vmid"
+    fi
+    printf '%s seed desired closure\n' "$vmid"
+    printf '%s activate desired system\n' "$vmid"
+  done
+}
+
 main() {
   local vmid="" dry_run=0 rollback=0 show_status=0
 
@@ -92,6 +203,11 @@ main() {
         [[ $# -ge 2 ]] || die "--vmid requires a value"
         vmid="$2"
         [[ "$vmid" =~ ^[0-9]+$ ]] || die "invalid VMID: $vmid"
+        shift 2
+        ;;
+      --node-name)
+        [[ $# -ge 2 ]] || die "--node-name requires a value"
+        NODE_NAME="$2"
         shift 2
         ;;
       --rollback)
@@ -123,17 +239,11 @@ main() {
   fi
 
   if [[ "$dry_run" -eq 1 ]]; then
-    printf 'authority: %s\n' "$AUTHORITY_DIR"
-    printf 'status: %s\n' "$STATUS_DIR"
-    if [[ -n "$vmid" ]]; then
-      printf '%s reconcile unavailable: manifest support is not implemented yet\n' "$vmid"
-    else
-      printf 'reconcile unavailable: manifest support is not implemented yet\n'
-    fi
-    return 1
+    dry_run "$vmid"
+    return
   fi
 
-  die "host reconciler is installed, but manifest/build/activation support is not implemented yet"
+  die "build/seed/activation support is not implemented yet; use --dry-run"
 }
 
 main "$@"
