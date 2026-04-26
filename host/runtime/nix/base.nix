@@ -13,6 +13,76 @@ let
   proxnixSecretsCommand = "${proxnixRuntimeBinDir}/proxnix-secrets";
   proxnixVmidFile = "${proxnixRuntimeDir}/vmid";
   proxnixCurrentHashFile = "${proxnixRuntimeDir}/current-config-hash";
+  proxnixBootActivate = pkgs.writeShellScriptBin "proxnix-boot-activate" ''
+    set -eu
+
+    runtime_dir="${proxnixRuntimeDir}"
+    next_file="$runtime_dir/next-system"
+    previous_file="$runtime_dir/previous-system"
+    activated_file="$runtime_dir/activated-system"
+    failed_file="$runtime_dir/activation-failed-system"
+
+    log() {
+      echo "[proxnix-boot-activate] $*" >&2
+    }
+
+    current_system() {
+      readlink -f /run/current-system 2>/dev/null || true
+    }
+
+    switch_system() {
+      "$1/bin/switch-to-configuration" switch
+    }
+
+    [ -s "$next_file" ] || exit 0
+    desired="$(tr -d '\r\n' < "$next_file")"
+    case "$desired" in
+      /nix/store/*) ;;
+      *) log "refusing invalid next-system path: $desired"; exit 1 ;;
+    esac
+    if [ ! -x "$desired/bin/switch-to-configuration" ]; then
+      log "next-system is not activatable: $desired"
+      exit 1
+    fi
+
+    mkdir -p "$runtime_dir"
+    current="$(current_system)"
+    if [ -n "$current" ] && [ "$current" != "$desired" ] && [ ! -s "$previous_file" ]; then
+      printf '%s\n' "$current" > "$previous_file"
+    fi
+
+    if [ "$current" = "$desired" ]; then
+      printf '%s\n' "$desired" > "$activated_file"
+      rm -f "$next_file" "$failed_file"
+      exit 0
+    fi
+
+    if switch_system "$desired"; then
+      verified="$(current_system)"
+      if [ "$verified" = "$desired" ]; then
+        printf '%s\n' "$desired" > "$activated_file"
+        rm -f "$next_file" "$failed_file"
+        exit 0
+      fi
+      log "activation verification failed: current=$verified desired=$desired"
+    else
+      log "activation command failed for $desired"
+    fi
+
+    printf '%s\n' "$desired" > "$failed_file"
+    rm -f "$next_file"
+    if [ -s "$previous_file" ]; then
+      previous="$(tr -d '\r\n' < "$previous_file")"
+      if [ -n "$previous" ] && [ "$previous" != "$desired" ] && [ -x "$previous/bin/switch-to-configuration" ]; then
+        log "reverting to previous system: $previous"
+        switch_system "$previous" || true
+        if [ "$(current_system)" = "$previous" ]; then
+          printf '%s\n' "$previous" > "$activated_file"
+        fi
+      fi
+    fi
+    exit 1
+  '';
   proxnixHelp = pkgs.writeShellScriptBin "proxnix-help" ''
     set -u
 
@@ -160,6 +230,7 @@ in {
     pkgs.age
     pkgs.sops
     pkgs.python3Minimal
+    proxnixBootActivate
     proxnixHelp
   ];
 
@@ -168,7 +239,7 @@ in {
   };
 
   # Ensure the guest-owned proxnix layout exists. Host-side proxnix-reconcile
-  # owns activation by exact system path; no guest rebuild service is enabled.
+  # owns builds and seeding; this boot unit only activates a preseeded closure.
   system.activationScripts.proxnix-runtime-setup = lib.stringAfter [ "etc" ] ''
     set -eu
 
@@ -189,6 +260,19 @@ in {
     rm -f "$materialized_systemd_dir/proxnix-apply-config.service"
     rm -f "$materialized_wants_dir/proxnix-apply-config.service"
   '';
+
+  systemd.services.proxnix-boot-activate = {
+    description = "Activate proxnix staged NixOS closure";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "local-fs.target" ];
+    before = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [ pkgs.coreutils ];
+    script = "${proxnixBootActivate}/bin/proxnix-boot-activate";
+  };
 
   # Wire the proxnix helper as the system-wide Podman secret backend.
   # The mount hook pre-registers all proxnix-managed secrets in Podman's

@@ -82,6 +82,19 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn("EnvironmentFile=-/etc/proxnix/cache-reconcile.env", service)
         self.assertIn("Persistent=true", timer)
 
+    def test_guest_boot_activation_unit_is_in_base_nix(self) -> None:
+        base_nix = (ROOT / "host" / "runtime" / "nix" / "base.nix").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('writeShellScriptBin "proxnix-boot-activate"', base_nix)
+        self.assertIn('systemd.services.proxnix-boot-activate', base_nix)
+        self.assertIn('next-system', base_nix)
+        self.assertIn('previous-system', base_nix)
+        self.assertIn('activation-failed-system', base_nix)
+        self.assertIn('switch-to-configuration" switch', base_nix)
+        self.assertIn('before = [ "multi-user.target" ]', base_nix)
+
 
 if __name__ == "__main__":
     unittest.main()
