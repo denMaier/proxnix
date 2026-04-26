@@ -264,6 +264,25 @@ write_activation_status() {
   mv "$tmp" "$status_file"
 }
 
+write_rollback_status() {
+  local vmid="$1" rollback_system="$2"
+  need_cmd jq
+  need_cmd date
+  local status_file="${STATUS_DIR}/${vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${vmid}"
+  local tmp="${status_file}.tmp"
+  jq \
+    --arg currentSystem "$rollback_system" \
+    --arg rolledBackAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.currentSystem = $currentSystem
+      | .lastDeployStatus = "rollback-ok"
+      | .lastError = null
+      | .rolledBackAt = $rolledBackAt
+      | .updatedAt = $rolledBackAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
 update_deploy_status() {
   local vmid="$1" deploy_status="$2" error="$3"
   need_cmd jq
@@ -568,6 +587,43 @@ reconcile_selected() {
   printf '%s activated %s\n' "$selected_vmid" "$system_path"
 }
 
+rollback_container() {
+  local selected_vmid="$1"
+  [[ -n "$selected_vmid" ]] || die "--rollback requires --vmid"
+  need_cmd jq
+  need_cmd flock
+  need_cmd pct
+  take_global_lock
+  take_container_lock "$selected_vmid"
+
+  local status_file="${STATUS_DIR}/${selected_vmid}.json"
+  [[ -f "$status_file" ]] || die "status not found for VMID ${selected_vmid}"
+  local previous_system
+  previous_system="$(jq -r '.previousSystem // empty' "$status_file")"
+  [[ -n "$previous_system" ]] || die "status for VMID ${selected_vmid} does not contain previousSystem"
+
+  ensure_container_running_for_exec "$selected_vmid"
+  local rollback_output
+  if ! rollback_output="$(seed_closure "$selected_vmid" "$previous_system" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "rollback-failed" "rollback seed failed: ${rollback_output}"
+    printf '%s rollback seed failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! rollback_output="$(activate_system "$selected_vmid" "$previous_system" 2>&1)"; then
+    update_deploy_status "$selected_vmid" "rollback-failed" "rollback activation failed: ${rollback_output}"
+    printf '%s rollback activation failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if ! verify_system "$selected_vmid" "$previous_system"; then
+    update_deploy_status "$selected_vmid" "rollback-failed" "rollback verification failed"
+    printf '%s rollback verification failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+
+  write_rollback_status "$selected_vmid" "$previous_system"
+  printf '%s rolled back %s\n' "$selected_vmid" "$previous_system"
+}
+
 main() {
   local vmid="" dry_run=0 build_only=0 seed_only=0 rollback=0 show_status=0 recreate_missing=0
 
@@ -625,6 +681,11 @@ main() {
   fi
 
   if [[ "$show_status" -eq 1 ]]; then
+    return
+  fi
+
+  if [[ "$rollback" -eq 1 ]]; then
+    rollback_container "$vmid"
     return
   fi
 

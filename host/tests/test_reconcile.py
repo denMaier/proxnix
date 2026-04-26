@@ -533,6 +533,109 @@ esac
             self.assertIn("vmbr0", args)
             self.assertIn("dhcp", args)
 
+    def test_rollback_activates_previous_system(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            marker = Path(tmp) / "rolled-back"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/new-system-101",
+                        "currentSystem": "/nix/store/new-system-101",
+                        "previousSystem": "/nix/store/old-system-101",
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "ok",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix-store",
+                """#!/bin/sh
+case "$1" in
+  --query)
+    printf '%s\n' /nix/store/old-system-101
+    ;;
+  --export)
+    printf '%s\n' exported-closure
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    if [ -f {marker} ]; then
+      printf '%s\\n' /nix/store/old-system-101
+    else
+      printf '%s\\n' /nix/store/new-system-101
+    fi
+    ;;
+  nix-store)
+    cat >/dev/null
+    ;;
+  test)
+    exit 0
+    ;;
+  /nix/store/old-system-101/bin/switch-to-configuration)
+    touch {marker}
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--rollback", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 rolled back /nix/store/old-system-101")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["currentSystem"], "/nix/store/old-system-101")
+            self.assertEqual(status["lastDeployStatus"], "rollback-ok")
+            self.assertIsNone(status["lastError"])
+
 
 if __name__ == "__main__":
     unittest.main()

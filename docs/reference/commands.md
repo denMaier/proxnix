@@ -282,6 +282,7 @@ proxnix-reconcile --build-only --vmid 100
 proxnix-reconcile --seed-only --vmid 100
 proxnix-reconcile --vmid 100
 proxnix-reconcile --vmid 100 --recreate-missing
+proxnix-reconcile --rollback --vmid 100
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```
