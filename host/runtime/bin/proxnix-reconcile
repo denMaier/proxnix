@@ -281,6 +281,46 @@ write_activation_status() {
   mv "$tmp" "$status_file"
 }
 
+write_noop_status() {
+  local vmid="$1" hostname="$2" source_revision="$3" desired_system="$4" current_system="$5" previous_system="$6"
+  need_cmd jq
+  need_cmd date
+  mkdir -p "$STATUS_DIR"
+
+  local status_file="${STATUS_DIR}/${vmid}.json"
+  local last_build_status="not-run"
+  if [[ -f "$status_file" ]]; then
+    last_build_status="$(jq -r '.lastBuildStatus // "not-run"' "$status_file" 2>/dev/null || true)"
+  fi
+
+  local tmp="${STATUS_DIR}/${vmid}.json.tmp"
+  jq -n \
+    --argjson vmid "$vmid" \
+    --arg hostname "$hostname" \
+    --argjson sourceRevision "$(json_or_null_arg "$source_revision")" \
+    --arg desiredSystem "$desired_system" \
+    --arg currentSystem "$current_system" \
+    --arg previousSystem "$previous_system" \
+    --arg lastBuildStatus "$last_build_status" \
+    --arg node "$NODE_NAME" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      vmid: $vmid,
+      hostname: $hostname,
+      node: $node,
+      local: true,
+      sourceRevision: $sourceRevision,
+      desiredSystem: $desiredSystem,
+      currentSystem: (if $currentSystem == "" then null else $currentSystem end),
+      previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      lastBuildStatus: $lastBuildStatus,
+      lastDeployStatus: "noop-current",
+      lastError: null,
+      updatedAt: $updatedAt
+    }' > "$tmp"
+  mv "$tmp" "${STATUS_DIR}/${vmid}.json"
+}
+
 write_rollback_status() {
   local vmid="$1" rollback_system="$2"
   need_cmd jq
@@ -324,6 +364,11 @@ build_manifest_system() {
   system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
   [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
   nix build --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
+}
+
+manifest_system() {
+  local selected_vmid="$1" manifest="$2"
+  jq -r --arg vmid "$selected_vmid" '.containers[$vmid].system // empty' <<<"$manifest"
 }
 
 manifest_hostname() {
@@ -580,11 +625,11 @@ reconcile_selected() {
     return
   fi
 
-  local system_path hostname source_revision status_file live_current previous_system prior_previous
+  local desired_system built_system hostname source_revision status_file live_current previous_system prior_previous
   hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
   source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
-  system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
-  [[ -n "$system_path" ]] || die "nix build produced no output path"
+  desired_system="$(manifest_system "$selected_vmid" "$manifest")"
+  [[ -n "$desired_system" ]] || die "manifest for VMID ${selected_vmid} is missing system"
 
   ensure_container_running_for_exec "$selected_vmid"
   live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
@@ -594,37 +639,40 @@ reconcile_selected() {
     prior_previous="$(jq -r '.previousSystem // empty' "$status_file" 2>/dev/null || true)"
   fi
 
-  if [[ "$live_current" == "$system_path" ]]; then
-    write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$system_path" "$prior_previous" "ok"
+  if [[ "$live_current" == "$desired_system" ]]; then
+    write_noop_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$desired_system" "$prior_previous"
     printf '%s noop current system matches desired\n' "$selected_vmid"
     return
   fi
 
   previous_system="$prior_previous"
-  if [[ -n "$live_current" && "$live_current" != "$system_path" ]]; then
+  if [[ -n "$live_current" && "$live_current" != "$desired_system" ]]; then
     previous_system="$live_current"
   fi
-  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$live_current" "$previous_system" "not-run"
+  built_system="$(build_manifest_system "$selected_vmid" "$manifest")"
+  [[ -n "$built_system" ]] || die "nix build produced no output path"
+  [[ "$built_system" == "$desired_system" ]] || die "nix build produced ${built_system}, expected ${desired_system}"
+  write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
 
   local deploy_output
-  if ! deploy_output="$(seed_closure "$selected_vmid" "$system_path" 2>&1)"; then
+  if ! deploy_output="$(seed_closure "$selected_vmid" "$desired_system" 2>&1)"; then
     update_deploy_status "$selected_vmid" "failed" "closure seed failed: ${deploy_output}"
     printf '%s seed failed\n' "$selected_vmid" >&2
     return 2
   fi
-  if ! deploy_output="$(activate_system "$selected_vmid" "$system_path" 2>&1)"; then
+  if ! deploy_output="$(activate_system "$selected_vmid" "$desired_system" 2>&1)"; then
     update_deploy_status "$selected_vmid" "failed" "activation failed: ${deploy_output}"
     printf '%s activation failed\n' "$selected_vmid" >&2
     return 2
   fi
-  if ! verify_system "$selected_vmid" "$system_path"; then
+  if ! verify_system "$selected_vmid" "$desired_system"; then
     update_deploy_status "$selected_vmid" "failed" "activation verification failed"
     printf '%s activation verification failed\n' "$selected_vmid" >&2
     return 2
   fi
 
-  write_activation_status "$selected_vmid" "$system_path" "$previous_system"
-  printf '%s activated %s\n' "$selected_vmid" "$system_path"
+  write_activation_status "$selected_vmid" "$desired_system" "$previous_system"
+  printf '%s activated %s\n' "$selected_vmid" "$desired_system"
 }
 
 rollback_container() {

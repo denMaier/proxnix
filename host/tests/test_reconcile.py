@@ -368,7 +368,7 @@ exit 2
 case "$1" in
   eval)
     cat <<'JSON'
-{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":{"commit":"abc123"},"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":{"commit":"abc123"},"system":"/nix/store/built-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
 JSON
     ;;
   build)
@@ -462,6 +462,100 @@ esac
             self.assertEqual(status["lastDeployStatus"], "ok")
             self.assertIsNone(status["lastError"])
 
+    def test_full_reconcile_skips_build_when_current_system_matches_desired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            build_marker = Path(tmp) / "build-called"
+            store_marker = Path(tmp) / "store-called"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                f"""#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{{"nodeName":"pve1","containers":{{"101":{{"vmid":101,"hostname":"ct101","sourceRevision":{{"commit":"abc123"}},"system":"/nix/store/current-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{{"hostname":"ct101"}}}}}}}}
+JSON
+    ;;
+  build)
+    touch {build_marker}
+    exit 99
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                f"#!/bin/sh\ntouch {store_marker}\nexit 99\n",
+            )
+            write_executable(
+                fake_bin / "pct",
+                """#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    printf '%s\n' /nix/store/current-system-101
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 noop current system matches desired")
+            self.assertFalse(build_marker.exists(), "nix build should not run for already-current CTs")
+            self.assertFalse(store_marker.exists(), "nix-store should not run for already-current CTs")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["desiredSystem"], "/nix/store/current-system-101")
+            self.assertEqual(status["currentSystem"], "/nix/store/current-system-101")
+            self.assertEqual(status["lastDeployStatus"], "noop-current")
+
     def test_recreate_missing_calls_create_lxc_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
@@ -485,7 +579,7 @@ esac
 case "$1" in
   eval)
     cat <<'JSON'
-{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101","memory":2048,"swap":512,"cores":2,"rootfs":"local-lvm:vm-101-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=dhcp","unprivileged":true},"placement":{"node":"pve1","local":false}}}}
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/built-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101","memory":2048,"swap":512,"cores":2,"rootfs":"local-lvm:vm-101-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=dhcp","unprivileged":true},"placement":{"node":"pve1","local":false}}}}
 JSON
     ;;
   build)
