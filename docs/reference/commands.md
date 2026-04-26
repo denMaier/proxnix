@@ -306,6 +306,11 @@ proxnix-gc --dry-run
 systemctl start proxnix-gc.service
 ```
 
+On Proxmox hosts, do not run `nix-collect-garbage` against the host store for
+normal proxnix cleanup. `proxnix-gc` understands the deployment GC roots that
+protect desired closures; direct host store collection should be reserved for
+manual recovery after checking those roots.
+
 ### `proxnix-authority-render`
 
 Render the compatibility authority wrapper under `/var/lib/proxnix/authority`.

@@ -37,6 +37,8 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("Verify proxnix host tools are installed", playbook)
         self.assertIn("path: /etc/nix/nix.conf", playbook)
         self.assertIn("experimental-features = nix-command flakes", playbook)
+        self.assertIn("keep-outputs = true", playbook)
+        self.assertIn("keep-derivations = true", playbook)
         self.assertIn("install Nix first or rerun with -e proxnix_nix_install_mode=determinate", playbook)
         self.assertIn('nix --extra-experimental-features "nix-command flakes" eval --expr true', playbook)
         self.assertIn("proxnix-reconcile", playbook)
@@ -104,6 +106,8 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', uninstall)
         self.assertIn('"$PROXNIX_HOST_PROFILE"-*-link', uninstall)
         self.assertIn('"$PROXNIX_LEGACY_HOST_TOOLS_PROFILE"-*-link', uninstall)
+        self.assertIn('PROXNIX_DEPLOY_GCROOT_DIR="${PROXNIX_DATA_DIR}/gcroots/deploy"', uninstall)
+        self.assertIn("remove_deploy_gcroots", uninstall)
 
     def test_gc_service_uses_runtime_helper(self) -> None:
         service = (

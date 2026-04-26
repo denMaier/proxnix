@@ -140,6 +140,11 @@ normal operations. Use `proxnix-host-uninstall` on the node to remove installed
 host runtime files while keeping relay data. `proxnix-uninstall` remains as a
 compatibility alias.
 
+For routine host cleanup, use `proxnix-gc`. Avoid running
+`nix-collect-garbage` directly against the Proxmox host store unless you have
+first checked the proxnix deployment GC roots under
+`/var/lib/proxnix/gcroots/deploy`.
+
 ## Updating the admin password
 
 The admin password hash is a shared secret. To change it:

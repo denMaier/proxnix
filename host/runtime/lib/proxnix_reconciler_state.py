@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,17 +129,45 @@ def observe_container(
     conn.commit()
 
 
+def gcroot_protects_store_path(store_path: str, gc_root_path: str | None) -> bool:
+    if not gc_root_path:
+        return False
+    root = Path(gc_root_path)
+    if not root.is_symlink():
+        return False
+    try:
+        if os.readlink(root) != store_path:
+            return False
+    except OSError:
+        return False
+    nix_store = shutil.which("nix-store")
+    if not nix_store:
+        return False
+    result = subprocess.run(
+        [nix_store, "--query", "--roots", store_path],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return False
+    return any(line == gc_root_path for line in result.stdout.splitlines())
+
+
 def observe_closure(
     conn: sqlite3.Connection,
     *,
     store_path: str,
     host_has_closure: bool | None,
     container_has_closure: bool | None,
-    protected_by_host_gc_root: bool,
+    protected_by_host_gc_root: bool | None,
     gc_root_path: str | None,
     updated_at: str | None = None,
 ) -> None:
     init_db(conn)
+    if protected_by_host_gc_root is None:
+        protected_by_host_gc_root = gcroot_protects_store_path(store_path, gc_root_path)
     conn.execute(
         """
         insert into closure_observations (
@@ -209,7 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     closure.add_argument("--store-path", required=True)
     closure.add_argument("--host-has-closure", type=parse_bool)
     closure.add_argument("--container-has-closure", type=parse_bool)
-    closure.add_argument("--protected-by-host-gc-root", type=parse_bool, default=False)
+    closure.add_argument("--protected-by-host-gc-root", type=parse_bool)
     closure.add_argument("--gc-root-path")
 
     attempt = sub.add_parser("record-attempt")

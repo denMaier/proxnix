@@ -80,15 +80,18 @@
         group: root
         mode: "0755"
 
-    - name: Enable nix-command and flakes
-      ansible.builtin.lineinfile:
+    - name: Configure proxnix Nix settings
+      ansible.builtin.blockinfile:
         path: /etc/nix/nix.conf
-        regexp: '^experimental-features\s*='
-        line: experimental-features = nix-command flakes
         create: true
         owner: root
         group: root
         mode: "0644"
+        marker: "# {mark} proxnix managed Nix settings"
+        block: |
+          experimental-features = nix-command flakes
+          keep-outputs = true
+          keep-derivations = true
 
     - name: Restart nix-daemon after nix.conf changes
       ansible.builtin.systemd:

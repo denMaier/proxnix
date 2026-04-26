@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 
@@ -117,6 +118,59 @@ class ReconcilerStateTests(unittest.TestCase):
                     "/var/lib/proxnix/gcroots/deploy/aaa-desired",
                 ),
             )
+
+    def test_closure_observation_can_verify_real_gcroot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "reconciler.sqlite"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            store_path = "/nix/store/aaa-desired"
+            gcroot = root / "gcroots" / "deploy" / "101-desired"
+            gcroot.parent.mkdir(parents=True)
+            gcroot.symlink_to(store_path)
+            nix_store = fake_bin / "nix-store"
+            nix_store.write_text(
+                f"""#!/bin/sh
+if [ "$1" = "--query" ] && [ "$2" = "--roots" ] && [ "$3" = "{store_path}" ]; then
+  printf '%s\\n' "{gcroot}"
+  exit 0
+fi
+exit 2
+""",
+                encoding="utf-8",
+            )
+            nix_store.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            result = subprocess.run(
+                [
+                    str(STATE_CLI),
+                    "--db",
+                    str(db),
+                    "observe-closure",
+                    "--store-path",
+                    store_path,
+                    "--host-has-closure",
+                    "true",
+                    "--container-has-closure",
+                    "false",
+                    "--gc-root-path",
+                    str(gcroot),
+                ],
+                check=False,
+                text=True,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with sqlite3.connect(db) as conn:
+                row = conn.execute(
+                    "select protected_by_host_gc_root from closure_observations"
+                ).fetchone()
+            self.assertEqual(row, (1,))
 
 
 if __name__ == "__main__":

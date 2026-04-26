@@ -20,6 +20,8 @@ LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
 PROXNIX_LOCAL_BIN_DIR="/usr/local/bin"
+PROXNIX_DATA_DIR="/var/lib/proxnix"
+PROXNIX_DEPLOY_GCROOT_DIR="${PROXNIX_DATA_DIR}/gcroots/deploy"
 PROXNIX_HOST_PROFILE="/nix/var/nix/profiles/proxnix-host"
 PROXNIX_LEGACY_HOST_TOOLS_PROFILE="/nix/var/nix/profiles/proxnix-host-tools"
 SYSTEMD_UNIT_DIR="/etc/systemd/system"
@@ -57,6 +59,18 @@ do_rmdir_if_empty() {
         return
     fi
     rmdir "$dir" 2>/dev/null || true
+}
+
+remove_deploy_gcroots() {
+    local root
+    if [[ ! -d "$PROXNIX_DEPLOY_GCROOT_DIR" ]]; then
+        log "(already absent) $PROXNIX_DEPLOY_GCROOT_DIR"
+        return
+    fi
+    for root in "$PROXNIX_DEPLOY_GCROOT_DIR"/*; do
+        [[ -e "$root" || -L "$root" ]] || continue
+        do_rm "$root"
+    done
 }
 
 [[ "$(id -u)" -eq 0 ]] || die "Must be run as root."
@@ -135,13 +149,18 @@ if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi
 
+action "Deployment GC roots"
+remove_deploy_gcroots
+do_rmdir_if_empty "$PROXNIX_DEPLOY_GCROOT_DIR"
+do_rmdir_if_empty "$PROXNIX_DATA_DIR/gcroots"
+
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 echo ""
 echo "Done."
 echo ""
 echo "  /var/lib/proxnix/, /var/lib/proxnix/authority/, /var/lib/proxnix/status/,"
-echo "  /nix, and /etc/proxnix/ were not touched."
+echo "  /nix, and /etc/proxnix/ were otherwise not touched."
 echo "  Published relay-cache config and secret material are still intact."
 echo ""
 echo "  To fully remove proxnix data from this node, delete:"
