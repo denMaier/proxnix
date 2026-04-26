@@ -274,12 +274,21 @@ Non-local targets are reported as `skip not-local`.
 `--build-only --vmid <id>` builds one selected local system closure and
 writes `/var/lib/proxnix/status/<vmid>.json` without activating it.
 `--seed-only --vmid <id>` imports the recorded desired closure into the target
-CT and verifies `switch-to-configuration` exists. `--vmid <id>` runs the current
-end-to-end path for one CT: evaluate desired path, skip as `noop-current` if
-`/run/current-system` already matches, otherwise build, protect the host closure
-with a GC root, seed, exact-path activation, verification, and status write.
-`--recreate-missing` creates a CT only when manifest placement explicitly
-targets the current node.
+CT and verifies `switch-to-configuration` exists. `--activate-only --vmid <id>`
+activates the recorded desired system and verifies `/run/current-system`.
+`--vmid <id>` is the orchestration command: evaluate desired path, skip as
+`noop-current` if `/run/current-system` already matches, otherwise build, seed,
+activate, verify, and write status. `--recreate-missing` creates a CT only when
+manifest placement explicitly targets the current node.
+
+The phase commands are also exposed as separate host commands:
+
+- `proxnix-reconcile-build --vmid <id>`
+- `proxnix-reconcile-seed --vmid <id>`
+- `proxnix-reconcile-activate --vmid <id>`
+
+Use those commands when you want to drive build, seed, and activation separately.
+`proxnix-reconcile --vmid <id>` remains the command that runs all three phases.
 
 Normal convergence is not run by a full-host timer. Container starts trigger
 `proxnix-reconcile@<vmid>.service` from the LXC pre-start hook, and explicit
@@ -293,11 +302,15 @@ proxnix-reconcile --dry-run
 proxnix-reconcile --dry-run --vmid 100
 proxnix-reconcile --build-only --vmid 100
 proxnix-reconcile --seed-only --vmid 100
+proxnix-reconcile --activate-only --vmid 100
 proxnix-reconcile --vmid 100
 proxnix-reconcile --vmid 100 --recreate-missing
 proxnix-reconcile --rollback --vmid 100
 proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
+proxnix-reconcile-build --vmid 100
+proxnix-reconcile-seed --vmid 100
+proxnix-reconcile-activate --vmid 100
 systemctl start proxnix-reconcile@100.service
 ```
 
