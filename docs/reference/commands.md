@@ -267,15 +267,17 @@ Host-side reconciler entrypoint. The phase-1 command installs status plumbing
 and host prerequisite validation. Dry-run renders and evaluates the generated
 authority manifest, then prints planned actions without building or modifying
 containers. Managed CTs are cluster-scoped and can float between nodes; each
-node only acts on CTs that are local according to `pct status <vmid>`. Non-local
-targets are reported as `skip not-local`.
+node only acts on CTs that are local according to Proxmox cluster placement,
+falling back to `pct status <vmid>` when the cluster view is unavailable.
+Non-local targets are reported as `skip not-local`.
 
 `--build-only --vmid <id>` builds one selected local system closure and
 writes `/var/lib/proxnix/status/<vmid>.json` without activating it.
 `--seed-only --vmid <id>` imports the recorded desired closure into the target
 CT and verifies `switch-to-configuration` exists. `--vmid <id>` runs the current
-end-to-end path for one CT:
-build, seed, exact-path activation, verification, and status write.
+end-to-end path for one CT: evaluate desired path, skip as `noop-current` if
+`/run/current-system` already matches, otherwise build, protect the host closure
+with a GC root, seed, exact-path activation, verification, and status write.
 `--recreate-missing` creates a CT only when manifest placement explicitly
 targets the current node.
 
@@ -291,13 +293,37 @@ proxnix-reconcile --status
 proxnix-reconcile --status --vmid 100
 ```
 
+Status JSON keeps compatibility fields such as `desiredSystem` and
+`currentSystem`, and also includes descriptive fields such as `desired_system`,
+`current_system`, `container_is_local`, `host_has_closure`,
+`container_has_closure`, `shared_cache_has_closure`, `pending_cache_upload`, and
+`protected_by_host_gc_root`. Common status names include `noop-current`,
+`build-failed`, `lost-locality`, `failed`, and `ok`.
+
+### `proxnix-cache-reconcile`
+
+Upload locally realized closures that are still marked
+`pending_cache_upload=true` in the local SQLite journal. This command is
+separate from CT activation, so a shared cache outage does not block no-op
+detection or local builds that can complete without the cache.
+
+Configure the target Nix store with `--cache-store` or
+`PROXNIX_SHARED_CACHE_STORE`, commonly through
+`/etc/proxnix/cache-reconcile.env` for the systemd service.
+
+```bash
+proxnix-cache-reconcile --cache-store ssh://cache.example
+proxnix-cache-reconcile --db /var/lib/proxnix/state/proxnix-reconciler.sqlite --cache-store ssh://cache.example
+systemctl start proxnix-cache-reconcile.service
+```
+
 ### `proxnix-authority-render`
 
 Render the compatibility authority wrapper under `/var/lib/proxnix/authority`.
 The wrapper exposes cluster-level `proxnix.containers` and a node view at
 `proxnix.nodes.<node>`. Local `/etc/pve/lxc/*.conf` data is used when available
 for generated Proxmox metadata, but runtime locality is decided by the
-reconciler through `pct status`.
+reconciler from Proxmox cluster placement with `pct status` as fallback.
 
 ```bash
 proxnix-authority-render

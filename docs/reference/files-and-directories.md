@@ -27,10 +27,13 @@ This page maps every important proxnix path by role.
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/cli/pyproject.toml` |
 | `host/runtime/lib/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
 | `host/runtime/lib/proxnix_authority_render.py` | Renders the generated host authority wrapper |
+| `host/runtime/lib/proxnix_reconciler_state.py` | Node-local SQLite journal helper for reconciler state |
 | `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
+| `host/runtime/bin/proxnix-cache-reconcile` | Uploads pending locally realized closures to the shared Nix cache |
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
+| `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
 | `host/runtime/nix/common.nix` | Shared operator baseline module: proxnix options, admin defaults, and secret lifecycles |
@@ -107,6 +110,11 @@ These paths are the published host-side state on the Proxmox node. The workstati
 ├── site.nix                           published site override
 ├── authority/                         generated host authority flake wrapper
 ├── status/                            reconciler status JSON
+├── state/
+│   └── proxnix-reconciler.sqlite      node-local reconciliation journal
+├── gcroots/
+│   └── deploy/
+│       └── <vmid>-desired             host GC root for desired closure
 └── containers/
     ├── _template/                     shared managed Nix template snippets
     └── <vmid>/
@@ -141,14 +149,20 @@ specific to the shell-installer path.
 
 /usr/local/lib/proxnix/
 ├── pve-conf-to-nix.py                 local runtime helper
+├── proxnix_authority_render.py        authority renderer library
+├── proxnix_reconciler_state.py        reconciler SQLite journal helper
 ├── nixos-proxnix-common.sh            shared hook helper
 ├── proxnix-secrets-guest              helper injected into guests
 ├── install-manifest.txt               installed-file manifest
 └── install-info.txt                   local install metadata
 
 /usr/local/sbin/
+├── proxnix-authority-render           authority wrapper renderer
+├── proxnix-cache-reconcile            shared cache upload reconciler
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
+├── proxnix-reconcile                  host-side reconciler
+├── proxnix-reconciler-state           local state journal helper
 └── proxnix-uninstall                  local uninstall helper
 ```
 

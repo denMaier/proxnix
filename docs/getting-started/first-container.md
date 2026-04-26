@@ -161,6 +161,12 @@ The host evaluates the generated authority, builds the desired NixOS closure,
 imports it into the CT without guest networking, activates the exact system
 path, and records status under `/var/lib/proxnix/status/100.json`.
 
+If the CT is already running the evaluated desired system, the command exits as
+`noop-current` without building, importing, or contacting a shared cache. If the
+shared cache is unavailable but the host can build the desired closure locally,
+the CT can still converge and the host will retry cache upload later through
+`proxnix-cache-reconcile.timer`.
+
 If the automatic apply fails, check:
 
 - Is there enough RAM? (at least 2 GB)

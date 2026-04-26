@@ -112,11 +112,20 @@ It also removes legacy `proxnix-apply-config` service files if they are present.
 
 `proxnix-reconcile` runs on the Proxmox node. It renders the authority wrapper,
 evaluates cluster-level `proxnix.containers` through the node view at
-`proxnix.nodes.<node>`, skips CTs that are not local according to `pct status`,
-builds the selected local NixOS system closure, imports that closure into the
-CT, runs the target system's
-`switch-to-configuration`, verifies `/run/current-system`, and writes status
-under `/var/lib/proxnix/status/`.
+`proxnix.nodes.<node>`, skips CTs that are not local according to Proxmox
+cluster placement, observes the live `/run/current-system`, and exits early
+with `noop-current` when the CT is already on the desired system path. Stale
+local CTs are built on the Proxmox node, protected with a host GC root, imported
+into the CT, activated by exact system path, verified through
+`/run/current-system`, and summarized under `/var/lib/proxnix/status/`.
+
+Shared Nix cache access is acceleration, not a runtime dependency. If a stale
+system can be built locally while the cache is unavailable, deployment can
+continue and the closure is marked for a later `proxnix-cache-reconcile` upload.
+Build or cache failures before seeding leave the CT's current generation
+untouched. Local coordination details such as pending uploads and retry history
+live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status
+files remain the operator-facing status surface.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.
