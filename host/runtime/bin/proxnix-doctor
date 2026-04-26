@@ -344,7 +344,6 @@ check_container() {
     /var/lib/proxnix/config/managed/proxmox.nix \
     /var/lib/proxnix/runtime/vmid \
     /var/lib/proxnix/runtime/current-config-hash \
-    /var/lib/proxnix/runtime/proxnix-apply-config-runner \
     /var/lib/proxnix/runtime/bin/proxnix-secrets
   do
     if guest_test "$vmid" -f "$guest_file" >/dev/null 2>&1; then
@@ -369,21 +368,15 @@ check_container() {
   fi
 
   if guest_test "$vmid" -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
-    ok "materialized proxnix-apply-config service present"
+    warn "legacy proxnix-apply-config service is still present; restart the CT to let the mount hook remove it"
   else
-    warn "materialized proxnix-apply-config service missing"
-  fi
-
-  if guest_test "$vmid" -L /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
-    fail "/etc/systemd/system.attached/proxnix-apply-config.service is a symlink; expected a copied regular file"
-  else
-    ok "materialized proxnix-apply-config service is a regular file"
+    ok "legacy proxnix-apply-config service absent"
   fi
 
   if guest_test "$vmid" -L /etc/systemd/system.attached/multi-user.target.wants/proxnix-apply-config.service >/dev/null 2>&1; then
-    ok "proxnix-apply-config.service enabled"
+    warn "legacy proxnix-apply-config.service still enabled"
   else
-    warn "proxnix-apply-config.service not enabled"
+    ok "legacy proxnix-apply-config.service not enabled"
   fi
 
   local current_hash applied_hash
@@ -392,9 +385,9 @@ check_container() {
   if [[ -f "$status_file" ]]; then
     info "legacy managed config hash is informational because reconciler status exists"
   elif [[ -n "$current_hash" && "$current_hash" == "$applied_hash" ]]; then
-    ok "applied managed config hash matches current hash"
+    info "legacy applied managed config hash matches current hash"
   else
-    warn "applied managed config hash does not match current hash; check: journalctl -u proxnix-apply-config.service -b"
+    info "legacy applied managed config hash differs from current hash; host reconciler status is authoritative"
   fi
 
   if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.yaml" ]]; then

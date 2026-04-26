@@ -180,11 +180,9 @@ tree after the container stops:
 │       └── identity
 └── copy/
     ├── runtime/
-    │   ├── proxnix-apply-config-runner
     │   └── bin/
     └── etc/
-        ├── nixos/configuration.nix
-        └── systemd/system.attached/proxnix-apply-config.service
+        └── nixos/configuration.nix
 ```
 
 ## Managed paths inside the guest
@@ -206,9 +204,7 @@ tree after the container stops:
 │       └── dropins/
 ├── runtime/
 │   ├── vmid
-│   ├── current-config-hash
-│   ├── applied-config-hash
-│   ├── proxnix-apply-config-runner
+│   ├── current-config-hash              diagnostic hash, not activation authority
 │   ├── bin/
 │   │   ├── proxnix-secrets
 │   │   └── <user-defined scripts>
@@ -216,10 +212,6 @@ tree after the container stops:
 └── secrets/
     ├── effective.sops.yaml            encrypted compiled container secret store
     └── identity                       container SSH private key
-
-/etc/systemd/system.attached/
-├── proxnix-apply-config.service
-└── <user-defined>.service
 
 /etc/secrets/.ids/                     Podman secret ID→name mappings
 /var/lib/containers/storage/secrets/

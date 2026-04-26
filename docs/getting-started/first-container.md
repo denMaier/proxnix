@@ -145,30 +145,21 @@ At this point proxnix has already:
 
 1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/`
 2. Run the **mount hook** — copied `/etc/nixos/configuration.nix`, bound the managed tree under `/var/lib/proxnix/config/managed/`, and copied root-only secret files into `/var/lib/proxnix/secrets/`
-3. Installed the `proxnix-apply-config` service inside the guest
-4. Generated the `proxnix-bootstrap.sh` script in `/root/` as a fallback recovery helper
+3. Removed any legacy guest-side `proxnix-apply-config` service files
 
-The guest bootstraps and applies the rendered NixOS configuration automatically on first boot.
+The Proxmox node now owns activation through `proxnix-reconcile`.
 
-## 4. Wait for the automatic first boot apply
+## 4. Deploy the desired system
 
-**Why:** The stock NixOS Proxmox template does not ship with the root channels configured. proxnix seeds them automatically before the first `nixos-rebuild switch`.
-
-Watch the service from the host:
+Run the host reconciler for the CT:
 
 ```bash
-pct exec 100 -- journalctl -u proxnix-apply-config.service -b -f
+proxnix-reconcile --vmid 100
 ```
 
-On first boot the service:
-
-1. Adds the NixOS channel matching the system's `stateVersion` (currently `25.11` in this repo)
-2. Adds the `nixpkgs-unstable` channel for packages exposed via `pkgs.unstable`
-3. Runs `nix-channel --update`
-4. Runs `nixos-rebuild switch` to apply the full proxnix-managed configuration
-5. Records the applied config hash so future boots skip unnecessary rebuilds
-
-**This will take several minutes** on the first run while Nix downloads and builds packages.
+The host evaluates the generated authority, builds the desired NixOS closure,
+imports it into the CT without guest networking, activates the exact system
+path, and records status under `/var/lib/proxnix/status/100.json`.
 
 If the automatic apply fails, check:
 

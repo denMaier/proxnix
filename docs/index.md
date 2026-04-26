@@ -44,14 +44,14 @@ There are four main layers:
 
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
 2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
-3. **Rendered guest state**: generated Nix files, staged secrets, attached systemd units, and helper scripts
-4. **Guest activation**: a guarded `nixos-rebuild switch` that runs only when the staged config hash changes
+3. **Host authority and build**: the Proxmox node renders a local authority wrapper, evaluates the desired CT system, and builds the NixOS closure
+4. **Host-side activation**: `proxnix-reconcile` seeds the closure into the CT and activates the exact system path
 
 ## The guest is not a black box
 
 While the host is the *source of truth* for your declarative config, the guest is a **full NixOS system**.
 
-- **Experimentation loop**: You can `pct enter <vmid>`, edit `/etc/nixos/local.nix`, and run `nixos-rebuild switch` to test configuration changes. Once you are happy, commit the change to the host-side files and restart the container to lock it in.
+- **Experimentation loop**: You can `pct enter <vmid>` for debugging, but normal proxnix convergence is owned by `proxnix-reconcile` on the Proxmox host.
 - **Persistent state**: Managed configuration is overwritten on restart, but **guest-local state is persistent**. Databases in `/var/lib/`, the Nix store, and any unmanaged files like `/etc/nixos/local.nix` survive reboots.
 - **Live debugging**: You can install temporary packages with `nix-shell -p` or check logs with `journalctl` just like on any other NixOS host.
 

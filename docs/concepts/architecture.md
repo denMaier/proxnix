@@ -23,8 +23,8 @@ That gives proxnix these properties:
   │  1. pre-start hook (host)                    │
   │     Read PVE conf + Nix drop-ins             │
   │     Run pve-conf-to-nix.py                   │
-  │     Stage secrets, scripts                     │
-  │     Compute config hash                       │
+  │     Stage secrets, scripts                    │
+  │     Compute diagnostic config hash            │
   │     Output: /run/proxnix/<vmid>/              │
   └──────────────────────┬──────────────────────┘
                          │
@@ -34,19 +34,18 @@ That gives proxnix these properties:
   │     Copy /etc/nixos/configuration.nix         │
   │     Bind /var/lib/proxnix/config/managed/     │
   │     Copy root-only secrets into /var/lib/proxnix/secrets/ │
-  │     Install proxnix-apply-config service      │
+  │     Remove legacy guest rebuild service       │
   │     Reconcile Podman secrets.json             │
   └──────────────────────┬──────────────────────┘
                          │
                          ▼
   ┌─────────────────────────────────────────────┐
-  │  3. guest boot                               │
-  │     proxnix-apply-config.service runs        │
-  │     Compare current-config-hash              │
-  │           vs applied-config-hash             │
-  │     Same → exit (no rebuild)                 │
-  │     Different → nixos-rebuild switch          │
-  │     No channel → prompt for bootstrap         │
+  │  3. host reconciler                          │
+  │     Evaluate authority manifest              │
+  │     Build desired NixOS closure              │
+  │     Seed closure into CT                     │
+  │     Activate exact system path               │
+  │     Verify /run/current-system               │
   └─────────────────────────────────────────────┘
 ```
 
@@ -77,12 +76,10 @@ Important stage subtrees:
 | Path | Contents |
 |------|----------|
 | `bind/config/{configuration.nix,managed/...}` | Desired NixOS config tree hashed by the host |
-| `bind/runtime/{current-config-hash,vmid}` | Immutable desired-state markers |
+| `bind/runtime/{current-config-hash,vmid}` | Diagnostic markers |
 | `bind/secrets/` | Compiled encrypted per-container runtime store plus staged identity |
 | `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
-| `copy/runtime/proxnix-apply-config-runner` | Generated guest runner |
 | `copy/etc/nixos/configuration.nix` | Copied guest entrypoint |
-| `copy/etc/systemd/system.attached/proxnix-apply-config.service` | Generated guest unit |
 
 The pre-start hook copies the node-local managed Nix files, runs
 `pve-conf-to-nix.py`, pulls in host-side drop-ins, stages the compiled
@@ -92,9 +89,9 @@ the rendered managed tree.
 ### 3. Mount hook syncs the stage into the guest rootfs
 
 The mount hook is the only proxnix hook that writes into the guest filesystem.
-`/etc/nixos/configuration.nix`, guest runtime helpers, and guest-attached
-systemd units are copied into place. The managed Nix tree under
-`/var/lib/proxnix/config/managed/` plus immutable runtime markers under
+`/etc/nixos/configuration.nix` and guest runtime helpers are copied into place.
+The managed Nix tree under
+`/var/lib/proxnix/config/managed/` plus diagnostic runtime markers under
 `/var/lib/proxnix/runtime/` are wired in from the stage read-only. Secret files
 are copied into the guest as root-owned regular files.
 
@@ -107,23 +104,20 @@ It exposes the staged assets into places such as:
 | `bind/runtime/current-config-hash` | `/var/lib/proxnix/runtime/current-config-hash` |
 | `bind/runtime/vmid` | `/var/lib/proxnix/runtime/vmid` |
 | `copy/runtime/bin/*` | `/var/lib/proxnix/runtime/bin/` |
-| `copy/etc/systemd/system.attached/proxnix-apply-config.service` | `/etc/systemd/system.attached/` |
 | `bind/secrets/*` | `/var/lib/proxnix/secrets/` |
 
-It also installs a generated `proxnix-apply-config` service and runner inside the guest.
+It also removes legacy `proxnix-apply-config` service files if they are present.
 
-### 4. Guest applies only changed config
+### 4. Host reconciler activates the desired system
 
-Inside the guest, proxnix stores two hashes:
+`proxnix-reconcile` runs on the Proxmox node. It renders the authority wrapper,
+evaluates `proxnix.nodes.<node>`, builds the selected NixOS system closure,
+imports that closure into the CT, runs the target system's
+`switch-to-configuration`, verifies `/run/current-system`, and writes status
+under `/var/lib/proxnix/status/`.
 
-- current desired hash: `/var/lib/proxnix/runtime/current-config-hash`
-- last applied hash: `/var/lib/proxnix/runtime/applied-config-hash`
-
-At boot, the generated runner compares them.
-
-- If the hash is unchanged, it exits immediately
-- If the root channels are missing, it adds them automatically and updates them once
-- If the hash changed, it runs `nixos-rebuild switch` once for that boot and records the applied hash
+`current-config-hash` may still appear as diagnostic metadata, but it is not the
+activation source of truth.
 
 ## Persistent state and experimentation
 
@@ -132,8 +126,8 @@ are host-managed and refreshed on restart, proxnix **does not touch other
 parts of the guest rootfs**.
 
 - **`/var/lib/`**: Databases and application data stay persistent.
-- **`/etc/nixos/local.nix`**: This is your sandbox. You can add config here and run `nixos-rebuild switch` inside the guest to test it.
-- **Experimental changes**: You can iterate inside the guest before committing your final configuration to the Proxmox host. Once committed, a container restart will lock it in as the new host-managed source of truth.
+- **`/etc/nixos/local.nix`**: This is an unmanaged sandbox for debugging. Normal proxnix convergence does not evaluate config inside the guest.
+- **Experimental changes**: Commit final configuration to the workstation-owned site repo, publish it, then run `proxnix deploy` or `proxnix-reconcile` on the host.
 
 ## What `configuration.nix` imports
 

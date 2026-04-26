@@ -13,13 +13,11 @@ let
   proxnixSecretsCommand = "${proxnixRuntimeBinDir}/proxnix-secrets";
   proxnixVmidFile = "${proxnixRuntimeDir}/vmid";
   proxnixCurrentHashFile = "${proxnixRuntimeDir}/current-config-hash";
-  proxnixAppliedHashFile = "${proxnixRuntimeDir}/applied-config-hash";
   proxnixHelp = pkgs.writeShellScriptBin "proxnix-help" ''
     set -u
 
     vmid="$(cat ${proxnixVmidFile} 2>/dev/null || hostname)"
     current="$(cat ${proxnixCurrentHashFile} 2>/dev/null || true)"
-    applied="$(cat ${proxnixAppliedHashFile} 2>/dev/null || true)"
     ip_addr="$(ip -4 addr show scope global 2>/dev/null | awk '/inet / { sub(/\/.*/, "", $2); print $2; exit }')"
     mem="$(free -h 2>/dev/null | awk '/^Mem:/ { print $3 " / " $2 }')"
     disk="$(df -h / 2>/dev/null | awk 'NR == 2 { print $3 " / " $2 " (" $5 ")" }')"
@@ -39,13 +37,12 @@ let
     printf '               ${proxnixManagedDir}/{base,common,security-policy,site,proxmox}.nix\n'
     printf '               ${proxnixManagedDir}/dropins/*.nix\n'
     printf '               ${proxnixRuntimeBinDir}/* on PATH\n'
-    printf '               proxnix-apply-config.service copied to ${proxnixMaterializedSystemdAttachedDir}/\n'
     printf '               site.nix is optional and usually comes from a separate repo\n'
     printf '  Local hook:  /etc/nixos/local.nix\n'
-    if [ -n "$current" ] && [ "$current" != "$applied" ]; then
-      printf '  State:       changed; restart the CT or run nixos-rebuild switch\n\n'
+    if [ -n "$current" ]; then
+      printf '  Hash:        %s (diagnostic; host reconciler owns activation)\n\n' "$current"
     else
-      printf '  State:       applied\n\n'
+      printf '  Hash:        unavailable\n\n'
     fi
 
     printf 'Workloads\n'
@@ -55,7 +52,6 @@ let
     printf 'Useful commands\n'
     printf '  proxnix-help    this screen with live status\n'
     printf '  proxnix-doctor  %s\n' "$vmid"
-    printf '  nixos-rebuild   switch\n'
     printf '  podman ps       -a\n'
     printf '  podman logs     -f NAME\n'
     printf '  podman auto-update --dry-run\n'
@@ -171,8 +167,8 @@ in {
     PROXNIX_GUEST_SECRET_DIR = proxnixSecretDir;
   };
 
-  # Ensure the guest-owned proxnix layout exists and keep the copied
-  # proxnix-apply-config service enabled after each switch.
+  # Ensure the guest-owned proxnix layout exists. Host-side proxnix-reconcile
+  # owns activation by exact system path; no guest rebuild service is enabled.
   system.activationScripts.proxnix-runtime-setup = lib.stringAfter [ "etc" ] ''
     set -eu
 
@@ -190,12 +186,8 @@ in {
       "$materialized_systemd_dir" \
       "$materialized_wants_dir"
     chmod 700 /etc/secrets /etc/secrets/.ids
-
-    if [ -f "$materialized_systemd_dir/proxnix-apply-config.service" ]; then
-      ln -sfn ../proxnix-apply-config.service "$materialized_wants_dir/proxnix-apply-config.service"
-    else
-      rm -f "$materialized_wants_dir/proxnix-apply-config.service"
-    fi
+    rm -f "$materialized_systemd_dir/proxnix-apply-config.service"
+    rm -f "$materialized_wants_dir/proxnix-apply-config.service"
   '';
 
   # Wire the proxnix helper as the system-wide Podman secret backend.
@@ -284,24 +276,6 @@ in {
     '';
   };
 
-  # ── Config-drift reminder ─────────────────────────────────────────────────
-  # Shown at every login when the managed config pushed by the pre-start hook
-  # differs from the last applied generation, so the operator knows the next
-  # container restart will auto-apply it or that they can rebuild manually.
-  environment.etc."profile.d/proxnix-rebuild-hint.sh" = {
-    mode = "0644";
-    text = ''
-      _current="$(cat ${proxnixCurrentHashFile} 2>/dev/null || true)"
-      _applied="$(cat ${proxnixAppliedHashFile} 2>/dev/null || true)"
-      if [ -n "$_current" ] && [ "$_current" != "$_applied" ]; then
-        printf '\n  proxnix: managed config has changed — restart the container to auto-apply,\n'
-        printf '           or run manually:\n'
-        printf '    nixos-rebuild switch\n\n'
-      fi
-      unset _current _applied
-    '';
-  };
-
   # ── Message of the day ────────────────────────────────────────────────────
   users.motd = ''
 
@@ -313,7 +287,6 @@ in {
       ${proxnixManagedDir}/{base,common,security-policy,site,proxmox}.nix
       ${proxnixManagedDir}/dropins/*.nix
       ${proxnixRuntimeBinDir}/* on PATH
-      proxnix-apply-config.service  copied to ${proxnixMaterializedSystemdAttachedDir}/
       ${proxnixManagedDir}/site.nix  optional site override
       /etc/nixos/local.nix  optional local override
 
@@ -328,7 +301,6 @@ in {
     Live state
       proxnix-help               full status and commands
       proxnix-doctor VMID        host-side health check
-      nixos-rebuild switch       apply managed config
 
     Containers
       podman ps -a
