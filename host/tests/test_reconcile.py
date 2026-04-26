@@ -556,6 +556,106 @@ esac
             self.assertEqual(status["currentSystem"], "/nix/store/current-system-101")
             self.assertEqual(status["lastDeployStatus"], "noop-current")
 
+    def test_full_reconcile_records_build_failure_without_seeding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            pve = Path(tmp) / "pve" / "lxc"
+            fake_bin = Path(tmp) / "bin"
+            run_dir = Path(tmp) / "run"
+            status_dir = root / "status"
+            store_marker = Path(tmp) / "store-called"
+            activation_marker = Path(tmp) / "activation-called"
+            fake_bin.mkdir()
+            (root / "containers" / "101").mkdir(parents=True)
+            pve.mkdir(parents=True)
+
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+            (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+case "$1" in
+  eval)
+    cat <<'JSON'
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":{"commit":"abc123"},"system":"/nix/store/desired-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101"}}}}
+JSON
+    ;;
+  build)
+    printf '%s\n' 'substituter unavailable and local build failed' >&2
+    exit 1
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+            write_executable(
+                fake_bin / "nix-store",
+                f"#!/bin/sh\ntouch {store_marker}\nexit 99\n",
+            )
+            write_executable(
+                fake_bin / "pct",
+                f"""#!/bin/sh
+if [ "$1" = "status" ]; then
+  printf '%s\\n' 'status: running'
+  exit 0
+fi
+if [ "$1" != "exec" ]; then
+  exit 2
+fi
+case "$4" in
+  true)
+    exit 0
+    ;;
+  readlink)
+    printf '%s\\n' /nix/store/old-system-101
+    ;;
+  /nix/store/desired-system-101/bin/switch-to-configuration)
+    touch {activation_marker}
+    exit 99
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_PVE_LXC_DIR": str(pve),
+                    "PROXNIX_RUN_DIR": str(run_dir),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), "101 build failed")
+            self.assertFalse(store_marker.exists(), "nix-store import should not run after build failure")
+            self.assertFalse(activation_marker.exists(), "activation should not run after build failure")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["desiredSystem"], "/nix/store/desired-system-101")
+            self.assertEqual(status["currentSystem"], "/nix/store/old-system-101")
+            self.assertEqual(status["lastBuildStatus"], "failed")
+            self.assertEqual(status["lastDeployStatus"], "build-failed")
+            self.assertIn("nix build failed", status["lastError"])
+
     def test_recreate_missing_calls_create_lxc_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"

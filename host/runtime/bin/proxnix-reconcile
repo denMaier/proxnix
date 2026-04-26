@@ -321,6 +321,40 @@ write_noop_status() {
   mv "$tmp" "${STATUS_DIR}/${vmid}.json"
 }
 
+write_build_failed_status() {
+  local vmid="$1" hostname="$2" source_revision="$3" desired_system="$4" current_system="$5" previous_system="$6" error="$7"
+  need_cmd jq
+  need_cmd date
+  mkdir -p "$STATUS_DIR"
+
+  local tmp="${STATUS_DIR}/${vmid}.json.tmp"
+  jq -n \
+    --argjson vmid "$vmid" \
+    --arg hostname "$hostname" \
+    --argjson sourceRevision "$(json_or_null_arg "$source_revision")" \
+    --arg desiredSystem "$desired_system" \
+    --arg currentSystem "$current_system" \
+    --arg previousSystem "$previous_system" \
+    --arg lastError "$error" \
+    --arg node "$NODE_NAME" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      vmid: $vmid,
+      hostname: $hostname,
+      node: $node,
+      local: true,
+      sourceRevision: $sourceRevision,
+      desiredSystem: $desiredSystem,
+      currentSystem: (if $currentSystem == "" then null else $currentSystem end),
+      previousSystem: (if $previousSystem == "" then null else $previousSystem end),
+      lastBuildStatus: "failed",
+      lastDeployStatus: "build-failed",
+      lastError: $lastError,
+      updatedAt: $updatedAt
+    }' > "$tmp"
+  mv "$tmp" "${STATUS_DIR}/${vmid}.json"
+}
+
 write_rollback_status() {
   local vmid="$1" rollback_system="$2"
   need_cmd jq
@@ -649,9 +683,23 @@ reconcile_selected() {
   if [[ -n "$live_current" && "$live_current" != "$desired_system" ]]; then
     previous_system="$live_current"
   fi
-  built_system="$(build_manifest_system "$selected_vmid" "$manifest")"
-  [[ -n "$built_system" ]] || die "nix build produced no output path"
-  [[ "$built_system" == "$desired_system" ]] || die "nix build produced ${built_system}, expected ${desired_system}"
+  local build_output
+  if ! build_output="$(build_manifest_system "$selected_vmid" "$manifest" 2>&1)"; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build failed: ${build_output}"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  built_system="$(tr -d '\r\n' <<<"$build_output")"
+  if [[ -z "$built_system" ]]; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced no output path"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
+  if [[ "$built_system" != "$desired_system" ]]; then
+    write_build_failed_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "nix build produced ${built_system}, expected ${desired_system}"
+    printf '%s build failed\n' "$selected_vmid" >&2
+    return 2
+  fi
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
 
   local deploy_output
