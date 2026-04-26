@@ -10,6 +10,7 @@ from pathlib import Path
 RECONCILE = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile"
 RECONCILE_BUILD = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-build"
 RECONCILE_SEED = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-seed"
+RECONCILE_SEED_OFFLINE = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-seed-offline"
 RECONCILE_ACTIVATE = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "proxnix-reconcile-activate"
 
 
@@ -535,9 +536,125 @@ exit 2
             self.assertEqual(status["lastDeployStatus"], "failed")
             self.assertIn("closure seed failed", status["lastError"])
 
+    def test_seed_offline_copies_to_rootfs_and_stages_next_system(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            rootfs = Path(tmp) / "rootfs"
+            fake_bin = Path(tmp) / "bin"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (rootfs / "etc").mkdir(parents=True)
+            status_file = status_dir / "101.json"
+            status_file.write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/built-system-101",
+                        "currentSystem": "/nix/store/old-system-101",
+                        "previousSystem": None,
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "not-run",
+                        "lastError": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+if [ "$1" != "copy" ] || [ "$3" != "--to" ]; then
+  exit 2
+fi
+root="${4#local?root=}"
+system="$5"
+mkdir -p "${root}${system}/bin"
+printf '#!/bin/sh\\nexit 0\\n' > "${root}${system}/bin/switch-to-configuration"
+chmod +x "${root}${system}/bin/switch-to-configuration"
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE_SEED_OFFLINE), "--vmid", "101", "--rootfs", str(rootfs)],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 offline-seeded /nix/store/built-system-101")
+            runtime = rootfs / "var" / "lib" / "proxnix" / "runtime"
+            self.assertEqual(
+                (runtime / "next-system").read_text(encoding="utf-8").strip(),
+                "/nix/store/built-system-101",
+            )
+            self.assertEqual(
+                (runtime / "previous-system").read_text(encoding="utf-8").strip(),
+                "/nix/store/old-system-101",
+            )
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+            self.assertEqual(status["lastDeployStatus"], "offline-seeded")
+            self.assertTrue(status["container_has_closure"])
+
+    def test_seed_offline_refreshes_status_from_guest_activation_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            rootfs = Path(tmp) / "rootfs"
+            status_dir = root / "status"
+            runtime = rootfs / "var" / "lib" / "proxnix" / "runtime"
+            status_dir.mkdir(parents=True)
+            (rootfs / "etc").mkdir(parents=True)
+            runtime.mkdir(parents=True)
+            (runtime / "activated-system").write_text("/nix/store/built-system-101\n", encoding="utf-8")
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/built-system-101",
+                        "currentSystem": "/nix/store/old-system-101",
+                        "previousSystem": "/nix/store/old-system-101",
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "offline-seeded",
+                        "lastError": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update({"PROXNIX_DIR": str(root)})
+
+            result = subprocess.run(
+                [str(RECONCILE_SEED_OFFLINE), "--vmid", "101", "--rootfs", str(rootfs)],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 offline seed skipped current")
+            status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["currentSystem"], "/nix/store/built-system-101")
+            self.assertEqual(status["lastDeployStatus"], "ok")
+
     def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
         self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
         self.assertIn("--seed-only", RECONCILE_SEED.read_text(encoding="utf-8"))
+        self.assertIn("nix copy", RECONCILE_SEED_OFFLINE.read_text(encoding="utf-8"))
         self.assertIn("--activate-only", RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
 
     def test_activate_only_activates_recorded_desired_system(self) -> None:

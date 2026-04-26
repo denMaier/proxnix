@@ -30,6 +30,7 @@ HOST_PACKAGE_FILES=(
   "bin/proxnix-reconcile:/usr/local/sbin/proxnix-reconcile:0755"
   "bin/proxnix-reconcile-build:/usr/local/sbin/proxnix-reconcile-build:0755"
   "bin/proxnix-reconcile-seed:/usr/local/sbin/proxnix-reconcile-seed:0755"
+  "bin/proxnix-reconcile-seed-offline:/usr/local/sbin/proxnix-reconcile-seed-offline:0755"
   "bin/proxnix-reconcile-activate:/usr/local/sbin/proxnix-reconcile-activate:0755"
   "bin/proxnix-reconciler-state:/usr/local/sbin/proxnix-reconciler-state:0755"
   "bin/proxnix-cache-reconcile:/usr/local/sbin/proxnix-cache-reconcile:0755"

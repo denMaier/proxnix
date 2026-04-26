@@ -29,6 +29,9 @@ class HostPackagingTests(unittest.TestCase):
         prestart = (
             ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-prestart"
         ).read_text(encoding="utf-8")
+        mount = (
+            ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-mount"
+        ).read_text(encoding="utf-8")
         template_service = (
             ROOT / "host" / "runtime" / "systemd" / "proxnix-reconcile@.service"
         ).read_text(encoding="utf-8")
@@ -37,15 +40,18 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn("systemd/proxnix-reconcile@.service", package_common)
         self.assertIn("bin/proxnix-reconcile-build", package_common)
         self.assertIn("bin/proxnix-reconcile-seed", package_common)
+        self.assertIn("bin/proxnix-reconcile-seed-offline", package_common)
         self.assertIn("bin/proxnix-reconcile-activate", package_common)
         self.assertIn("proxnix-reconcile-build", install_sh)
         self.assertIn("proxnix-reconcile-seed", install_sh)
+        self.assertIn("proxnix-reconcile-seed-offline", install_sh)
         self.assertIn("proxnix-reconcile-activate", install_sh)
         self.assertIn('do_systemd_service "proxnix-reconcile"', install_sh)
         self.assertIn('PROXNIX_PRESTART_BUILD:-1', prestart)
         self.assertIn('proxnix-reconcile-build --vmid "$VMID"', prestart)
         self.assertNotIn("PROXNIX_PRESTART_RECONCILE", prestart)
         self.assertNotIn('systemctl start --no-block "proxnix-reconcile@${VMID}.service"', prestart)
+        self.assertIn('proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"', mount)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)
         self.assertIn("ExecStartPre=/bin/sleep 10", template_service)
 

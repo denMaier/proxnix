@@ -312,8 +312,9 @@ PROXNIX_RUNTIME_VMID="${PROXNIX_RUNTIME_DIR}/vmid"
 PROXNIX_RUNTIME_BIN_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-runtime-bin.list"
 PROXNIX_SECRET_MANIFEST="${PROXNIX_RUNTIME_MANIFEST_DIR}/managed-secrets.list"
 
-# Only diagnostic desired-state markers are injected from the host. Activation
-# is owned by proxnix-reconcile on the Proxmox node.
+# Diagnostic desired-state markers are injected from the host. When a stopped
+# container starts, the mount hook also seeds the built closure offline and
+# stages next-system for the guest boot activation unit.
 
 # Clean up any real /etc/systemd/system/ directory left by an older proxnix
 # version — NixOS setup-etc.pl requires it to be a symlink, not a directory.
@@ -336,6 +337,13 @@ mkdir -p \
     "${PROXNIX_MATERIALIZED_SYSTEMD_WANTS_DIR}"
 chmod 700 "${ROOTFS}/etc/secrets"
 chmod 700 "${PROXNIX_SECRET_DIR}"
+
+if command -v proxnix-reconcile-seed-offline >/dev/null 2>&1; then
+    log "Seeding desired NixOS closure into stopped rootfs when needed."
+    proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"
+else
+    log "WARN: proxnix-reconcile-seed-offline is unavailable; skipping offline closure seed."
+fi
 
 CURRENT_CONFIG_HASH=""
 if [[ -r "${PROXNIX_RUNTIME_CURRENT_HASH}" ]]; then

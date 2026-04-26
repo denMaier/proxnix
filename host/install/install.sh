@@ -34,6 +34,7 @@
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
 #   /usr/local/sbin/proxnix-reconcile-build     — host-side build phase
 #   /usr/local/sbin/proxnix-reconcile-seed      — host-side seed phase
+#   /usr/local/sbin/proxnix-reconcile-seed-offline — stopped-CT rootfs seed phase
 #   /usr/local/sbin/proxnix-reconcile-activate  — host-side activate phase
 #   /usr/local/sbin/proxnix-reconciler-state    — reconciler SQLite journal helper
 #   /usr/local/sbin/proxnix-cache-reconcile     — shared cache upload reconciler
@@ -271,6 +272,7 @@ do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxni
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed-offline" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed-offline" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-activate" "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconciler-state" "$PROXNIX_SBIN_DIR/proxnix-reconciler-state" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-cache-reconcile" "$PROXNIX_SBIN_DIR/proxnix-cache-reconcile" "755"
@@ -340,6 +342,7 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-reconcile
 /usr/local/sbin/proxnix-reconcile-build
 /usr/local/sbin/proxnix-reconcile-seed
+/usr/local/sbin/proxnix-reconcile-seed-offline
 /usr/local/sbin/proxnix-reconcile-activate
 /usr/local/sbin/proxnix-reconciler-state
 /usr/local/sbin/proxnix-cache-reconcile
@@ -370,6 +373,7 @@ Installed local commands:
 - proxnix-reconcile
 - proxnix-reconcile-build
 - proxnix-reconcile-seed
+- proxnix-reconcile-seed-offline
 - proxnix-reconcile-activate
 - proxnix-reconciler-state
 - proxnix-cache-reconcile

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# proxnix-reconcile-seed-offline -- seed a stopped CT rootfs during the LXC mount hook.
+
+set -euo pipefail
+
+SELF_NAME="${0##*/}"
+NIXLXC_DIR="${PROXNIX_DIR:-/var/lib/proxnix}"
+STATUS_DIR="${PROXNIX_STATUS_DIR:-${NIXLXC_DIR}/status}"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  ${SELF_NAME} --vmid <id> --rootfs </path/to/mounted/rootfs>
+
+Copies the host-built desired NixOS closure into a stopped container rootfs and
+stages /var/lib/proxnix/runtime/next-system for guest boot activation.
+EOF
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+need_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "${cmd} not found"
+}
+
+update_status_from_guest_marker() {
+  local status_file="$1" rootfs="$2" marker="${rootfs}/var/lib/proxnix/runtime/activated-system"
+  [[ -s "$marker" ]] || return
+  need_cmd jq
+  need_cmd date
+
+  local activated_system tmp updated_at
+  activated_system="$(tr -d '\r\n' < "$marker")"
+  [[ -n "$activated_system" ]] || return
+  tmp="${status_file}.tmp"
+  updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq \
+    --arg currentSystem "$activated_system" \
+    --arg updatedAt "$updated_at" \
+    '.currentSystem = $currentSystem
+      | .current_system = $currentSystem
+      | .container_has_closure = true
+      | .lastDeployStatus = "ok"
+      | .lastError = null
+      | .activatedAt = (.activatedAt // $updatedAt)
+      | .updatedAt = $updatedAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
+mark_offline_seeded() {
+  local status_file="$1" desired_system="$2"
+  need_cmd jq
+  need_cmd date
+
+  local tmp updated_at
+  tmp="${status_file}.tmp"
+  updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq \
+    --arg desiredSystem "$desired_system" \
+    --arg updatedAt "$updated_at" \
+    '.desiredSystem = $desiredSystem
+      | .desired_system = $desiredSystem
+      | .container_has_closure = true
+      | .lastDeployStatus = "offline-seeded"
+      | .lastError = null
+      | .updatedAt = $updatedAt' \
+    "$status_file" > "$tmp"
+  mv "$tmp" "$status_file"
+}
+
+vmid=""
+rootfs=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid)
+      [[ $# -ge 2 ]] || die "--vmid requires a value"
+      vmid="$2"
+      shift 2
+      ;;
+    --rootfs)
+      [[ $# -ge 2 ]] || die "--rootfs requires a value"
+      rootfs="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$vmid" ]] || die "--vmid is required"
+[[ "$vmid" =~ ^[0-9]+$ ]] || die "invalid VMID: $vmid"
+[[ -n "$rootfs" ]] || die "--rootfs is required"
+[[ -d "$rootfs" ]] || die "rootfs not found: $rootfs"
+[[ -d "${rootfs}/etc" ]] || die "rootfs does not look like a Linux root: ${rootfs}"
+
+status_file="${STATUS_DIR}/${vmid}.json"
+if [[ ! -f "$status_file" ]]; then
+  printf '%s offline seed skipped no status\n' "$vmid"
+  exit 0
+fi
+
+update_status_from_guest_marker "$status_file" "$rootfs" || true
+
+need_cmd jq
+desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"
+current_system="$(jq -r '.currentSystem // empty' "$status_file")"
+previous_system="$(jq -r '.previousSystem // empty' "$status_file")"
+last_build_status="$(jq -r '.lastBuildStatus // empty' "$status_file")"
+
+if [[ -z "$desired_system" ]]; then
+  printf '%s offline seed skipped no desired system\n' "$vmid"
+  exit 0
+fi
+if [[ "$last_build_status" != "ok" ]]; then
+  printf '%s offline seed skipped build not ok\n' "$vmid"
+  exit 0
+fi
+if [[ "$current_system" == "$desired_system" ]]; then
+  rm -f "${rootfs}/var/lib/proxnix/runtime/next-system"
+  printf '%s offline seed skipped current\n' "$vmid"
+  exit 0
+fi
+
+need_cmd nix
+runtime_dir="${rootfs}/var/lib/proxnix/runtime"
+mkdir -p "$runtime_dir"
+
+nix copy --no-check-sigs --to "local?root=${rootfs}" "$desired_system"
+[[ -x "${rootfs}${desired_system}/bin/switch-to-configuration" ]] || die "seeded system is missing switch-to-configuration: ${desired_system}"
+
+printf '%s\n' "$desired_system" > "${runtime_dir}/next-system"
+chmod 0644 "${runtime_dir}/next-system"
+if [[ -n "$previous_system" ]]; then
+  printf '%s\n' "$previous_system" > "${runtime_dir}/previous-system"
+elif [[ -n "$current_system" ]]; then
+  printf '%s\n' "$current_system" > "${runtime_dir}/previous-system"
+else
+  rm -f "${runtime_dir}/previous-system"
+fi
+[[ ! -e "${runtime_dir}/previous-system" ]] || chmod 0644 "${runtime_dir}/previous-system"
+
+mark_offline_seeded "$status_file" "$desired_system"
+printf '%s offline-seeded %s\n' "$vmid" "$desired_system"
