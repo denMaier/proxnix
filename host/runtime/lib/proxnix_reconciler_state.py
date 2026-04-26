@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 DEFAULT_DB = "/var/lib/proxnix/state/proxnix-reconciler.sqlite"
@@ -30,8 +28,6 @@ create table if not exists closure_observations (
   store_path text primary key,
   host_has_closure integer,
   container_has_closure integer,
-  shared_cache_has_closure integer,
-  pending_cache_upload integer not null default 0,
   protected_by_host_gc_root integer not null default 0,
   gc_root_path text,
   updated_at text not null
@@ -50,8 +46,6 @@ create table if not exists deployment_attempts (
 
 create index if not exists deployment_attempts_vmid_idx
   on deployment_attempts(vmid);
-create index if not exists closure_pending_upload_idx
-  on closure_observations(pending_cache_upload);
 """
 
 
@@ -138,8 +132,6 @@ def observe_closure(
     store_path: str,
     host_has_closure: bool | None,
     container_has_closure: bool | None,
-    shared_cache_has_closure: bool | None,
-    pending_cache_upload: bool,
     protected_by_host_gc_root: bool,
     gc_root_path: str | None,
     updated_at: str | None = None,
@@ -149,15 +141,12 @@ def observe_closure(
         """
         insert into closure_observations (
           store_path, host_has_closure, container_has_closure,
-          shared_cache_has_closure, pending_cache_upload,
           protected_by_host_gc_root, gc_root_path, updated_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?)
         on conflict(store_path) do update set
           host_has_closure = excluded.host_has_closure,
           container_has_closure = excluded.container_has_closure,
-          shared_cache_has_closure = excluded.shared_cache_has_closure,
-          pending_cache_upload = excluded.pending_cache_upload,
           protected_by_host_gc_root = excluded.protected_by_host_gc_root,
           gc_root_path = excluded.gc_root_path,
           updated_at = excluded.updated_at
@@ -166,8 +155,6 @@ def observe_closure(
             store_path,
             bool_to_int(host_has_closure),
             bool_to_int(container_has_closure),
-            bool_to_int(shared_cache_has_closure),
-            bool_to_int(pending_cache_upload),
             bool_to_int(protected_by_host_gc_root),
             gc_root_path,
             updated_at or now(),
@@ -201,20 +188,6 @@ def record_attempt(
     return int(cursor.lastrowid)
 
 
-def pending_cache_uploads(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    init_db(conn)
-    rows = conn.execute(
-        """
-        select store_path, host_has_closure, shared_cache_has_closure,
-               protected_by_host_gc_root, gc_root_path, updated_at
-          from closure_observations
-         where pending_cache_upload = 1
-         order by store_path
-        """
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB)
@@ -236,8 +209,6 @@ def build_parser() -> argparse.ArgumentParser:
     closure.add_argument("--store-path", required=True)
     closure.add_argument("--host-has-closure", type=parse_bool)
     closure.add_argument("--container-has-closure", type=parse_bool)
-    closure.add_argument("--shared-cache-has-closure", type=parse_bool)
-    closure.add_argument("--pending-cache-upload", type=parse_bool, default=False)
     closure.add_argument("--protected-by-host-gc-root", type=parse_bool, default=False)
     closure.add_argument("--gc-root-path")
 
@@ -249,7 +220,6 @@ def build_parser() -> argparse.ArgumentParser:
     attempt.add_argument("--error")
     attempt.add_argument("--finished-at")
 
-    sub.add_parser("pending-cache-uploads")
     return parser
 
 
@@ -276,8 +246,6 @@ def main(argv: list[str] | None = None) -> int:
                 store_path=args.store_path,
                 host_has_closure=args.host_has_closure,
                 container_has_closure=args.container_has_closure,
-                shared_cache_has_closure=args.shared_cache_has_closure,
-                pending_cache_upload=args.pending_cache_upload,
                 protected_by_host_gc_root=args.protected_by_host_gc_root,
                 gc_root_path=args.gc_root_path,
             )
@@ -292,8 +260,6 @@ def main(argv: list[str] | None = None) -> int:
                 finished_at=args.finished_at,
             )
             print(attempt_id)
-        elif args.command == "pending-cache-uploads":
-            print(json.dumps(pending_cache_uploads(conn), sort_keys=True))
         else:
             raise AssertionError(args.command)
     return 0

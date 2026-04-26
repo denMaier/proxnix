@@ -311,7 +311,6 @@ esac
             self.assertIn('"desiredSystem": "/nix/store/eval-system-101"', status)
             self.assertIn('"desired_system": "/nix/store/eval-system-101"', status)
             self.assertIn('"host_has_closure": true', status)
-            self.assertIn('"pending_cache_upload": true', status)
             self.assertIn('"protected_by_host_gc_root": true', status)
             self.assertIn('"lastBuildStatus": "ok"', status)
             self.assertIn('"lastDeployStatus": "not-run"', status)
@@ -879,7 +878,6 @@ esac
             self.assertTrue(status["container_is_local"])
             self.assertTrue(status["host_has_closure"])
             self.assertTrue(status["container_has_closure"])
-            self.assertTrue(status["pending_cache_upload"])
             self.assertTrue(status["protected_by_host_gc_root"])
             self.assertEqual(status["previousSystem"], "/nix/store/old-system-101")
             self.assertEqual(status["lastDeployStatus"], "ok")
@@ -1106,7 +1104,6 @@ esac
             self.assertEqual(status["current_system"], "/nix/store/current-system-101")
             self.assertTrue(status["container_is_local"])
             self.assertTrue(status["container_has_closure"])
-            self.assertFalse(status["pending_cache_upload"])
             self.assertEqual(status["lastDeployStatus"], "noop-current")
 
     def test_full_reconcile_records_build_failure_without_seeding(self) -> None:
@@ -1209,7 +1206,6 @@ esac
             self.assertEqual(status["current_system"], "/nix/store/old-system-101")
             self.assertFalse(status["host_has_closure"])
             self.assertFalse(status["container_has_closure"])
-            self.assertFalse(status["pending_cache_upload"])
             self.assertEqual(status["lastBuildStatus"], "failed")
             self.assertEqual(status["lastDeployStatus"], "build-failed")
             self.assertIn("nix build failed", status["lastError"])
@@ -1323,7 +1319,6 @@ esac
             self.assertEqual(status["currentSystem"], "/nix/store/old-system-101")
             self.assertTrue(status["host_has_closure"])
             self.assertFalse(status["container_has_closure"])
-            self.assertTrue(status["pending_cache_upload"])
             self.assertTrue(status["protected_by_host_gc_root"])
 
     def test_full_reconcile_stops_when_locality_is_lost_before_seed(self) -> None:

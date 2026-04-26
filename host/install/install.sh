@@ -37,7 +37,6 @@
 #   /usr/local/sbin/proxnix-reconcile-seed-offline — stopped-CT rootfs seed phase
 #   /usr/local/sbin/proxnix-reconcile-activate  — host-side activate phase
 #   /usr/local/sbin/proxnix-reconciler-state    — reconciler SQLite journal helper
-#   /usr/local/sbin/proxnix-cache-reconcile     — shared cache upload reconciler
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
 #
 # Node-local proxnix data:
@@ -275,7 +274,6 @@ do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed" "$PROXNIX_SBIN_DIR/proxnix-
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed-offline" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed-offline" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-activate" "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconciler-state" "$PROXNIX_SBIN_DIR/proxnix-reconciler-state" "755"
-do_install "$RUNTIME_DIR/bin/proxnix-cache-reconcile" "$PROXNIX_SBIN_DIR/proxnix-cache-reconcile" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────
@@ -294,9 +292,6 @@ do_install "$RUNTIME_DIR/systemd/proxnix-reconcile@.service" \
 if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi
-
-action "Cache reconciler timer → $SYSTEMD_UNIT_DIR/"
-do_systemd_timer "proxnix-cache-reconcile"
 
 # ── Node-local proxnix data → /var/lib/proxnix/ ──────────────────────────────
 # Keep only data here, not runnable scripts. This repo owns the install layer;
@@ -345,14 +340,11 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-reconcile-seed-offline
 /usr/local/sbin/proxnix-reconcile-activate
 /usr/local/sbin/proxnix-reconciler-state
-/usr/local/sbin/proxnix-cache-reconcile
 /usr/local/sbin/proxnix-uninstall
 /etc/systemd/system/proxnix-gc.service
 /etc/systemd/system/proxnix-gc.timer
 /etc/systemd/system/proxnix-reconcile.service
 /etc/systemd/system/proxnix-reconcile@.service
-/etc/systemd/system/proxnix-cache-reconcile.service
-/etc/systemd/system/proxnix-cache-reconcile.timer
 /var/lib/proxnix/base.nix
 /var/lib/proxnix/common.nix
 /var/lib/proxnix/security-policy.nix
@@ -376,7 +368,6 @@ Installed local commands:
 - proxnix-reconcile-seed-offline
 - proxnix-reconcile-activate
 - proxnix-reconciler-state
-- proxnix-cache-reconcile
 - proxnix-uninstall
 
 Managed local runtime files are listed in:

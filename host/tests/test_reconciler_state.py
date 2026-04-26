@@ -1,4 +1,3 @@
-import json
 import sqlite3
 import subprocess
 import sys
@@ -78,50 +77,46 @@ class ReconcilerStateTests(unittest.TestCase):
                 ).fetchall()
             self.assertEqual(rows, [(101, "activated")])
 
-    def test_pending_upload_query_returns_only_pending_closures(self) -> None:
+    def test_closure_observation_records_local_gc_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "reconciler.sqlite"
-            for store_path, pending in (
-                ("/nix/store/aaa-desired", "true"),
-                ("/nix/store/bbb-uploaded", "false"),
-            ):
-                result = subprocess.run(
-                    [
-                        str(STATE_CLI),
-                        "--db",
-                        str(db),
-                        "observe-closure",
-                        "--store-path",
-                        store_path,
-                        "--host-has-closure",
-                        "true",
-                        "--shared-cache-has-closure",
-                        "false",
-                        "--pending-cache-upload",
-                        pending,
-                        "--protected-by-host-gc-root",
-                        pending,
-                        "--gc-root-path",
-                        f"/var/lib/proxnix/gcroots/deploy/{store_path.rsplit('/', 1)[-1]}",
-                    ],
-                    check=False,
-                    text=True,
-                    stderr=subprocess.PIPE,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-
             result = subprocess.run(
-                [str(STATE_CLI), "--db", str(db), "pending-cache-uploads"],
+                [
+                    str(STATE_CLI),
+                    "--db",
+                    str(db),
+                    "observe-closure",
+                    "--store-path",
+                    "/nix/store/aaa-desired",
+                    "--host-has-closure",
+                    "true",
+                    "--container-has-closure",
+                    "false",
+                    "--protected-by-host-gc-root",
+                    "true",
+                    "--gc-root-path",
+                    "/var/lib/proxnix/gcroots/deploy/aaa-desired",
+                ],
                 check=False,
                 text=True,
-                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            pending = json.loads(result.stdout)
-            self.assertEqual([row["store_path"] for row in pending], ["/nix/store/aaa-desired"])
-            self.assertEqual(pending[0]["host_has_closure"], 1)
+            with sqlite3.connect(db) as conn:
+                row = conn.execute(
+                    "select store_path, host_has_closure, container_has_closure, protected_by_host_gc_root, gc_root_path from closure_observations"
+                ).fetchone()
+            self.assertEqual(
+                row,
+                (
+                    "/nix/store/aaa-desired",
+                    1,
+                    0,
+                    1,
+                    "/var/lib/proxnix/gcroots/deploy/aaa-desired",
+                ),
+            )
 
 
 if __name__ == "__main__":

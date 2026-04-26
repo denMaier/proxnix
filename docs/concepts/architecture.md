@@ -132,13 +132,12 @@ closure into the rootfs. The guest `proxnix-boot-activate.service` consumes
 For a running CT, explicit reconcile commands keep using `pct exec` for seed
 and activation; there is no guest activation timer.
 
-Shared Nix cache access is acceleration, not a runtime dependency. If a stale
-system can be built locally while the cache is unavailable, deployment can
-continue and the closure is marked for a later `proxnix-cache-reconcile` upload.
-Build or cache failures before seeding leave the CT's current generation
-untouched. Local coordination details such as pending uploads and retry history
-live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status
-files remain the operator-facing status surface.
+Build reuse is optimized per host. Each host should keep a golden-template
+build warm so container-specific builds mostly reuse already-realized store
+paths. Build failures before seeding leave the CT's current generation
+untouched. Local coordination details such as build observations, attempts, and
+GC protection live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the
+JSON status files remain the operator-facing status surface.
 
 ## Reconciler State Decision
 
@@ -148,8 +147,8 @@ proxnix keeps two state surfaces on purpose:
   and compatibility surface. Commands such as `proxnix-reconcile --status` and
   workstation status views should keep reading it.
 - `/var/lib/proxnix/state/proxnix-reconciler.sqlite` is the durable internal
-  journal. It should own attempt history, leases, retry queues, cache
-  reconciliation state, GC decisions, and other cross-run memory.
+  journal. It should own attempt history, leases, retry queues, GC decisions,
+  and other cross-run memory.
 
 Do not move operator-facing status exclusively into SQLite. The JSON files are
 easy to inspect, copy, and recover from. Do not use JSON as the only memory for
@@ -160,8 +159,8 @@ Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
 hook no longer starts a full reconcile service. Operators and workstation
 deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
 <id>` or `systemctl start proxnix-reconcile@<id>.service` when they want the
-running-CT path. The only remaining proxnix timers are for stale stage-dir
-cleanup and shared-cache upload retry.
+running-CT path. The only remaining proxnix timer is for stale stage-dir
+cleanup and local store GC.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.

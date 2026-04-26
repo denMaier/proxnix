@@ -29,7 +29,6 @@ This page maps every important proxnix path by role.
 | `host/runtime/lib/proxnix_authority_render.py` | Renders the generated host authority wrapper |
 | `host/runtime/lib/proxnix_reconciler_state.py` | Node-local SQLite journal helper for reconciler state |
 | `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
-| `host/runtime/bin/proxnix-cache-reconcile` | Uploads pending locally realized closures to the shared Nix cache |
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
@@ -164,7 +163,6 @@ specific to the shell-installer path.
 
 /usr/local/sbin/
 ├── proxnix-authority-render           authority wrapper renderer
-├── proxnix-cache-reconcile            shared cache upload reconciler
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
 ├── proxnix-reconcile                  host-side reconciler

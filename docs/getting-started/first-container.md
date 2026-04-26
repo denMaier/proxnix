@@ -168,10 +168,10 @@ same per-VMID running-CT path is also available as `systemctl start
 proxnix-reconcile@100.service`.
 
 If the CT is already running the evaluated desired system, the command exits as
-`noop-current` without building, importing, or contacting a shared cache. If the
-shared cache is unavailable but the host can build the desired closure locally,
-the CT can still converge and the host will retry cache upload later through
-`proxnix-cache-reconcile.timer`.
+`noop-current` without building or importing. Otherwise the host builds the
+desired closure from its local Nix store. Keeping a golden-template build warm
+on each host should make most container builds reuse existing store paths, so
+the normal path does not depend on cross-node closure upload.
 
 If activation fails, check:
 

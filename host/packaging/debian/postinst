@@ -36,7 +36,6 @@ if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   systemctl daemon-reload || true
   systemctl enable --now proxnix-gc.timer || true
   systemctl disable --now proxnix-reconcile.timer || true
-  systemctl enable --now proxnix-cache-reconcile.timer || true
 fi
 
 exit 0

@@ -325,26 +325,8 @@ systemctl start proxnix-reconcile@100.service
 Status JSON keeps compatibility fields such as `desiredSystem` and
 `currentSystem`, and also includes descriptive fields such as `desired_system`,
 `current_system`, `container_is_local`, `host_has_closure`,
-`container_has_closure`, `shared_cache_has_closure`, `pending_cache_upload`, and
-`protected_by_host_gc_root`. Common status names include `noop-current`,
-`build-failed`, `lost-locality`, `failed`, and `ok`.
-
-### `proxnix-cache-reconcile`
-
-Upload locally realized closures that are still marked
-`pending_cache_upload=true` in the local SQLite journal. This command is
-separate from CT activation, so a shared cache outage does not block no-op
-detection or local builds that can complete without the cache.
-
-Configure the target Nix store with `--cache-store` or
-`PROXNIX_SHARED_CACHE_STORE`, commonly through
-`/etc/proxnix/cache-reconcile.env` for the systemd service.
-
-```bash
-proxnix-cache-reconcile --cache-store ssh://cache.example
-proxnix-cache-reconcile --db /var/lib/proxnix/state/proxnix-reconciler.sqlite --cache-store ssh://cache.example
-systemctl start proxnix-cache-reconcile.service
-```
+`container_has_closure`, and `protected_by_host_gc_root`. Common status names
+include `noop-current`, `build-failed`, `lost-locality`, `failed`, and `ok`.
 
 ### `proxnix-authority-render`
 

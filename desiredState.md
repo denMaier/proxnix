@@ -15,7 +15,10 @@
 All checks that we discussed are done at the appropriate steps.
 Decision: status JSON stays the operator-facing compatibility/status surface,
 SQLite is the durable orchestration memory for history, locks/leases, retries,
-cache reconciliation, and GC decisions.
+and GC decisions.
+Build reuse should be optimized locally on each host by keeping a
+golden-template build warm, so normal container builds reuse most store paths
+without needing cross-node closure transfer machinery.
 
 ## current command names
   * 'proxnix-reconcile-build'
@@ -26,7 +29,7 @@ cache reconciliation, and GC decisions.
 
 ## 'proxnix-reconcile-build'
   * renders a config set from staged configs and builds a closure and sets is "not yet seeded, not yet activated"
-  * uses cache if useful 
+  * reuses the host's local Nix store, especially the local golden-template build
   * checks pre-build if build is neccessary
 ## 'proxnix-reconcile-seed'
   * seeds a closure into a running container
@@ -47,8 +50,8 @@ cache reconciliation, and GC decisions.
 ## Systemd units
   ### Garbage collection
   * uses sqlite db and other signals to remove the locks dir and garbage collect local nix store
-  ### Cache Reconcilliation
-  * Compares shared-cache and local closures -> updates cache and removes local copies
+  ### Reconciliation
+  * no full reconcile timer; reconcile is triggered by LXC lifecycle hooks or explicit operator/workstation commands
 
 # LXC
   * Has a local copy of the config used to create its state

@@ -7,7 +7,6 @@ case "${1:-}" in
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
       systemctl disable --now proxnix-gc.timer || true
       systemctl disable --now proxnix-reconcile.timer || true
-      systemctl disable --now proxnix-cache-reconcile.timer || true
     fi
     ;;
 esac

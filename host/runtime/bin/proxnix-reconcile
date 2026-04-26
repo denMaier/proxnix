@@ -276,8 +276,6 @@ write_build_status() {
       container_is_local: true,
       host_has_closure: true,
       container_has_closure: (if $currentSystem == $desiredSystem then true else false end),
-      shared_cache_has_closure: null,
-      pending_cache_upload: true,
       protected_by_host_gc_root: true,
       lastBuildStatus: "ok",
       lastDeployStatus: $lastDeployStatus,
@@ -306,8 +304,6 @@ write_activation_status() {
       | .container_is_local = true
       | .host_has_closure = true
       | .container_has_closure = true
-      | .shared_cache_has_closure = (.shared_cache_has_closure // null)
-      | .pending_cache_upload = (.pending_cache_upload // true)
       | .protected_by_host_gc_root = true
       | .lastBuildStatus = "ok"
       | .lastDeployStatus = "ok"
@@ -355,8 +351,6 @@ write_noop_status() {
       container_is_local: true,
       host_has_closure: null,
       container_has_closure: true,
-      shared_cache_has_closure: null,
-      pending_cache_upload: false,
       protected_by_host_gc_root: false,
       lastBuildStatus: $lastBuildStatus,
       lastDeployStatus: "noop-current",
@@ -397,8 +391,6 @@ write_build_failed_status() {
       container_is_local: true,
       host_has_closure: false,
       container_has_closure: false,
-      shared_cache_has_closure: null,
-      pending_cache_upload: false,
       protected_by_host_gc_root: false,
       lastBuildStatus: "failed",
       lastDeployStatus: "build-failed",

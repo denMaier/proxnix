@@ -60,7 +60,7 @@ class HostPackagingTests(unittest.TestCase):
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)
         self.assertIn("ExecStartPre=/bin/sleep 10", template_service)
 
-    def test_cache_reconcile_systemd_units_are_packaged_and_installed(self) -> None:
+    def test_shared_cache_reconcile_runtime_is_not_packaged(self) -> None:
         package_common = (ROOT / "host" / "packaging" / "package-common.sh").read_text(
             encoding="utf-8"
         )
@@ -68,24 +68,18 @@ class HostPackagingTests(unittest.TestCase):
         uninstall_sh = (ROOT / "host" / "install" / "uninstall.sh").read_text(
             encoding="utf-8"
         )
+        postinst = (ROOT / "host" / "packaging" / "debian" / "postinst").read_text(
+            encoding="utf-8"
+        )
+        prerm = (ROOT / "host" / "packaging" / "debian" / "prerm").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("systemd/proxnix-cache-reconcile.service", package_common)
-        self.assertIn("systemd/proxnix-cache-reconcile.timer", package_common)
-        self.assertIn('do_systemd_timer "proxnix-cache-reconcile"', install_sh)
-        self.assertIn("proxnix-cache-reconcile.timer", uninstall_sh)
-        self.assertIn("proxnix-cache-reconcile.service", uninstall_sh)
-
-    def test_cache_reconcile_service_runs_command(self) -> None:
-        service = (
-            ROOT / "host" / "runtime" / "systemd" / "proxnix-cache-reconcile.service"
-        ).read_text(encoding="utf-8")
-        timer = (
-            ROOT / "host" / "runtime" / "systemd" / "proxnix-cache-reconcile.timer"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("ExecStart=/usr/local/sbin/proxnix-cache-reconcile", service)
-        self.assertIn("EnvironmentFile=-/etc/proxnix/cache-reconcile.env", service)
-        self.assertIn("Persistent=true", timer)
+        self.assertNotIn("proxnix-cache-reconcile", package_common)
+        self.assertNotIn("proxnix-cache-reconcile", install_sh)
+        self.assertNotIn("proxnix-cache-reconcile", uninstall_sh)
+        self.assertNotIn("proxnix-cache-reconcile", postinst)
+        self.assertNotIn("proxnix-cache-reconcile", prerm)
 
     def test_guest_boot_activation_unit_is_in_base_nix(self) -> None:
         base_nix = (ROOT / "host" / "runtime" / "nix" / "base.nix").read_text(
