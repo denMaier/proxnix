@@ -1,0 +1,9 @@
+[Unit]
+Description=Upload pending proxnix closures to the shared Nix cache
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/proxnix/cache-reconcile.env
+ExecStart=/usr/local/sbin/proxnix-cache-reconcile

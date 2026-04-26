@@ -110,6 +110,16 @@ do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
 if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi
+
+action "Cache reconciler timer"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl disable --now proxnix-cache-reconcile.timer 2>/dev/null || true
+fi
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-cache-reconcile.timer"
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-cache-reconcile.service"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+fi
 do_rmdir_if_empty "$PROXNIX_LIB_DIR"
 
 echo ""

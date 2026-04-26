@@ -258,6 +258,9 @@ do_systemd_timer "proxnix-gc"
 action "Reconciler timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-reconcile"
 
+action "Cache reconciler timer → $SYSTEMD_UNIT_DIR/"
+do_systemd_timer "proxnix-cache-reconcile"
+
 # ── Node-local proxnix data → /var/lib/proxnix/ ──────────────────────────────
 # Keep only data here, not runnable scripts. This repo owns the install layer;
 # a separate site/data repo can manage site.nix, containers/, and the
