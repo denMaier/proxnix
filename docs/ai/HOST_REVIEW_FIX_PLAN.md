@@ -60,10 +60,10 @@ Addresses findings #3, #11, log-wording portion of #6.
 
 Addresses findings #7, #8, #10.
 
-- [ ] Identity decryption no longer lands plaintext in `/tmp` (memfd / stdin
+- [x] Identity decryption no longer lands plaintext in `/tmp` (memfd / stdin
       pipe / tmpfs with shred trap)
-- [ ] Podman `secrets.json` reconciliation atomic (write-tmp + `os.replace`)
-- [ ] Reconciler records activated-system on the **host** rather than trusting
+- [x] Podman `secrets.json` reconciliation atomic (write-tmp + `os.replace`)
+- [x] Reconciler records activated-system on the **host** rather than trusting
       a guest-written marker; guest marker may be cross-checked for drift but
       is not authoritative
 

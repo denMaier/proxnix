@@ -316,6 +316,8 @@ write_activation_status() {
       | .host_has_closure = true
       | .container_has_closure = true
       | .protected_by_host_gc_root = $protected
+      | .hostActivatedSystem = $desiredSystem
+      | .host_activated_system = $desiredSystem
       | .lastBuildStatus = "ok"
       | .lastDeployStatus = "ok"
       | .lastError = null
@@ -439,6 +441,8 @@ write_rollback_status() {
     --arg rolledBackAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.currentSystem = $currentSystem
       | .current_system = $currentSystem
+      | .hostActivatedSystem = $currentSystem
+      | .host_activated_system = $currentSystem
       | .container_has_closure = true
       | .lastDeployStatus = "rollback-ok"
       | .lastError = null

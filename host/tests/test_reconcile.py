@@ -786,7 +786,7 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
             self.assertEqual(status["lastDeployStatus"], "offline-seeded")
             self.assertTrue(status["container_has_closure"])
 
-    def test_seed_offline_refreshes_status_from_guest_activation_marker(self) -> None:
+    def test_seed_offline_records_guest_activation_marker_without_trusting_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
             rootfs = Path(tmp) / "rootfs"
@@ -804,7 +804,7 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
                         "desiredSystem": "/nix/store/built-system-101",
                         "currentSystem": "/nix/store/old-system-101",
                         "previousSystem": "/nix/store/old-system-101",
-                        "lastBuildStatus": "ok",
+                        "lastBuildStatus": "failed",
                         "lastDeployStatus": "offline-seeded",
                         "lastError": None,
                     }
@@ -825,10 +825,12 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "101 offline seed skipped current")
+            self.assertEqual(result.stdout.strip(), "101 offline seed skipped build not ok")
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["currentSystem"], "/nix/store/built-system-101")
-            self.assertEqual(status["lastDeployStatus"], "ok")
+            self.assertEqual(status["currentSystem"], "/nix/store/old-system-101")
+            self.assertEqual(status["lastDeployStatus"], "offline-seeded")
+            self.assertEqual(status["guestActivatedSystem"], "/nix/store/built-system-101")
+            self.assertTrue(status["guestActivationMarkerDrift"])
 
     def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
         self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
@@ -938,6 +940,7 @@ esac
             self.assertEqual(result.stdout.strip(), "101 activated /nix/store/desired-system-101")
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
             self.assertEqual(status["currentSystem"], "/nix/store/desired-system-101")
+            self.assertEqual(status["hostActivatedSystem"], "/nix/store/desired-system-101")
             self.assertEqual(status["previousSystem"], "/nix/store/old-system-101")
             self.assertEqual(status["lastDeployStatus"], "ok")
 
@@ -1042,6 +1045,7 @@ esac
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
             self.assertEqual(status["desiredSystem"], "/nix/store/built-system-101")
             self.assertEqual(status["currentSystem"], "/nix/store/built-system-101")
+            self.assertEqual(status["hostActivatedSystem"], "/nix/store/built-system-101")
             self.assertEqual(status["desired_system"], "/nix/store/built-system-101")
             self.assertEqual(status["current_system"], "/nix/store/built-system-101")
             self.assertTrue(status["container_is_local"])

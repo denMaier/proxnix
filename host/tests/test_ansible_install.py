@@ -59,12 +59,18 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn('proxnix-reconcile-seed-offline --vmid "$VMID" --rootfs "$ROOTFS"', mount)
         self.assertIn("set -euo pipefail", mount)
         self.assertIn('if ! proxnix_validate_vmid "$VMID"', mount)
+        self.assertIn("os.replace(tmp, SECRETS_JSON)", mount)
         self.assertIn("rsync -a --delete", mount)
         self.assertIn("/var/lib/proxnix/build-input", mount)
         self.assertNotIn('copy_guest_file "${COPY_ETC_NIXOS_DIR}/configuration.nix"', mount)
         self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
         self.assertIn("set -euo pipefail", poststop)
         self.assertIn('if ! proxnix_validate_vmid "$VMID"', poststop)
+        common = (
+            ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-common.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("proxnix_validate_vmid()", common)
+        self.assertNotIn("proxnix-host-identity.XXXXXX.yaml", common)
 
     def test_flake_packages_host_runtime(self) -> None:
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")

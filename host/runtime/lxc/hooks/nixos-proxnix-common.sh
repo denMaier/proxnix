@@ -90,24 +90,20 @@ proxnix_with_host_relay_key() {
 }
 
 proxnix_decrypt_host_identity_store_to_file() {
-    local store="$1" out="$2" tmp_yaml
+    local store="$1" out="$2"
     [[ -f "$store" ]] || return 1
-    tmp_yaml="$(mktemp /tmp/proxnix-host-identity.XXXXXX.yaml)"
-    if ! proxnix_with_host_relay_key sops decrypt --input-type yaml --output-type yaml "$store" > "$tmp_yaml"; then
-        rm -f "$tmp_yaml" "$out"
-        return 1
-    fi
-    if ! python3 - "$tmp_yaml" "$out" <<'PY'
+    if ! proxnix_with_host_relay_key sops decrypt --input-type yaml --output-type yaml "$store" \
+        | python3 -c '
 import sys
 
-with open(sys.argv[1]) as source:
-    lines = source.readlines()
+lines = sys.stdin.readlines()
+out = sys.argv[1]
 
 if not lines or not lines[0].strip().startswith("identity: |"):
     raise SystemExit("invalid proxnix identity payload")
 
 base_indent = None
-with open(sys.argv[2], "w") as fh:
+with open(out, "w") as fh:
     for line in lines[1:]:
         if line.strip() == "":
             fh.write("\n")
@@ -120,12 +116,11 @@ with open(sys.argv[2], "w") as fh:
         if indent < base_indent:
             raise SystemExit("invalid proxnix identity payload")
         fh.write(line[base_indent:])
-PY
+    ' "$out"
     then
-        rm -f "$tmp_yaml" "$out"
+        rm -f "$out"
         return 1
     fi
-    rm -f "$tmp_yaml"
     chmod 600 "$out"
 }
 

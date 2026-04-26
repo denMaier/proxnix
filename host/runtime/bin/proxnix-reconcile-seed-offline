@@ -27,26 +27,32 @@ need_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "${cmd} not found"
 }
 
-update_status_from_guest_marker() {
+record_guest_activation_marker() {
   local status_file="$1" rootfs="$2" marker="${rootfs}/var/lib/proxnix/runtime/activated-system"
   [[ -s "$marker" ]] || return
   need_cmd jq
   need_cmd date
 
-  local activated_system tmp updated_at
+  local activated_system desired_system current_system tmp updated_at drift
   activated_system="$(tr -d '\r\n' < "$marker")"
   [[ -n "$activated_system" ]] || return
+  desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"
+  current_system="$(jq -r '.currentSystem // empty' "$status_file")"
+  drift="false"
+  if [[ -n "$desired_system" && "$activated_system" != "$desired_system" ]]; then
+    drift="true"
+  elif [[ -n "$current_system" && "$current_system" != "$activated_system" ]]; then
+    drift="true"
+  fi
   tmp="${status_file}.tmp"
   updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq \
-    --arg currentSystem "$activated_system" \
+    --arg guestActivatedSystem "$activated_system" \
+    --argjson guestActivationMarkerDrift "$drift" \
     --arg updatedAt "$updated_at" \
-    '.currentSystem = $currentSystem
-      | .current_system = $currentSystem
-      | .container_has_closure = true
-      | .lastDeployStatus = "ok"
-      | .lastError = null
-      | .activatedAt = (.activatedAt // $updatedAt)
+    '.guestActivatedSystem = $guestActivatedSystem
+      | .guest_activated_system = $guestActivatedSystem
+      | .guestActivationMarkerDrift = $guestActivationMarkerDrift
       | .updatedAt = $updatedAt' \
     "$status_file" > "$tmp"
   mv "$tmp" "$status_file"
@@ -109,7 +115,7 @@ if [[ ! -f "$status_file" ]]; then
   exit 0
 fi
 
-update_status_from_guest_marker "$status_file" "$rootfs" || true
+record_guest_activation_marker "$status_file" "$rootfs" || true
 
 need_cmd jq
 desired_system="$(jq -r '.desiredSystem // empty' "$status_file")"

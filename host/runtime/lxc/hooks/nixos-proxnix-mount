@@ -441,6 +441,7 @@ find "${ROOTFS}/etc/secrets" -maxdepth 1 -type f -name '*.age' -delete 2>/dev/nu
 
 python3 - "$ROOTFS" "$VMID" "$PROXNIX_SECRET_DIR" <<'PYEOF'
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -544,8 +545,10 @@ for name in sorted(live_names):
         ids_file.chmod(0o640)
 
 if changed:
-    SECRETS_JSON.write_text(json.dumps(data, indent=2) + "\n")
-    SECRETS_JSON.chmod(0o600)
+    tmp = SECRETS_JSON.with_name(f".{SECRETS_JSON.name}.tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.chmod(0o600)
+    os.replace(tmp, SECRETS_JSON)
     print(
         f"[proxnix-mount][{vmid}] Podman secrets.json reconciled ({len(live_names)} secret(s))",
         file=sys.stderr,
