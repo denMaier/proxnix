@@ -94,8 +94,27 @@ eval_node_manifest() {
 
 is_local_container() {
   local vmid="$1"
+  local placement_node
+  if placement_node="$(cluster_placement_node "$vmid")"; then
+    [[ "$placement_node" == "$NODE_NAME" ]]
+    return
+  fi
   command -v pct >/dev/null 2>&1 || return 1
   pct status "$vmid" >/dev/null 2>&1
+}
+
+cluster_placement_node() {
+  local vmid="$1"
+  command -v pvesh >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local resources node
+  if ! resources="$(pvesh get /cluster/resources --type vm --output-format json 2>/dev/null)"; then
+    return 1
+  fi
+  node="$(jq -r --arg vmid "$vmid" 'map(select((.vmid | tostring) == $vmid))[0].node // empty' <<<"$resources" 2>/dev/null || true)"
+  [[ -n "$node" ]] || return 1
+  printf '%s\n' "$node"
 }
 
 selected_container_is_local_or_skip() {

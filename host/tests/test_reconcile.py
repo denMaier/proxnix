@@ -145,6 +145,106 @@ JSON
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "101 skip not-local")
 
+    def test_dry_run_prefers_cluster_placement_for_remote_container(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\n[ \"$1\" = status ] && exit 0\nexit 2\n")
+            write_executable(
+                fake_bin / "pvesh",
+                """#!/bin/sh
+cat <<'JSON'
+[{"vmid":101,"type":"lxc","node":"pve2"}]
+JSON
+""",
+            )
+            write_executable(
+                fake_bin / "nix",
+                "#!/bin/sh\nprintf '%s\\n' '{\"containers\":{\"101\":{\"vmid\":101,\"system\":\"/nix/store/system-101\"}}}'\n",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(Path(tmp) / "run"),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--dry-run", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 skip not-local")
+
+    def test_dry_run_uses_cluster_placement_for_local_container(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\nexit 2\n")
+            write_executable(
+                fake_bin / "pvesh",
+                """#!/bin/sh
+cat <<'JSON'
+[{"vmid":101,"type":"lxc","node":"pve1"}]
+JSON
+""",
+            )
+            write_executable(
+                fake_bin / "nix",
+                "#!/bin/sh\nprintf '%s\\n' '{\"containers\":{\"101\":{\"vmid\":101,\"system\":\"/nix/store/system-101\"}}}'\n",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(Path(tmp) / "run"),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--dry-run", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    "101 build /nix/store/system-101",
+                    "101 keep local CT",
+                    "101 seed desired closure",
+                    "101 activate desired system",
+                ],
+            )
+
     def test_build_only_writes_status_without_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
