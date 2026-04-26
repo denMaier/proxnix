@@ -74,8 +74,13 @@ class AuthorityRenderTests(unittest.TestCase):
             self.assertIn('hostname = "ct101";', manifest_nix)
             self.assertIn("memory = 2048;", manifest_nix)
             self.assertIn("unprivileged = true;", manifest_nix)
+            self.assertIn("localVmids = [", manifest_nix)
+            self.assertIn("local = false;", manifest_nix)
+            self.assertIn("observedPveConfig = true;", manifest_nix)
+            flake_nix = (authority / "flake.nix").read_text(encoding="utf-8")
+            self.assertIn("proxnix.containers = manifest.containers;", flake_nix)
 
-    def test_skips_container_without_matching_pve_config(self) -> None:
+    def test_keeps_cluster_container_without_matching_local_pve_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
             authority = root / "authority"
@@ -85,10 +90,13 @@ class AuthorityRenderTests(unittest.TestCase):
 
             manifests = authority_render.render_authority(root, authority, Path(tmp) / "missing-pve", "pve1")
 
-            self.assertEqual(manifests, [])
+            self.assertEqual([manifest.vmid for manifest in manifests], ["101"])
             manifest_nix = (authority / "generated" / "node-manifest.nix").read_text(encoding="utf-8")
             self.assertIn("vmids = [", manifest_nix)
             self.assertIn("containers = {", manifest_nix)
+            self.assertIn('"101" = {', manifest_nix)
+            self.assertIn("local = false;", manifest_nix)
+            self.assertIn("observedPveConfig = false;", manifest_nix)
 
 
 if __name__ == "__main__":

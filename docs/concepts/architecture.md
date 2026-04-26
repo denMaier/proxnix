@@ -111,8 +111,10 @@ It also removes legacy `proxnix-apply-config` service files if they are present.
 ### 4. Host reconciler activates the desired system
 
 `proxnix-reconcile` runs on the Proxmox node. It renders the authority wrapper,
-evaluates `proxnix.nodes.<node>`, builds the selected NixOS system closure,
-imports that closure into the CT, runs the target system's
+evaluates cluster-level `proxnix.containers` through the node view at
+`proxnix.nodes.<node>`, skips CTs that are not local according to `pct status`,
+builds the selected local NixOS system closure, imports that closure into the
+CT, runs the target system's
 `switch-to-configuration`, verifies `/run/current-system`, and writes status
 under `/var/lib/proxnix/status/`.
 

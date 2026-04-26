@@ -91,6 +91,21 @@ eval_node_manifest() {
   nix eval --json "${AUTHORITY_DIR}#${attr}"
 }
 
+is_local_container() {
+  local vmid="$1"
+  command -v pct >/dev/null 2>&1 || return 1
+  pct status "$vmid" >/dev/null 2>&1
+}
+
+selected_container_is_local_or_skip() {
+  local vmid="$1"
+  if is_local_container "$vmid"; then
+    return 0
+  fi
+  printf '%s skip not-local\n' "$vmid"
+  return 1
+}
+
 take_global_lock() {
   need_cmd flock
   mkdir -p "$LOCK_DIR"
@@ -182,9 +197,12 @@ dry_run() {
     return
   fi
 
-  local vmid conf status_file desired_system last_desired current_system
+  local vmid status_file desired_system last_desired current_system
   for vmid in "${vmids[@]}"; do
-    conf="${PVE_LXC_DIR}/${vmid}.conf"
+    if ! is_local_container "$vmid"; then
+      printf '%s skip not-local\n' "$vmid"
+      continue
+    fi
     status_file="${STATUS_DIR}/${vmid}.json"
     desired_system="$(jq -r --arg vmid "$vmid" '.containers[$vmid].system // "unknown until build"' <<<"$manifest")"
     last_desired=""
@@ -200,11 +218,7 @@ dry_run() {
     fi
 
     printf '%s build %s\n' "$vmid" "$desired_system"
-    if [[ -f "$conf" ]]; then
-      printf '%s keep existing CT\n' "$vmid"
-    else
-      printf '%s create missing CT\n' "$vmid"
-    fi
+    printf '%s keep local CT\n' "$vmid"
     printf '%s seed desired closure\n' "$vmid"
     printf '%s activate desired system\n' "$vmid"
   done
@@ -225,10 +239,13 @@ write_build_status() {
     --arg currentSystem "$current_system" \
     --arg previousSystem "$previous_system" \
     --arg lastDeployStatus "${last_deploy_status:-not-run}" \
+    --arg node "$NODE_NAME" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
       vmid: $vmid,
       hostname: $hostname,
+      node: $node,
+      local: true,
       sourceRevision: $sourceRevision,
       desiredSystem: $desiredSystem,
       currentSystem: (if $currentSystem == "" then null else $currentSystem end),
@@ -324,6 +341,11 @@ pve_field() {
   jq -r --arg vmid "$selected_vmid" --arg field "$field" '.containers[$vmid].pve[$field] // empty' <<<"$manifest"
 }
 
+placement_field() {
+  local selected_vmid="$1" manifest="$2" field="$3"
+  jq -r --arg vmid "$selected_vmid" --arg field "$field" '.containers[$vmid].placement[$field] // empty' <<<"$manifest"
+}
+
 net0_part() {
   local net0="$1" key="$2"
   tr ',' '\n' <<<"$net0" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
@@ -360,6 +382,9 @@ build_only() {
   fi
   if ! jq -e --arg vmid "$selected_vmid" '.containers[$vmid] != null' >/dev/null <<<"$manifest"; then
     die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
+  fi
+  if ! selected_container_is_local_or_skip "$selected_vmid"; then
+    return
   fi
 
   local system_path hostname source_revision status_file current_system previous_system last_deploy_status
@@ -402,6 +427,9 @@ seed_only() {
   need_cmd flock
   take_global_lock
   take_container_lock "$selected_vmid"
+  if ! selected_container_is_local_or_skip "$selected_vmid"; then
+    return
+  fi
 
   local status_file="${STATUS_DIR}/${selected_vmid}.json"
   [[ -f "$status_file" ]] || die "status not found for VMID ${selected_vmid}; run --build-only first"
@@ -437,11 +465,20 @@ resolve_create_lxc() {
 
 ensure_container_exists() {
   local selected_vmid="$1" manifest="$2" recreate_missing="$3"
-  local conf="${PVE_LXC_DIR}/${selected_vmid}.conf"
-  [[ -f "$conf" ]] && return
+  if is_local_container "$selected_vmid"; then
+    return
+  fi
 
   if [[ "$recreate_missing" -ne 1 ]]; then
-    die "PVE config missing for VMID ${selected_vmid}: ${conf}; rerun with --recreate-missing to create it from manifest data"
+    printf '%s skip not-local\n' "$selected_vmid"
+    return 1
+  fi
+
+  local placement_node target_node
+  placement_node="$(placement_field "$selected_vmid" "$manifest" node)"
+  target_node="$(placement_field "$selected_vmid" "$manifest" targetNode)"
+  if [[ "$placement_node" != "$NODE_NAME" && "$target_node" != "$NODE_NAME" ]]; then
+    die "VMID ${selected_vmid} is not local to ${NODE_NAME}; --recreate-missing requires placement.node or placement.targetNode to match this node"
   fi
 
   local create_lxc hostname memory swap cores unprivileged rootfs storage disk net0 bridge ip gw template
@@ -480,7 +517,7 @@ ensure_container_exists() {
   [[ -n "$unprivileged" ]] && cmd+=(--unprivileged "$unprivileged")
 
   "${cmd[@]}"
-  [[ -f "$conf" ]] || die "proxnix-create-lxc completed but PVE config is still missing for VMID ${selected_vmid}: ${conf}"
+  is_local_container "$selected_vmid" || die "proxnix-create-lxc completed but VMID ${selected_vmid} is still not local"
 }
 
 ensure_container_running_for_exec() {
@@ -539,13 +576,16 @@ reconcile_selected() {
     die "VMID ${selected_vmid} is not present in proxnix.nodes.${NODE_NAME}"
   fi
 
+  if ! ensure_container_exists "$selected_vmid" "$manifest" "$recreate_missing"; then
+    return
+  fi
+
   local system_path hostname source_revision status_file live_current previous_system prior_previous
   hostname="$(manifest_hostname "$selected_vmid" "$manifest")"
   source_revision="$(manifest_source_revision "$selected_vmid" "$manifest")"
   system_path="$(build_manifest_system "$selected_vmid" "$manifest")"
   [[ -n "$system_path" ]] || die "nix build produced no output path"
 
-  ensure_container_exists "$selected_vmid" "$manifest" "$recreate_missing"
   ensure_container_running_for_exec "$selected_vmid"
   live_current="$(current_system "$selected_vmid" | tr -d '\r\n')"
   status_file="${STATUS_DIR}/${selected_vmid}.json"
@@ -595,6 +635,9 @@ rollback_container() {
   need_cmd pct
   take_global_lock
   take_container_lock "$selected_vmid"
+  if ! selected_container_is_local_or_skip "$selected_vmid"; then
+    return
+  fi
 
   local status_file="${STATUS_DIR}/${selected_vmid}.json"
   [[ -f "$status_file" ]] || die "status not found for VMID ${selected_vmid}"

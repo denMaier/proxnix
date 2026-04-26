@@ -31,6 +31,7 @@ class ReconcileDryRunTests(unittest.TestCase):
             (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
 
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\n[ \"$1\" = status ] && exit 0\nexit 2\n")
             write_executable(
                 fake_bin / "nix",
                 """#!/bin/sh
@@ -65,7 +66,7 @@ JSON
                 result.stdout.splitlines(),
                 [
                     "101 build /nix/store/system-101",
-                    "101 keep existing CT",
+                    "101 keep local CT",
                     "101 seed desired closure",
                     "101 activate desired system",
                 ],
@@ -106,6 +107,44 @@ JSON
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("VMID 101 is not present", result.stderr)
 
+    def test_dry_run_skips_nonlocal_selected_vmid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            for name in ("base.nix", "common.nix", "security-policy.nix"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("{ ... }: {}\n", encoding="utf-8")
+
+            write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\nexit 1\n")
+            write_executable(
+                fake_bin / "nix",
+                "#!/bin/sh\nprintf '%s\\n' '{\"containers\":{\"101\":{\"vmid\":101,\"system\":\"/nix/store/system-101\"}}}'\n",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                    "PROXNIX_RUN_DIR": str(Path(tmp) / "run"),
+                    "PROXNIX_NODE_NAME": "pve1",
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE), "--dry-run", "--vmid", "101"],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 skip not-local")
+
     def test_build_only_writes_status_without_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
@@ -122,6 +161,7 @@ JSON
             (pve / "101.conf").write_text("ostype: nixos\nhostname: ct101\n", encoding="utf-8")
 
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+            write_executable(fake_bin / "pct", "#!/bin/sh\n[ \"$1\" = status ] && exit 0\nexit 2\n")
             write_executable(
                 fake_bin / "nix",
                 """#!/bin/sh
@@ -213,6 +253,9 @@ esac
             write_executable(
                 fake_bin / "pct",
                 """#!/bin/sh
+if [ "$1" = "status" ]; then
+  exit 0
+fi
 if [ "$1" != "exec" ]; then
   exit 2
 fi
@@ -274,7 +317,10 @@ exit 2
 
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             write_executable(fake_bin / "nix-store", "#!/bin/sh\nprintf '%s\\n' /nix/store/built-system-101\n")
-            write_executable(fake_bin / "pct", "#!/bin/sh\necho import failed >&2\nexit 1\n")
+            write_executable(
+                fake_bin / "pct",
+                "#!/bin/sh\nif [ \"$1\" = status ]; then exit 0; fi\necho import failed >&2\nexit 1\n",
+            )
 
             env = os.environ.copy()
             env.update(
@@ -439,7 +485,7 @@ esac
 case "$1" in
   eval)
     cat <<'JSON'
-{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101","memory":2048,"swap":512,"cores":2,"rootfs":"local-lvm:vm-101-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=dhcp","unprivileged":true}}}}
+{"nodeName":"pve1","containers":{"101":{"vmid":101,"hostname":"ct101","sourceRevision":null,"system":"/nix/store/eval-system-101","systemAttr":"nixosConfigurations.ct101.config.system.build.toplevel","pve":{"hostname":"ct101","memory":2048,"swap":512,"cores":2,"rootfs":"local-lvm:vm-101-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=dhcp","unprivileged":true},"placement":{"node":"pve1","local":false}}}}
 JSON
     ;;
   build)
@@ -467,6 +513,7 @@ printf '%s\\n' 'ostype: nixos' 'hostname: ct101' > {pve / "101.conf"}
                 fake_bin / "pct",
                 f"""#!/bin/sh
 if [ "$1" = "status" ]; then
+  [ -f {pve / "101.conf"} ] || exit 1
   printf '%s\\n' 'status: stopped'
   exit 0
 fi

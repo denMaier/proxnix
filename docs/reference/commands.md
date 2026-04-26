@@ -266,14 +266,18 @@ Sample output for a healthy relay-backed container:
 Host-side reconciler entrypoint. The phase-1 command installs status plumbing
 and host prerequisite validation. Dry-run renders and evaluates the generated
 authority manifest, then prints planned actions without building or modifying
-containers. `--build-only --vmid <id>` builds one selected system closure and
+containers. Managed CTs are cluster-scoped and can float between nodes; each
+node only acts on CTs that are local according to `pct status <vmid>`. Non-local
+targets are reported as `skip not-local`.
+
+`--build-only --vmid <id>` builds one selected local system closure and
 writes `/var/lib/proxnix/status/<vmid>.json` without activating it.
 `--seed-only --vmid <id>` imports the recorded desired closure into the target
 CT and verifies `switch-to-configuration` exists. `--vmid <id>` runs the current
 end-to-end path for one CT:
 build, seed, exact-path activation, verification, and status write.
-`--recreate-missing` lets that path create a missing CT first from manifest
-lifecycle fields.
+`--recreate-missing` creates a CT only when manifest placement explicitly
+targets the current node.
 
 ```bash
 proxnix-reconcile --dry-run
@@ -289,8 +293,11 @@ proxnix-reconcile --status --vmid 100
 
 ### `proxnix-authority-render`
 
-Render the compatibility authority wrapper under `/var/lib/proxnix/authority`
-from the legacy relay cache and local `/etc/pve/lxc/*.conf` files.
+Render the compatibility authority wrapper under `/var/lib/proxnix/authority`.
+The wrapper exposes cluster-level `proxnix.containers` and a node view at
+`proxnix.nodes.<node>`. Local `/etc/pve/lxc/*.conf` data is used when available
+for generated Proxmox metadata, but runtime locality is decided by the
+reconciler through `pct status`.
 
 ```bash
 proxnix-authority-render
