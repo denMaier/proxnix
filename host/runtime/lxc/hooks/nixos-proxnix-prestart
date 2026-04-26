@@ -138,6 +138,22 @@ finish_prestart() {
 
 trap finish_prestart EXIT
 
+trigger_reconcile_after_start() {
+    if [[ "${PROXNIX_PRESTART_RECONCILE:-1}" == "0" ]]; then
+        log "Skipping post-start reconcile trigger because PROXNIX_PRESTART_RECONCILE=0."
+        return
+    fi
+    if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then
+        log "WARN: systemd is unavailable; cannot trigger proxnix-reconcile@${VMID}.service."
+        return
+    fi
+    if ! systemctl start --no-block "proxnix-reconcile@${VMID}.service"; then
+        log "WARN: failed to trigger proxnix-reconcile@${VMID}.service."
+        return
+    fi
+    log "Triggered proxnix-reconcile@${VMID}.service."
+}
+
 log "Starting pre-start hook (PVE conf: ${PVE_CONF}, stage: ${STAGE_DIR})."
 
 if [[ ! -f "$PVE_CONF_TO_NIX" ]]; then
@@ -338,4 +354,5 @@ else
 fi
 
 log "Rendered staged state at ${STAGE_DIR} (host root uid: ${HOST_SUBUID})"
+trigger_reconcile_after_start
 exit 0

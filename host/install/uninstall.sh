@@ -107,6 +107,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
 fi
 do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer"
 do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service"
 if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi

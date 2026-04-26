@@ -224,13 +224,18 @@ check_host_files() {
     else
       fail "proxnix-reconcile.service missing"
     fi
-    if [[ -f /etc/systemd/system/proxnix-reconcile.timer ]]; then
-      ok "proxnix-reconcile.timer installed"
+    if [[ -f /etc/systemd/system/proxnix-reconcile@.service ]]; then
+      ok "proxnix-reconcile@.service installed"
     else
-      fail "proxnix-reconcile.timer missing"
+      fail "proxnix-reconcile@.service missing"
+    fi
+    if [[ -f /etc/systemd/system/proxnix-reconcile.timer ]]; then
+      fail "legacy proxnix-reconcile.timer still installed"
+    else
+      ok "legacy proxnix-reconcile.timer absent"
     fi
   else
-    fail "systemctl not found; cannot validate Nix daemon or reconciler timer"
+    fail "systemctl not found; cannot validate Nix daemon or reconciler services"
   fi
 
   if [[ -d /nix ]]; then

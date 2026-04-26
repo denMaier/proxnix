@@ -33,7 +33,7 @@ HOST_PACKAGE_FILES=(
   "systemd/proxnix-gc.service:/etc/systemd/system/proxnix-gc.service:0644"
   "systemd/proxnix-gc.timer:/etc/systemd/system/proxnix-gc.timer:0644"
   "systemd/proxnix-reconcile.service:/etc/systemd/system/proxnix-reconcile.service:0644"
-  "systemd/proxnix-reconcile.timer:/etc/systemd/system/proxnix-reconcile.timer:0644"
+  "systemd/proxnix-reconcile@.service:/etc/systemd/system/proxnix-reconcile@.service:0644"
   "systemd/proxnix-cache-reconcile.service:/etc/systemd/system/proxnix-cache-reconcile.service:0644"
   "systemd/proxnix-cache-reconcile.timer:/etc/systemd/system/proxnix-cache-reconcile.timer:0644"
   "nix/base.nix:/var/lib/proxnix/base.nix:0644"

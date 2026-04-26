@@ -112,6 +112,29 @@ do_systemd_timer() {
     log "${name}.timer enabled"
 }
 
+do_systemd_service() {
+    local name="$1"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] install $name.service"
+        return
+    fi
+    do_install "$RUNTIME_DIR/systemd/${name}.service" "$SYSTEMD_UNIT_DIR/${name}.service" "644"
+    systemctl daemon-reload
+    log "${name}.service installed"
+}
+
+disable_legacy_timer() {
+    local name="$1"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "[dry-run] disable/remove legacy $name.timer if present"
+        return
+    fi
+    systemctl disable --now "${name}.timer" 2>/dev/null || true
+    rm -f "$SYSTEMD_UNIT_DIR/${name}.timer"
+    systemctl daemon-reload
+    log "legacy ${name}.timer disabled"
+}
+
 do_mkdir() {
     local dir="$1" mode="${2:-}"
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -255,8 +278,14 @@ do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755
 action "GC timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-gc"
 
-action "Reconciler timer → $SYSTEMD_UNIT_DIR/"
-do_systemd_timer "proxnix-reconcile"
+action "Reconciler services → $SYSTEMD_UNIT_DIR/"
+disable_legacy_timer "proxnix-reconcile"
+do_systemd_service "proxnix-reconcile"
+do_install "$RUNTIME_DIR/systemd/proxnix-reconcile@.service" \
+           "$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service" "644"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+fi
 
 action "Cache reconciler timer → $SYSTEMD_UNIT_DIR/"
 do_systemd_timer "proxnix-cache-reconcile"
@@ -294,6 +323,7 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/share/lxc/hooks/nixos-proxnix-poststop
 /usr/local/lib/proxnix/pve-conf-to-nix.py
 /usr/local/lib/proxnix/proxnix_authority_render.py
+/usr/local/lib/proxnix/proxnix_reconciler_state.py
 /usr/local/lib/proxnix/nixos-proxnix-common.sh
 /usr/local/lib/proxnix/proxnix-secrets-guest
 /usr/local/lib/proxnix/install-manifest.txt
@@ -302,11 +332,15 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-create-lxc
 /usr/local/sbin/proxnix-authority-render
 /usr/local/sbin/proxnix-reconcile
+/usr/local/sbin/proxnix-reconciler-state
+/usr/local/sbin/proxnix-cache-reconcile
 /usr/local/sbin/proxnix-uninstall
 /etc/systemd/system/proxnix-gc.service
 /etc/systemd/system/proxnix-gc.timer
 /etc/systemd/system/proxnix-reconcile.service
-/etc/systemd/system/proxnix-reconcile.timer
+/etc/systemd/system/proxnix-reconcile@.service
+/etc/systemd/system/proxnix-cache-reconcile.service
+/etc/systemd/system/proxnix-cache-reconcile.timer
 /var/lib/proxnix/base.nix
 /var/lib/proxnix/common.nix
 /var/lib/proxnix/security-policy.nix
@@ -325,6 +359,8 @@ Installed local commands:
 - proxnix-authority-render
 - proxnix-doctor
 - proxnix-reconcile
+- proxnix-reconciler-state
+- proxnix-cache-reconcile
 - proxnix-uninstall
 
 Managed local runtime files are listed in:
