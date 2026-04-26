@@ -21,12 +21,16 @@ golden-template build warm, so normal container builds reuse most store paths
 without needing cross-node closure transfer machinery.
 
 ## current command names
+  * 'proxnix-reconcile-build-golden'
   * 'proxnix-reconcile-build'
   * 'proxnix-reconcile-seed'
   * 'proxnix-reconcile-seed-offline'
   * 'proxnix-reconcile-activate'
   * 'proxnix-reconcile' = build + seed + activate for a running container
 
+## 'proxnix-reconcile-build-golden'
+  * builds and GC-protects a host-local golden-template NixOS system
+  * used only to warm the local host Nix store so CT builds reuse common paths
 ## 'proxnix-reconcile-build'
   * renders a config set from staged configs and builds a closure and sets is "not yet seeded, not yet activated"
   * reuses the host's local Nix store, especially the local golden-template build
@@ -41,6 +45,7 @@ without needing cross-node closure transfer machinery.
   * helper to activate / switch the container to the new closure
 
 ## lxc pre-start hook
+  * opportunistically runs a proxnix-reconcile-build-golden for local build reuse
   * runs a proxnix-reconcile-build for the container
 ## lxc mount hook 
   * runs a proxnix-reconcile-seed-offline for the container

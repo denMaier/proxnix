@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Build the host-local golden template closure used to warm the Nix store.
+
+set -euo pipefail
+
+SELF_NAME="${0##*/}"
+NIXLXC_DIR="${PROXNIX_DIR:-/var/lib/proxnix}"
+AUTHORITY_DIR="${PROXNIX_AUTHORITY_DIR:-${NIXLXC_DIR}/authority}"
+PVE_LXC_DIR="${PROXNIX_PVE_LXC_DIR:-/etc/pve/lxc}"
+GCROOT_DIR="${PROXNIX_GCROOT_DIR:-${NIXLXC_DIR}/gcroots/deploy}"
+NODE_NAME="${PROXNIX_NODE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
+AUTHORITY_RENDER="${PROXNIX_AUTHORITY_RENDER:-/usr/local/sbin/proxnix-authority-render}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  ${SELF_NAME} [--node-name <name>]
+
+Renders the host authority and builds
+nixosConfigurations.proxnix-golden-template.config.system.build.toplevel.
+The resulting closure is protected by a node-local GC root so later container
+builds can reuse the common store paths.
+EOF
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 2
+}
+
+need_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || die "${cmd} not found"
+}
+
+render_authority() {
+  if [[ -x "$AUTHORITY_RENDER" ]]; then
+    "$AUTHORITY_RENDER" \
+      --root "$NIXLXC_DIR" \
+      --authority "$AUTHORITY_DIR" \
+      --pve-lxc-dir "$PVE_LXC_DIR" \
+      --node-name "$NODE_NAME" >/dev/null
+    return
+  fi
+
+  local repo_renderer="${SCRIPT_DIR}/../lib/proxnix_authority_render.py"
+  if [[ -f "$repo_renderer" ]]; then
+    need_cmd python3
+    python3 "$repo_renderer" \
+      --root "$NIXLXC_DIR" \
+      --authority "$AUTHORITY_DIR" \
+      --pve-lxc-dir "$PVE_LXC_DIR" \
+      --node-name "$NODE_NAME" >/dev/null
+    return
+  fi
+
+  die "proxnix-authority-render not found"
+}
+
+protect_golden_closure() {
+  local system_path="$1"
+  mkdir -p "$GCROOT_DIR"
+  local root_path="${GCROOT_DIR}/golden-template"
+  local tmp_path="${root_path}.tmp.$$"
+  rm -f "$tmp_path"
+  ln -s "$system_path" "$tmp_path"
+  mv -f "$tmp_path" "$root_path"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --node-name)
+      [[ $# -ge 2 ]] || die "--node-name requires a value"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+need_cmd nix
+render_authority
+
+system_path="$(nix build --print-out-paths "${AUTHORITY_DIR}#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel")"
+system_path="$(tr -d '\r\n' <<<"$system_path")"
+[[ -n "$system_path" ]] || die "nix build produced no output path"
+protect_golden_closure "$system_path"
+printf 'golden-template built %s\n' "$system_path"

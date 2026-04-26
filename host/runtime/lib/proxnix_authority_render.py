@@ -255,12 +255,20 @@ def render_flake(node_name: str) -> str:
       system = "x86_64-linux";
       lib = nixpkgs.lib;
       manifest = import ./generated/node-manifest.nix {{ inherit self lib; }};
+      goldenTemplateModules =
+        [ ./modules/proxnix-guest-base.nix ]
+        ++ lib.optional (builtins.pathExists ./generated/legacy/site.nix) ./generated/legacy/site.nix;
       mkCt = vmid: lib.nixosSystem {{
         inherit system;
         modules = import ./generated/containers/${{vmid}}/modules.nix;
       }};
     in {{
-      nixosConfigurations = builtins.listToAttrs (map (vmid: {{
+      nixosConfigurations = {{
+        proxnix-golden-template = lib.nixosSystem {{
+          inherit system;
+          modules = goldenTemplateModules;
+        }};
+      }} // builtins.listToAttrs (map (vmid: {{
         name = "ct${{vmid}}";
         value = mkCt vmid;
       }}) manifest.vmids);

@@ -119,14 +119,17 @@ into the CT, activated by exact system path, verified through
 
 The phases are split into commands:
 
+- `proxnix-reconcile-build-golden` builds a host-local baseline NixOS closure
+  and protects it with a GC root so later CT builds reuse common store paths.
 - `proxnix-reconcile-build` evaluates and builds the desired closure.
 - `proxnix-reconcile-seed` imports the closure into a running CT.
 - `proxnix-reconcile-seed-offline` copies the closure into a mounted stopped CT rootfs and writes `/var/lib/proxnix/runtime/next-system`.
 - `proxnix-reconcile-activate` switches a running CT to the recorded desired system.
 
 For a stopped CT, start convergence follows the LXC lifecycle. The pre-start
-hook renders guest inputs and runs the build phase. The mount hook seeds the
-closure into the rootfs. The guest `proxnix-boot-activate.service` consumes
+hook renders guest inputs, opportunistically warms the golden-template build,
+and runs the CT build phase. The mount hook seeds the closure into the rootfs.
+The guest `proxnix-boot-activate.service` consumes
 `next-system`, runs `switch-to-configuration switch`, verifies
 `/run/current-system`, and reverts to `previous-system` if activation fails.
 For a running CT, explicit reconcile commands keep using `pct exec` for seed

@@ -32,7 +32,8 @@
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
-#   /usr/local/sbin/proxnix-reconcile-build     — host-side build phase
+#   /usr/local/sbin/proxnix-reconcile-build-golden — host-side golden-template build
+#   /usr/local/sbin/proxnix-reconcile-build     — host-side CT build phase
 #   /usr/local/sbin/proxnix-reconcile-seed      — host-side seed phase
 #   /usr/local/sbin/proxnix-reconcile-seed-offline — stopped-CT rootfs seed phase
 #   /usr/local/sbin/proxnix-reconcile-activate  — host-side activate phase
@@ -269,6 +270,7 @@ do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" 
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build-golden" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-seed-offline" "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed-offline" "755"
@@ -335,6 +337,7 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-create-lxc
 /usr/local/sbin/proxnix-authority-render
 /usr/local/sbin/proxnix-reconcile
+/usr/local/sbin/proxnix-reconcile-build-golden
 /usr/local/sbin/proxnix-reconcile-build
 /usr/local/sbin/proxnix-reconcile-seed
 /usr/local/sbin/proxnix-reconcile-seed-offline
@@ -363,6 +366,7 @@ Installed local commands:
 - proxnix-authority-render
 - proxnix-doctor
 - proxnix-reconcile
+- proxnix-reconcile-build-golden
 - proxnix-reconcile-build
 - proxnix-reconcile-seed
 - proxnix-reconcile-seed-offline

@@ -285,6 +285,7 @@ manifest placement explicitly targets the current node.
 
 The phase commands are also exposed as separate host commands:
 
+- `proxnix-reconcile-build-golden`
 - `proxnix-reconcile-build --vmid <id>`
 - `proxnix-reconcile-seed --vmid <id>`
 - `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`
@@ -295,8 +296,10 @@ Use those commands when you want to drive build, seed, and activation separately
 for a running CT.
 
 Normal convergence is not run by a full-host timer. For a stopped CT start,
-the LXC pre-start hook runs `proxnix-reconcile-build --vmid <id>`, the mount
-hook runs `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`,
+the LXC pre-start hook opportunistically warms the host-local golden-template
+build with `proxnix-reconcile-build-golden` and then runs
+`proxnix-reconcile-build --vmid <id>`. The mount hook runs
+`proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`,
 and the guest `proxnix-boot-activate.service` activates the staged
 `next-system` at boot. Explicit operator/workstation flows can still run
 `proxnix-reconcile --vmid <id>` or start `proxnix-reconcile@<id>.service` for a
@@ -307,6 +310,7 @@ enabled.
 ```bash
 proxnix-reconcile --dry-run
 proxnix-reconcile --dry-run --vmid 100
+proxnix-reconcile-build-golden
 proxnix-reconcile --build-only --vmid 100
 proxnix-reconcile --seed-only --vmid 100
 proxnix-reconcile --activate-only --vmid 100

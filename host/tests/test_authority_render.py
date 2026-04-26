@@ -78,6 +78,8 @@ class AuthorityRenderTests(unittest.TestCase):
             self.assertIn("local = false;", manifest_nix)
             self.assertIn("observedPveConfig = true;", manifest_nix)
             flake_nix = (authority / "flake.nix").read_text(encoding="utf-8")
+            self.assertIn("proxnix-golden-template = lib.nixosSystem", flake_nix)
+            self.assertIn("./modules/proxnix-guest-base.nix", flake_nix)
             self.assertIn("proxnix.containers = manifest.containers;", flake_nix)
 
     def test_keeps_cluster_container_without_matching_local_pve_config(self) -> None:

@@ -139,6 +139,17 @@ run_prestart_build() {
         log "Skipping pre-start build because PROXNIX_PRESTART_BUILD=0."
         return
     fi
+    if [[ "${PROXNIX_PRESTART_GOLDEN_BUILD:-1}" != "0" ]]; then
+        if command -v proxnix-reconcile-build-golden >/dev/null 2>&1; then
+            if proxnix-reconcile-build-golden; then
+                log "Golden-template build completed or was already current."
+            else
+                log "WARN: golden-template build failed; continuing with the VMID-specific build."
+            fi
+        else
+            log "WARN: proxnix-reconcile-build-golden is unavailable; continuing with the VMID-specific build."
+        fi
+    fi
     if ! command -v proxnix-reconcile-build >/dev/null 2>&1; then
         log "WARN: proxnix-reconcile-build is unavailable; container will start with the last seeded generation."
         return

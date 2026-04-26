@@ -32,6 +32,7 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
+| `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
 | `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
 | `host/runtime/bin/proxnix-reconcile-seed` | Host-side seed phase command |
 | `host/runtime/bin/proxnix-reconcile-seed-offline` | Stopped-CT rootfs seed phase command |
@@ -166,6 +167,7 @@ specific to the shell-installer path.
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
 ├── proxnix-reconcile                  host-side reconciler
+├── proxnix-reconcile-build-golden     golden-template build warmer
 ├── proxnix-reconcile-build            build phase command
 ├── proxnix-reconcile-seed             seed phase command
 ├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
