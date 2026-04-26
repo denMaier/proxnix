@@ -332,6 +332,19 @@ Status JSON keeps compatibility fields such as `desiredSystem` and
 `container_has_closure`, and `protected_by_host_gc_root`. Common status names
 include `noop-current`, `build-failed`, `lost-locality`, `failed`, and `ok`.
 
+### `proxnix-gc`
+
+Prune host-side transient state without deleting useful local build cache roots.
+The command removes copied pre-start stage directories under `/run/proxnix/`,
+keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
+`<vmid>-desired` roots for CTs still present on this host, and removes
+`<vmid>-desired` roots for CTs that are no longer local/present.
+
+```bash
+proxnix-gc --dry-run
+systemctl start proxnix-gc.service
+```
+
 ### `proxnix-authority-render`
 
 Render the compatibility authority wrapper under `/var/lib/proxnix/authority`.

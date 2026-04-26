@@ -27,6 +27,7 @@ HOST_PACKAGE_FILES=(
   "bin/proxnix-doctor:/usr/local/sbin/proxnix-doctor:0755"
   "bin/proxnix-create-lxc:/usr/local/sbin/proxnix-create-lxc:0755"
   "bin/proxnix-authority-render:/usr/local/sbin/proxnix-authority-render:0755"
+  "bin/proxnix-gc:/usr/local/sbin/proxnix-gc:0755"
   "bin/proxnix-reconcile:/usr/local/sbin/proxnix-reconcile:0755"
   "bin/proxnix-reconcile-build-golden:/usr/local/sbin/proxnix-reconcile-build-golden:0755"
   "bin/proxnix-reconcile-build:/usr/local/sbin/proxnix-reconcile-build:0755"

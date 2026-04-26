@@ -37,6 +37,7 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/sbin/proxnix-authority-render`
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
+- `/usr/local/sbin/proxnix-gc`
 - `/usr/local/sbin/proxnix-reconcile`
 - `/usr/local/sbin/proxnix-reconcile-build-golden`
 - `/usr/local/sbin/proxnix-reconcile-build`

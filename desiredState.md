@@ -57,7 +57,9 @@ revision. If absent, host builds use rolling mode without writing a local lock.
 
 ## Systemd units
   ### Garbage collection
-  * uses sqlite db and other signals to remove the locks dir and garbage collect local nix store
+  * removes copied/staged pre-start config directories from /run/proxnix
+  * keeps golden-template and last desired closure roots for containers local/present on this host
+  * removes desired closure roots for containers no longer local/present on this host
   ### Reconciliation
   * no full reconcile timer; reconcile is triggered by LXC lifecycle hooks or explicit operator/workstation commands
 

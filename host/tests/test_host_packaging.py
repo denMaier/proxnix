@@ -38,12 +38,14 @@ class HostPackagingTests(unittest.TestCase):
 
         self.assertIn("systemd/proxnix-reconcile.service", package_common)
         self.assertIn("systemd/proxnix-reconcile@.service", package_common)
+        self.assertIn("bin/proxnix-gc", package_common)
         self.assertIn("bin/proxnix-reconcile-build-golden", package_common)
         self.assertIn("bin/proxnix-reconcile-build", package_common)
         self.assertIn("bin/proxnix-reconcile-seed", package_common)
         self.assertIn("bin/proxnix-reconcile-seed-offline", package_common)
         self.assertIn("bin/proxnix-reconcile-activate", package_common)
         self.assertIn("proxnix-reconcile-build-golden", install_sh)
+        self.assertIn("proxnix-gc", install_sh)
         self.assertIn("proxnix-reconcile-build", install_sh)
         self.assertIn("proxnix-reconcile-seed", install_sh)
         self.assertIn("proxnix-reconcile-seed-offline", install_sh)
@@ -63,6 +65,18 @@ class HostPackagingTests(unittest.TestCase):
         self.assertNotIn('bind_ro_dir "${BIND_CONFIG_DIR}" "${PROXNIX_CONFIG_DIR}"', mount)
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i", template_service)
         self.assertIn("ExecStartPre=/bin/sleep 10", template_service)
+
+    def test_gc_service_uses_runtime_helper(self) -> None:
+        service = (
+            ROOT / "host" / "runtime" / "systemd" / "proxnix-gc.service"
+        ).read_text(encoding="utf-8")
+        timer = (
+            ROOT / "host" / "runtime" / "systemd" / "proxnix-gc.timer"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ExecStart=/usr/local/sbin/proxnix-gc", service)
+        self.assertIn("stale proxnix host state", service)
+        self.assertIn("stale proxnix host state", timer)
 
     def test_shared_cache_reconcile_runtime_is_not_packaged(self) -> None:
         package_common = (ROOT / "host" / "packaging" / "package-common.sh").read_text(

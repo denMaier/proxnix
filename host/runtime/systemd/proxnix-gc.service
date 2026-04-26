@@ -1,19 +1,7 @@
 [Unit]
-Description=Garbage-collect stale proxnix stage directories from /run/proxnix/
+Description=Garbage-collect stale proxnix host state
 Documentation=https://github.com/your-org/proxnix
 
 [Service]
 Type=oneshot
-# For each /run/proxnix/<vmid>/ directory, remove it if the container is not
-# currently running.  Dirs for running containers are left in place (they hold
-# the staged config consumed by the mount hook on start).
-ExecStart=/bin/bash -c '\
-  for dir in /run/proxnix/*/; do \
-    [[ -d "$dir" ]] || continue; \
-    vmid=$(basename "$dir"); \
-    pct status "$vmid" 2>/dev/null | grep -q running && \
-      echo "proxnix-gc: WARNING: stale stage dir for running CT $vmid (mount hook may have failed)" && \
-      continue; \
-    rm -rf "$dir"; \
-    echo "proxnix-gc: removed orphaned stage dir for CT $vmid"; \
-  done'
+ExecStart=/usr/local/sbin/proxnix-gc

@@ -31,6 +31,7 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
+| `host/runtime/bin/proxnix-gc` | Host-side stale stage-dir and deployment GC-root pruner |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
 | `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
@@ -167,6 +168,7 @@ specific to the shell-installer path.
 ├── proxnix-authority-render           authority wrapper renderer
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
+├── proxnix-gc                         stale state and GC-root pruner
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build-golden     golden-template build warmer
 ├── proxnix-reconcile-build            build phase command

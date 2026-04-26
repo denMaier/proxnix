@@ -167,8 +167,11 @@ Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
 hook no longer starts a full reconcile service. Operators and workstation
 deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
 <id>` or `systemctl start proxnix-reconcile@<id>.service` when they want the
-running-CT path. The only remaining proxnix timer is for stale stage-dir
-cleanup and local store GC.
+running-CT path. The only remaining proxnix timer is `proxnix-gc.timer`.
+It removes copied pre-start stage directories from `/run/proxnix`, keeps the
+`golden-template` root and one `<vmid>-desired` root for every CT that is still
+present on this host, and prunes desired roots for CTs that moved away or were
+deleted.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.

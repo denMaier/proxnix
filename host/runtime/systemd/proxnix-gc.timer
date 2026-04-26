@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodically garbage-collect stale proxnix stage directories
+Description=Periodically garbage-collect stale proxnix host state
 
 [Timer]
 OnBootSec=5min

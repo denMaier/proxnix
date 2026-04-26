@@ -31,6 +31,7 @@
 #   /usr/local/lib/proxnix/install-info.txt     — local install metadata
 #   /usr/local/sbin/proxnix-create-lxc          — CT creation helper
 #   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
+#   /usr/local/sbin/proxnix-gc                  — stale state and GC root pruner
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
 #   /usr/local/sbin/proxnix-reconcile-build-golden — host-side golden-template build
 #   /usr/local/sbin/proxnix-reconcile-build     — host-side CT build phase
@@ -269,6 +270,7 @@ action "Local admin helper → $PROXNIX_SBIN_DIR/"
 do_install "$RUNTIME_DIR/bin/proxnix-doctor" "$PROXNIX_SBIN_DIR/proxnix-doctor" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-create-lxc" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-gc" "$PROXNIX_SBIN_DIR/proxnix-gc" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build-golden" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile-build" "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" "755"
@@ -336,6 +338,7 @@ do_write_text "$PROXNIX_INSTALL_MANIFEST" "644" "$(cat <<EOF
 /usr/local/sbin/proxnix-doctor
 /usr/local/sbin/proxnix-create-lxc
 /usr/local/sbin/proxnix-authority-render
+/usr/local/sbin/proxnix-gc
 /usr/local/sbin/proxnix-reconcile
 /usr/local/sbin/proxnix-reconcile-build-golden
 /usr/local/sbin/proxnix-reconcile-build
@@ -365,6 +368,7 @@ Installed local commands:
 - proxnix-create-lxc
 - proxnix-authority-render
 - proxnix-doctor
+- proxnix-gc
 - proxnix-reconcile
 - proxnix-reconcile-build-golden
 - proxnix-reconcile-build
