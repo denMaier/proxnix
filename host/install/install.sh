@@ -33,6 +33,7 @@
 #   /usr/local/sbin/proxnix-authority-render    — authority wrapper renderer
 #   /usr/local/sbin/proxnix-reconcile           — host-side reconciler
 #   /usr/local/sbin/proxnix-reconciler-state    — reconciler SQLite journal helper
+#   /usr/local/sbin/proxnix-cache-reconcile     — shared cache upload reconciler
 #   /usr/local/sbin/proxnix-uninstall           — local uninstall helper
 #
 # Node-local proxnix data:
@@ -243,6 +244,7 @@ do_install "$RUNTIME_DIR/bin/proxnix-create-lxc" "$PROXNIX_SBIN_DIR/proxnix-crea
 do_install "$RUNTIME_DIR/bin/proxnix-authority-render" "$PROXNIX_SBIN_DIR/proxnix-authority-render" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconcile" "$PROXNIX_SBIN_DIR/proxnix-reconcile" "755"
 do_install "$RUNTIME_DIR/bin/proxnix-reconciler-state" "$PROXNIX_SBIN_DIR/proxnix-reconciler-state" "755"
+do_install "$RUNTIME_DIR/bin/proxnix-cache-reconcile" "$PROXNIX_SBIN_DIR/proxnix-cache-reconcile" "755"
 do_install "$SCRIPT_DIR/uninstall.sh" "$PROXNIX_SBIN_DIR/proxnix-uninstall" "755"
 
 # ── GC timer ──────────────────────────────────────────────────────────────────

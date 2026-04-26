@@ -88,6 +88,7 @@ do_rm "$PROXNIX_SBIN_DIR/proxnix-create-lxc"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-authority-render"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconciler-state"
+do_rm "$PROXNIX_SBIN_DIR/proxnix-cache-reconcile"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-uninstall"
 
 action "GC timer"

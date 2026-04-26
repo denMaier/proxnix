@@ -29,6 +29,7 @@ HOST_PACKAGE_FILES=(
   "bin/proxnix-authority-render:/usr/local/sbin/proxnix-authority-render:0755"
   "bin/proxnix-reconcile:/usr/local/sbin/proxnix-reconcile:0755"
   "bin/proxnix-reconciler-state:/usr/local/sbin/proxnix-reconciler-state:0755"
+  "bin/proxnix-cache-reconcile:/usr/local/sbin/proxnix-cache-reconcile:0755"
   "systemd/proxnix-gc.service:/etc/systemd/system/proxnix-gc.service:0644"
   "systemd/proxnix-gc.timer:/etc/systemd/system/proxnix-gc.timer:0644"
   "systemd/proxnix-reconcile.service:/etc/systemd/system/proxnix-reconcile.service:0644"
