@@ -140,6 +140,22 @@ untouched. Local coordination details such as pending uploads and retry history
 live in `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status
 files remain the operator-facing status surface.
 
+## Reconciler State Decision
+
+proxnix keeps two state surfaces on purpose:
+
+- `/var/lib/proxnix/status/<vmid>.json` is the stable operator-facing status
+  and compatibility surface. Commands such as `proxnix-reconcile --status` and
+  workstation status views should keep reading it.
+- `/var/lib/proxnix/state/proxnix-reconciler.sqlite` is the durable internal
+  journal. It should own attempt history, leases, retry queues, cache
+  reconciliation state, GC decisions, and other cross-run memory.
+
+Do not move operator-facing status exclusively into SQLite. The JSON files are
+easy to inspect, copy, and recover from. Do not use JSON as the only memory for
+multi-step orchestration either; it is not the right place for history, locking,
+or retry coordination.
+
 Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
 hook no longer starts a full reconcile service. Operators and workstation
 deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
