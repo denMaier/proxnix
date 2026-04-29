@@ -29,7 +29,7 @@ stdenvNoCC.mkDerivation {
 
     cp -R host/runtime/lib/. "$out/lib/proxnix/"
     cp host/runtime/lxc/hooks/nixos-proxnix-common.sh "$out/lib/proxnix/nixos-proxnix-common.sh"
-    chmod +x "$out/lib/proxnix/proxnix-secrets-guest" "$out/lib/proxnix/pve-conf-to-nix.py"
+    chmod +x "$out/lib/proxnix/proxnix-secrets-guest"
     chmod +x "$out/lib/proxnix/proxnix_authority_render.py" "$out/lib/proxnix/proxnix_reconciler_state.py"
 
     mkdir -p "$out/share/proxnix/lxc/config" "$out/share/proxnix/lxc/hooks" "$out/share/proxnix/nix"

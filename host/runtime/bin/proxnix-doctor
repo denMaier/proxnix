@@ -166,7 +166,6 @@ check_host_files() {
       "$LXC_CONFIG_DIR/nixos.userns.conf" \
       "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
       "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
-      "$PROXNIX_LIB_DIR/pve-conf-to-nix.py" \
       "$PROXNIX_LIB_DIR/proxnix_authority_render.py" \
       "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py" \
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \

@@ -22,6 +22,7 @@ umask 077  # staging starts private; config binds are relaxed later, secrets sta
 VMID=""
 PVE_CONF_OVERRIDE=""
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
+PROXNIX_HOST_BIN="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
 PROXNIX_SECRETS_GUEST_BIN="${PROXNIX_LIB_DIR}/proxnix-secrets-guest"
 COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
 START_SECONDS=$SECONDS
@@ -103,7 +104,6 @@ if ! proxnix_validate_vmid "$VMID"; then
     exit 1
 fi
 
-PVE_CONF_TO_NIX="${PROXNIX_LIB_DIR}/pve-conf-to-nix.py"
 CONTAINER_TEMPLATE_DIR="${NIXLXC_DIR}/containers/_template"
 CONTAINER_DIR="${NIXLXC_DIR}/containers/${VMID}"
 CONTAINER_PRIV_DIR="${NIXLXC_PRIV_DIR}/containers/${VMID}"
@@ -169,8 +169,8 @@ run_prestart_build() {
 
 log "Starting pre-start hook (PVE conf: ${PVE_CONF}, stage: ${STAGE_DIR})."
 
-if [[ ! -f "$PVE_CONF_TO_NIX" ]]; then
-    log "ERROR: ${PVE_CONF_TO_NIX} not found."
+if [[ ! -x "$PROXNIX_HOST_BIN" ]]; then
+    log "ERROR: ${PROXNIX_HOST_BIN} not found or not executable."
     log "Run host/deploy/ansible/install.yml for this Proxmox node to install local runtime files."
     exit 1
 fi
@@ -226,8 +226,8 @@ for legacy_yaml in "${CONTAINER_DIR}/proxmox.yaml" "${CONTAINER_DIR}/user.yaml";
 done
 
 log "Rendering Proxmox CT config into managed/proxmox.nix."
-if ! python3 "$PVE_CONF_TO_NIX" --pve-conf "$PVE_CONF" --out-dir "$MANAGED_DIR"; then
-    log "ERROR: pve-conf-to-nix.py failed — check ${PVE_CONF}"
+if ! "$PROXNIX_HOST_BIN" pve-conf-to-nix --pve-conf "$PVE_CONF" --out-dir "$MANAGED_DIR"; then
+    log "ERROR: proxnix-host pve-conf-to-nix failed — check ${PVE_CONF}"
     exit 1
 fi
 log "Rendered Proxmox CT config."

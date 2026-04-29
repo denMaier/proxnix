@@ -63,7 +63,7 @@ link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-prestart" "$LX
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-mount" "$LXC_HOOKS_DIR/nixos-proxnix-mount"
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-poststop" "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
 
-link_file "$PROXNIX_PROFILE/lib/proxnix/pve-conf-to-nix.py" "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
+rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
 link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix_authority_render.py" "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
 link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix_reconciler_state.py" "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
 link_file "$PROXNIX_PROFILE/lib/proxnix/nixos-proxnix-common.sh" "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
@@ -109,7 +109,6 @@ $LXC_CONFIG_DIR/nixos.userns.conf
 $LXC_HOOKS_DIR/nixos-proxnix-prestart
 $LXC_HOOKS_DIR/nixos-proxnix-mount
 $LXC_HOOKS_DIR/nixos-proxnix-poststop
-$PROXNIX_LIB_DIR/pve-conf-to-nix.py
 $PROXNIX_LIB_DIR/proxnix_authority_render.py
 $PROXNIX_LIB_DIR/proxnix_reconciler_state.py
 $PROXNIX_LIB_DIR/nixos-proxnix-common.sh
