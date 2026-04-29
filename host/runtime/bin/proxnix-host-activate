@@ -73,6 +73,7 @@ for command in \
     proxnix-authority-render \
     proxnix-create-lxc \
     proxnix-doctor \
+    proxnix-host \
     proxnix-gc \
     proxnix-reconcile \
     proxnix-reconcile-build-golden \
@@ -118,6 +119,7 @@ $PROXNIX_INSTALL_INFO
 $PROXNIX_SBIN_DIR/proxnix-doctor
 $PROXNIX_SBIN_DIR/proxnix-create-lxc
 $PROXNIX_SBIN_DIR/proxnix-authority-render
+$PROXNIX_SBIN_DIR/proxnix-host
 $PROXNIX_SBIN_DIR/proxnix-gc
 $PROXNIX_SBIN_DIR/proxnix-reconcile
 $PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden
@@ -155,6 +157,7 @@ Installed local commands:
 - proxnix-authority-render
 - proxnix-create-lxc
 - proxnix-doctor
+- proxnix-host
 - proxnix-gc
 - proxnix-reconcile
 - proxnix-reconcile-build-golden
