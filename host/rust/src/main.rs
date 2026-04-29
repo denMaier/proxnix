@@ -1,13 +1,17 @@
+use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeSet, HashMap};
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+type HostResult<T> = Result<T, Box<dyn Error>>;
 
 fn main() {
     if let Err(err) = run(env::args().collect()) {
@@ -20,6 +24,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("pve-conf-to-nix") => pve_conf_to_nix_main(&args[2..]),
         Some("reconcile") => reconcile_main(&args[2..]),
+        Some("state") => state_main(&args[2..]),
         Some("-h") | Some("--help") | None => {
             print_usage();
             Ok(())
@@ -42,6 +47,7 @@ fn print_usage() {
 Usage:
   proxnix-host pve-conf-to-nix --pve-conf <path> --out-dir <dir>
   proxnix-host reconcile podman-secrets --rootfs <path> --vmid <vmid> --secrets-dir <dir>
+  proxnix-host state [--db <path>] <init|observe-container|observe-closure|record-attempt>
   proxnix-host --version
 "
     );
@@ -248,6 +254,423 @@ fn nix_str_list(items: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("[ {rendered} ]")
+}
+
+const DEFAULT_STATE_DB: &str = "/var/lib/proxnix/state/proxnix-reconciler.sqlite";
+
+const STATE_SCHEMA: &str = r#"
+create table if not exists container_observations (
+  vmid integer primary key,
+  node text not null,
+  desired_system text,
+  current_system text,
+  container_is_local integer not null,
+  last_phase text,
+  last_status text,
+  last_error text,
+  updated_at text not null
+);
+
+create table if not exists closure_observations (
+  store_path text primary key,
+  host_has_closure integer,
+  container_has_closure integer,
+  protected_by_host_gc_root integer not null default 0,
+  gc_root_path text,
+  updated_at text not null
+);
+
+create table if not exists deployment_attempts (
+  id integer primary key autoincrement,
+  vmid integer not null,
+  store_path text,
+  phase text not null,
+  status text not null,
+  error text,
+  started_at text not null,
+  finished_at text
+);
+
+create index if not exists deployment_attempts_vmid_idx
+  on deployment_attempts(vmid);
+"#;
+
+fn state_main(args: &[String]) -> Result<(), String> {
+    state_main_inner(args).map_err(|err| format!("state command failed: {err}"))
+}
+
+fn state_main_inner(args: &[String]) -> HostResult<()> {
+    let mut db_path = PathBuf::from(DEFAULT_STATE_DB);
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--db" => {
+                index += 1;
+                db_path = PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| invalid_input("--db requires a value"))?,
+                );
+                index += 1;
+            }
+            "-h" | "--help" => {
+                print_usage();
+                return Ok(());
+            }
+            _ => break,
+        }
+    }
+
+    let command = args
+        .get(index)
+        .ok_or_else(|| invalid_input("state subcommand is required"))?;
+    let command_args = &args[index + 1..];
+    let conn = connect_state_db(&db_path)?;
+
+    match command.as_str() {
+        "init" => init_state_db(&conn)?,
+        "observe-container" => {
+            let observation = parse_container_observation(command_args).map_err(invalid_input)?;
+            observe_container(&conn, &observation)?;
+        }
+        "observe-closure" => {
+            let observation = parse_closure_observation(command_args).map_err(invalid_input)?;
+            observe_closure(&conn, &observation)?;
+        }
+        "record-attempt" => {
+            let attempt = parse_deployment_attempt(command_args).map_err(invalid_input)?;
+            let attempt_id = record_deployment_attempt(&conn, &attempt)?;
+            println!("{attempt_id}");
+        }
+        other => return Err(invalid_input(format!("unknown state subcommand: {other}")).into()),
+    }
+
+    Ok(())
+}
+
+fn invalid_input(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ContainerObservation {
+    vmid: i64,
+    node: String,
+    desired_system: Option<String>,
+    current_system: Option<String>,
+    container_is_local: bool,
+    last_phase: Option<String>,
+    last_status: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ClosureObservation {
+    store_path: String,
+    host_has_closure: Option<bool>,
+    container_has_closure: Option<bool>,
+    protected_by_host_gc_root: Option<bool>,
+    gc_root_path: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DeploymentAttempt {
+    vmid: i64,
+    store_path: Option<String>,
+    phase: String,
+    status: String,
+    error: Option<String>,
+    finished_at: Option<String>,
+}
+
+fn parse_container_observation(args: &[String]) -> Result<ContainerObservation, String> {
+    let mut vmid = None;
+    let mut node = None;
+    let mut desired_system = None;
+    let mut current_system = None;
+    let mut container_is_local = None;
+    let mut last_phase = None;
+    let mut last_status = None;
+    let mut last_error = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--vmid" => vmid = Some(parse_i64_arg(args, &mut index, "--vmid")?),
+            "--node" => node = Some(take_arg(args, &mut index, "--node")?),
+            "--desired-system" => {
+                desired_system = Some(take_arg(args, &mut index, "--desired-system")?)
+            }
+            "--current-system" => {
+                current_system = Some(take_arg(args, &mut index, "--current-system")?)
+            }
+            "--container-is-local" => {
+                container_is_local = Some(parse_bool_arg(args, &mut index, "--container-is-local")?)
+            }
+            "--last-phase" => last_phase = Some(take_arg(args, &mut index, "--last-phase")?),
+            "--last-status" => last_status = Some(take_arg(args, &mut index, "--last-status")?),
+            "--last-error" => last_error = Some(take_arg(args, &mut index, "--last-error")?),
+            other => return Err(format!("unknown observe-container argument: {other}")),
+        }
+        index += 1;
+    }
+
+    Ok(ContainerObservation {
+        vmid: vmid.ok_or("--vmid is required")?,
+        node: node.ok_or("--node is required")?,
+        desired_system,
+        current_system,
+        container_is_local: container_is_local.ok_or("--container-is-local is required")?,
+        last_phase,
+        last_status,
+        last_error,
+    })
+}
+
+fn parse_closure_observation(args: &[String]) -> Result<ClosureObservation, String> {
+    let mut store_path = None;
+    let mut host_has_closure = None;
+    let mut container_has_closure = None;
+    let mut protected_by_host_gc_root = None;
+    let mut gc_root_path = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--store-path" => store_path = Some(take_arg(args, &mut index, "--store-path")?),
+            "--host-has-closure" => {
+                host_has_closure = Some(parse_bool_arg(args, &mut index, "--host-has-closure")?)
+            }
+            "--container-has-closure" => {
+                container_has_closure =
+                    Some(parse_bool_arg(args, &mut index, "--container-has-closure")?)
+            }
+            "--protected-by-host-gc-root" => {
+                protected_by_host_gc_root = Some(parse_bool_arg(
+                    args,
+                    &mut index,
+                    "--protected-by-host-gc-root",
+                )?)
+            }
+            "--gc-root-path" => gc_root_path = Some(take_arg(args, &mut index, "--gc-root-path")?),
+            other => return Err(format!("unknown observe-closure argument: {other}")),
+        }
+        index += 1;
+    }
+
+    Ok(ClosureObservation {
+        store_path: store_path.ok_or("--store-path is required")?,
+        host_has_closure,
+        container_has_closure,
+        protected_by_host_gc_root,
+        gc_root_path,
+    })
+}
+
+fn parse_deployment_attempt(args: &[String]) -> Result<DeploymentAttempt, String> {
+    let mut vmid = None;
+    let mut store_path = None;
+    let mut phase = None;
+    let mut status = None;
+    let mut error = None;
+    let mut finished_at = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--vmid" => vmid = Some(parse_i64_arg(args, &mut index, "--vmid")?),
+            "--store-path" => store_path = Some(take_arg(args, &mut index, "--store-path")?),
+            "--phase" => phase = Some(take_arg(args, &mut index, "--phase")?),
+            "--status" => status = Some(take_arg(args, &mut index, "--status")?),
+            "--error" => error = Some(take_arg(args, &mut index, "--error")?),
+            "--finished-at" => finished_at = Some(take_arg(args, &mut index, "--finished-at")?),
+            other => return Err(format!("unknown record-attempt argument: {other}")),
+        }
+        index += 1;
+    }
+
+    Ok(DeploymentAttempt {
+        vmid: vmid.ok_or("--vmid is required")?,
+        store_path,
+        phase: phase.ok_or("--phase is required")?,
+        status: status.ok_or("--status is required")?,
+        error,
+        finished_at,
+    })
+}
+
+fn take_arg(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+    *index += 1;
+    args.get(*index)
+        .cloned()
+        .ok_or_else(|| format!("{flag} requires a value"))
+}
+
+fn parse_i64_arg(args: &[String], index: &mut usize, flag: &str) -> Result<i64, String> {
+    take_arg(args, index, flag)?
+        .parse::<i64>()
+        .map_err(|err| format!("{flag} must be an integer: {err}"))
+}
+
+fn parse_bool_arg(args: &[String], index: &mut usize, flag: &str) -> Result<bool, String> {
+    parse_state_bool(&take_arg(args, index, flag)?)
+}
+
+fn parse_state_bool(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" => Ok(true),
+        "0" | "false" | "no" | "n" => Ok(false),
+        _ => Err(format!("invalid boolean: {value}")),
+    }
+}
+
+fn connect_state_db(db_path: &Path) -> HostResult<Connection> {
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(Connection::open(db_path)?)
+}
+
+fn init_state_db(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(STATE_SCHEMA)
+}
+
+fn observe_container(
+    conn: &Connection,
+    observation: &ContainerObservation,
+) -> rusqlite::Result<()> {
+    init_state_db(conn)?;
+    conn.execute(
+        r#"
+        insert into container_observations (
+          vmid, node, desired_system, current_system, container_is_local,
+          last_phase, last_status, last_error, updated_at
+        )
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        on conflict(vmid) do update set
+          node = excluded.node,
+          desired_system = excluded.desired_system,
+          current_system = excluded.current_system,
+          container_is_local = excluded.container_is_local,
+          last_phase = excluded.last_phase,
+          last_status = excluded.last_status,
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at
+        "#,
+        params![
+            observation.vmid,
+            observation.node.as_str(),
+            observation.desired_system.as_deref(),
+            observation.current_system.as_deref(),
+            bool_to_int(Some(observation.container_is_local)),
+            observation.last_phase.as_deref(),
+            observation.last_status.as_deref(),
+            observation.last_error.as_deref(),
+            utc_now_seconds_z(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn observe_closure(conn: &Connection, observation: &ClosureObservation) -> rusqlite::Result<()> {
+    init_state_db(conn)?;
+    let protected_by_host_gc_root = observation.protected_by_host_gc_root.unwrap_or_else(|| {
+        gcroot_protects_store_path(&observation.store_path, observation.gc_root_path.as_deref())
+    });
+    conn.execute(
+        r#"
+        insert into closure_observations (
+          store_path, host_has_closure, container_has_closure,
+          protected_by_host_gc_root, gc_root_path, updated_at
+        )
+        values (?1, ?2, ?3, ?4, ?5, ?6)
+        on conflict(store_path) do update set
+          host_has_closure = excluded.host_has_closure,
+          container_has_closure = excluded.container_has_closure,
+          protected_by_host_gc_root = excluded.protected_by_host_gc_root,
+          gc_root_path = excluded.gc_root_path,
+          updated_at = excluded.updated_at
+        "#,
+        params![
+            observation.store_path.as_str(),
+            bool_to_int(observation.host_has_closure),
+            bool_to_int(observation.container_has_closure),
+            bool_to_int(Some(protected_by_host_gc_root)),
+            observation.gc_root_path.as_deref(),
+            utc_now_seconds_z(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn record_deployment_attempt(
+    conn: &Connection,
+    attempt: &DeploymentAttempt,
+) -> rusqlite::Result<i64> {
+    init_state_db(conn)?;
+    conn.execute(
+        r#"
+        insert into deployment_attempts (
+          vmid, store_path, phase, status, error, started_at, finished_at
+        )
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "#,
+        params![
+            attempt.vmid,
+            attempt.store_path.as_deref(),
+            attempt.phase.as_str(),
+            attempt.status.as_str(),
+            attempt.error.as_deref(),
+            utc_now_seconds_z(),
+            attempt.finished_at.as_deref(),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn bool_to_int(value: Option<bool>) -> Option<i64> {
+    value.map(|value| if value { 1 } else { 0 })
+}
+
+fn gcroot_protects_store_path(store_path: &str, gc_root_path: Option<&str>) -> bool {
+    let Some(gc_root_path) = gc_root_path else {
+        return false;
+    };
+    let root = Path::new(gc_root_path);
+    if !fs::symlink_metadata(root).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return false;
+    }
+    if fs::read_link(root).ok().as_deref() != Some(Path::new(store_path)) {
+        return false;
+    }
+    let Some(nix_store) = find_in_path("nix-store") else {
+        return false;
+    };
+    let Ok(output) = Command::new(nix_store)
+        .args(["--query", "--roots", store_path])
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line == gc_root_path)
+}
+
+fn find_in_path(command: &str) -> Option<PathBuf> {
+    if command.contains('/') {
+        let path = PathBuf::from(command);
+        return path.exists().then_some(path);
+    }
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|dir| dir.join(command))
+            .find(|path| path.is_file())
+    })
 }
 
 const PODMAN_LABEL_KEY: &str = "proxnix.managed";
@@ -508,6 +931,13 @@ fn utc_now_isoformat() -> String {
     isoformat_from_unix_parts(now.as_secs() as i64, now.subsec_micros())
 }
 
+fn utc_now_seconds_z() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    zulu_seconds_from_unix(now.as_secs() as i64)
+}
+
 fn isoformat_from_unix_parts(seconds: i64, micros: u32) -> String {
     let days = seconds.div_euclid(86_400);
     let seconds_of_day = seconds.rem_euclid(86_400);
@@ -516,6 +946,16 @@ fn isoformat_from_unix_parts(seconds: i64, micros: u32) -> String {
     let minute = (seconds_of_day % 3_600) / 60;
     let second = seconds_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}+00:00")
+}
+
+fn zulu_seconds_from_unix(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
@@ -535,9 +975,12 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestTemp {
         path: PathBuf,
@@ -638,6 +1081,232 @@ memory: 2048
         assert_eq!(
             isoformat_from_unix_parts(1_704_067_199, 999_999),
             "2023-12-31T23:59:59.999999+00:00"
+        );
+        assert_eq!(zulu_seconds_from_unix(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn initializes_reconciler_state_schema() {
+        let tmp = TestTemp::new();
+        let db = tmp.path().join("state/reconciler.sqlite");
+        let conn = connect_state_db(&db).unwrap();
+
+        init_state_db(&conn).unwrap();
+
+        let tables = conn
+            .prepare("select name from sqlite_master where type = 'table'")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<BTreeSet<_>>>()
+            .unwrap();
+        assert!(tables.contains("container_observations"));
+        assert!(tables.contains("closure_observations"));
+        assert!(tables.contains("deployment_attempts"));
+    }
+
+    #[test]
+    fn updates_container_observation_idempotently() {
+        let tmp = TestTemp::new();
+        let conn = connect_state_db(&tmp.path().join("reconciler.sqlite")).unwrap();
+
+        observe_container(
+            &conn,
+            &ContainerObservation {
+                vmid: 101,
+                node: "pve1".to_owned(),
+                desired_system: Some("/nix/store/desired-a".to_owned()),
+                current_system: Some("/nix/store/current-a".to_owned()),
+                container_is_local: true,
+                last_phase: Some("observe".to_owned()),
+                last_status: Some("noop-current".to_owned()),
+                last_error: None,
+            },
+        )
+        .unwrap();
+        observe_container(
+            &conn,
+            &ContainerObservation {
+                vmid: 101,
+                node: "pve1".to_owned(),
+                desired_system: Some("/nix/store/desired-a".to_owned()),
+                current_system: Some("/nix/store/current-a".to_owned()),
+                container_is_local: true,
+                last_phase: Some("observe".to_owned()),
+                last_status: Some("activated".to_owned()),
+                last_error: None,
+            },
+        )
+        .unwrap();
+
+        let rows = conn
+            .prepare("select vmid, last_status from container_observations")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows, vec![(101, "activated".to_owned())]);
+    }
+
+    #[test]
+    fn records_closure_observation_with_explicit_gcroot_state() {
+        let tmp = TestTemp::new();
+        let conn = connect_state_db(&tmp.path().join("reconciler.sqlite")).unwrap();
+
+        observe_closure(
+            &conn,
+            &ClosureObservation {
+                store_path: "/nix/store/aaa-desired".to_owned(),
+                host_has_closure: Some(true),
+                container_has_closure: Some(false),
+                protected_by_host_gc_root: Some(true),
+                gc_root_path: Some("/var/lib/proxnix/gcroots/deploy/aaa-desired".to_owned()),
+            },
+        )
+        .unwrap();
+
+        let row = conn
+            .query_row(
+                "select store_path, host_has_closure, container_has_closure, protected_by_host_gc_root, gc_root_path from closure_observations",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "/nix/store/aaa-desired".to_owned(),
+                1,
+                0,
+                1,
+                "/var/lib/proxnix/gcroots/deploy/aaa-desired".to_owned(),
+            )
+        );
+    }
+
+    #[test]
+    fn verifies_real_gcroot_for_closure_observation() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let tmp = TestTemp::new();
+        let root = tmp.path();
+        let conn = connect_state_db(&root.join("reconciler.sqlite")).unwrap();
+        let fake_bin = root.join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        let store_path = "/nix/store/aaa-desired";
+        let gcroot = root.join("gcroots/deploy/101-desired");
+        fs::create_dir_all(gcroot.parent().unwrap()).unwrap();
+        symlink(store_path, &gcroot).unwrap();
+        let nix_store = fake_bin.join("nix-store");
+        fs::write(
+            &nix_store,
+            format!(
+                "\
+#!/bin/sh
+if [ \"$1\" = \"--query\" ] && [ \"$2\" = \"--roots\" ] && [ \"$3\" = \"{store_path}\" ]; then
+  printf '%s\\n' \"{}\"
+  exit 0
+fi
+exit 2
+",
+                gcroot.display()
+            ),
+        )
+        .unwrap();
+        set_mode(&nix_store, 0o755).unwrap();
+
+        let old_path = env::var_os("PATH");
+        env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                old_path
+                    .as_deref()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+            ),
+        );
+        observe_closure(
+            &conn,
+            &ClosureObservation {
+                store_path: store_path.to_owned(),
+                host_has_closure: Some(true),
+                container_has_closure: Some(false),
+                protected_by_host_gc_root: None,
+                gc_root_path: Some(gcroot.display().to_string()),
+            },
+        )
+        .unwrap();
+        if let Some(old_path) = old_path {
+            env::set_var("PATH", old_path);
+        } else {
+            env::remove_var("PATH");
+        }
+
+        let protected = conn
+            .query_row(
+                "select protected_by_host_gc_root from closure_observations",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(protected, 1);
+    }
+
+    #[test]
+    fn records_deployment_attempts() {
+        let tmp = TestTemp::new();
+        let conn = connect_state_db(&tmp.path().join("reconciler.sqlite")).unwrap();
+
+        let attempt_id = record_deployment_attempt(
+            &conn,
+            &DeploymentAttempt {
+                vmid: 101,
+                store_path: Some("/nix/store/desired-a".to_owned()),
+                phase: "seed".to_owned(),
+                status: "ok".to_owned(),
+                error: None,
+                finished_at: Some("2026-01-01T00:00:00Z".to_owned()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(attempt_id, 1);
+        let row = conn
+            .query_row(
+                "select vmid, store_path, phase, status, finished_at from deployment_attempts",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                101,
+                "/nix/store/desired-a".to_owned(),
+                "seed".to_owned(),
+                "ok".to_owned(),
+                "2026-01-01T00:00:00Z".to_owned(),
+            )
         );
     }
 

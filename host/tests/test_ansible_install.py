@@ -92,7 +92,7 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("ln -s proxnix-host-uninstall", package)
         self.assertNotIn("pve-conf-to-nix.py", package)
         self.assertIn("proxnix_authority_render.py", package)
-        self.assertIn("proxnix_reconciler_state.py", package)
+        self.assertNotIn("proxnix_reconciler_state.py", package)
         self.assertNotIn("proxnix_reconcile_podman_secrets.py", package)
         self.assertIn("${age}/bin/age", package)
         self.assertIn("${jq}/bin/jq", package)
@@ -120,8 +120,13 @@ class AnsibleInstallTests(unittest.TestCase):
         doctor = (ROOT / "host" / "runtime" / "bin" / "proxnix-doctor").read_text(
             encoding="utf-8"
         )
-        self.assertIn("proxnix_reconciler_state.py", doctor)
+        state_wrapper = (
+            ROOT / "host" / "runtime" / "bin" / "proxnix-reconciler-state"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("proxnix_reconciler_state.py", doctor)
         self.assertNotIn("proxnix_reconcile_podman_secrets.py", doctor)
+        self.assertIn('rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"', activate)
+        self.assertIn('"$PROXNIX_HOST_BIN" state "$@"', state_wrapper)
         self.assertIn('rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"', activate)
 
     def test_uninstall_removes_proxnix_host_profile(self) -> None:

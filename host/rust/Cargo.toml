@@ -6,5 +6,6 @@ license = "MIT"
 description = "Host-side proxnix control binary"
 
 [dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
 uuid = { version = "1", default-features = false, features = ["v5"] }

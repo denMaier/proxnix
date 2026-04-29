@@ -39,6 +39,9 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Ported Podman secrets reconciliation into `proxnix-host reconcile podman-secrets`.
 - [x] Updated the mount hook to call the Rust Podman secrets reconciler directly.
 - [x] Removed the Python `proxnix_reconcile_podman_secrets.py` implementation.
+- [x] Ported reconciler SQLite state into `proxnix-host state`.
+- [x] Replaced `proxnix-reconciler-state` with a thin Rust dispatch wrapper.
+- [x] Removed the Python `proxnix_reconciler_state.py` implementation.
 
 ## Current Host Runtime To Collapse
 
@@ -67,7 +70,7 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 - [ ] `proxnix-gc`
 - [ ] `proxnix-flake-update`
 - [ ] `proxnix-authority-render`
-- [ ] `proxnix-reconciler-state`
+- [x] `proxnix-reconciler-state`
 
 Target: make these subcommands of `proxnix-host`, then decide whether old command names stay as symlinks/wrappers:
 
@@ -81,18 +84,18 @@ Target: make these subcommands of `proxnix-host`, then decide whether old comman
 - [ ] `proxnix-host gc`
 - [ ] `proxnix-host flake-update`
 - [ ] `proxnix-host authority render`
-- [ ] `proxnix-host state`
+- [x] `proxnix-host state`
 
 ### Python Libraries
 
 - [ ] `host/runtime/lib/proxnix_authority_render.py`
-- [ ] `host/runtime/lib/proxnix_reconciler_state.py`
+- [x] `host/runtime/lib/proxnix_reconciler_state.py`
 - [x] `host/runtime/lib/proxnix_reconcile_podman_secrets.py`
 
 Target:
 
 - [ ] Port authority rendering to Rust and delete `proxnix_authority_render.py`.
-- [ ] Port reconciler SQLite state to Rust and delete `proxnix_reconciler_state.py`.
+- [x] Port reconciler SQLite state to Rust and delete `proxnix_reconciler_state.py`.
 - [x] Port Podman `secrets.json` reconciliation to Rust and delete `proxnix_reconcile_podman_secrets.py`.
 
 ### Doctor
@@ -112,7 +115,7 @@ Target:
 1. [x] Establish Rust binary and packaging.
 2. [x] Port a pure helper and delete the old implementation.
 3. [x] Port Podman secrets reconciliation, because it is bounded and file-oriented.
-4. [ ] Port reconciler state, including SQLite schema and CLI.
+4. [x] Port reconciler state, including SQLite schema and CLI.
 5. [ ] Port authority rendering.
 6. [ ] Move hook internals into Rust subcommands and leave thin hook entrypoints.
 7. [ ] Port GC and flake-update.
@@ -124,8 +127,8 @@ Target:
 
 ## Verification Gates
 
-- [ ] Rust unit tests cover pure parsing/rendering/state transformations.
-- [ ] Existing Python/shell tests are retired only when equivalent Rust tests exist.
+- [x] Rust unit tests cover pure parsing/rendering/state transformations.
+- [x] Existing Python/shell tests are retired only when equivalent Rust tests exist.
 - [x] `nix build .#proxnix-host-rust` succeeds locally.
 - [ ] `nix eval .#packages.x86_64-linux.proxnix-host.name` succeeds for Linux package shape.
 - [ ] Host install tests assert only the intended runtime files are shipped.
