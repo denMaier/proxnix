@@ -8,12 +8,17 @@
   outputs =
     { self, nixpkgs }:
     let
-      supportedSystems = [
+      lib = nixpkgs.lib;
+      hostSystems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
+      rustDevSystems = hostSystems ++ [
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
 
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+      forAllSystems = lib.genAttrs rustDevSystems;
     in
     {
       packages = forAllSystems (
@@ -22,6 +27,8 @@
           pkgs = import nixpkgs { inherit system; };
         in
         {
+          proxnix-host-rust = pkgs.callPackage ./host/nix/proxnix-host-rust.nix { };
+        } // lib.optionalAttrs (lib.elem system hostSystems) {
           proxnix-host = pkgs.callPackage ./host/nix/proxnix-host.nix { };
           default = self.packages.${system}.proxnix-host;
         }
