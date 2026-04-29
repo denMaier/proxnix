@@ -21,7 +21,7 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Do not keep duplicate implementations for migrated behavior.
 - [x] Keep compatibility command names only as thin dispatch surfaces when needed.
 - [x] Commit in small checkpoints.
-- [ ] Port behavior behind tests before deleting established shell/Python behavior.
+- [x] Port behavior behind tests before deleting established shell/Python behavior.
 - [ ] Keep Proxmox, Nix, SOPS, age, rsync, and systemd as explicit external tools where they are the right authority.
 
 ## Done
@@ -36,6 +36,9 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Removed the Python `pve-conf-to-nix.py` implementation.
 - [x] Removed the temporary `pve-conf-to-nix.py` compatibility wrapper.
 - [x] Updated the pre-start hook to call `proxnix-host pve-conf-to-nix` directly.
+- [x] Ported Podman secrets reconciliation into `proxnix-host reconcile podman-secrets`.
+- [x] Updated the mount hook to call the Rust Podman secrets reconciler directly.
+- [x] Removed the Python `proxnix_reconcile_podman_secrets.py` implementation.
 
 ## Current Host Runtime To Collapse
 
@@ -84,13 +87,13 @@ Target: make these subcommands of `proxnix-host`, then decide whether old comman
 
 - [ ] `host/runtime/lib/proxnix_authority_render.py`
 - [ ] `host/runtime/lib/proxnix_reconciler_state.py`
-- [ ] `host/runtime/lib/proxnix_reconcile_podman_secrets.py`
+- [x] `host/runtime/lib/proxnix_reconcile_podman_secrets.py`
 
 Target:
 
 - [ ] Port authority rendering to Rust and delete `proxnix_authority_render.py`.
 - [ ] Port reconciler SQLite state to Rust and delete `proxnix_reconciler_state.py`.
-- [ ] Port Podman `secrets.json` reconciliation to Rust and delete `proxnix_reconcile_podman_secrets.py`.
+- [x] Port Podman `secrets.json` reconciliation to Rust and delete `proxnix_reconcile_podman_secrets.py`.
 
 ### Doctor
 
@@ -108,7 +111,7 @@ Target:
 
 1. [x] Establish Rust binary and packaging.
 2. [x] Port a pure helper and delete the old implementation.
-3. [ ] Port Podman secrets reconciliation, because it is bounded and file-oriented.
+3. [x] Port Podman secrets reconciliation, because it is bounded and file-oriented.
 4. [ ] Port reconciler state, including SQLite schema and CLI.
 5. [ ] Port authority rendering.
 6. [ ] Move hook internals into Rust subcommands and leave thin hook entrypoints.
@@ -123,7 +126,7 @@ Target:
 
 - [ ] Rust unit tests cover pure parsing/rendering/state transformations.
 - [ ] Existing Python/shell tests are retired only when equivalent Rust tests exist.
-- [ ] `nix build .#proxnix-host-rust` succeeds locally.
+- [x] `nix build .#proxnix-host-rust` succeeds locally.
 - [ ] `nix eval .#packages.x86_64-linux.proxnix-host.name` succeeds for Linux package shape.
 - [ ] Host install tests assert only the intended runtime files are shipped.
 - [ ] Hook tests or harnesses exercise the same entrypoints used by Proxmox.

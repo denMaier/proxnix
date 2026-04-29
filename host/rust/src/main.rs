@@ -1,8 +1,13 @@
-use std::collections::HashMap;
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 fn main() {
     if let Err(err) = run(env::args().collect()) {
@@ -14,6 +19,7 @@ fn main() {
 fn run(args: Vec<String>) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("pve-conf-to-nix") => pve_conf_to_nix_main(&args[2..]),
+        Some("reconcile") => reconcile_main(&args[2..]),
         Some("-h") | Some("--help") | None => {
             print_usage();
             Ok(())
@@ -35,9 +41,21 @@ fn print_usage() {
         "\
 Usage:
   proxnix-host pve-conf-to-nix --pve-conf <path> --out-dir <dir>
+  proxnix-host reconcile podman-secrets --rootfs <path> --vmid <vmid> --secrets-dir <dir>
   proxnix-host --version
 "
     );
+}
+
+fn reconcile_main(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("podman-secrets") => reconcile_podman_secrets_main(&args[1..]),
+        Some("-h") | Some("--help") | None => {
+            print_usage();
+            Ok(())
+        }
+        Some(command) => Err(format!("unknown reconcile subcommand: {command}")),
+    }
 }
 
 fn pve_conf_to_nix_main(args: &[String]) -> Result<(), String> {
@@ -232,9 +250,332 @@ fn nix_str_list(items: &[String]) -> String {
     format!("[ {rendered} ]")
 }
 
+const PODMAN_LABEL_KEY: &str = "proxnix.managed";
+
+fn reconcile_podman_secrets_main(args: &[String]) -> Result<(), String> {
+    let mut rootfs: Option<PathBuf> = None;
+    let mut vmid: Option<String> = None;
+    let mut secrets_dir: Option<PathBuf> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--rootfs" => {
+                index += 1;
+                rootfs = args.get(index).map(PathBuf::from);
+            }
+            "--vmid" => {
+                index += 1;
+                vmid = args.get(index).cloned();
+            }
+            "--secrets-dir" => {
+                index += 1;
+                secrets_dir = args.get(index).map(PathBuf::from);
+            }
+            "-h" | "--help" => {
+                print_usage();
+                return Ok(());
+            }
+            other => return Err(format!("unknown podman-secrets argument: {other}")),
+        }
+        index += 1;
+    }
+
+    reconcile_podman_secrets(
+        &rootfs.ok_or("--rootfs is required")?,
+        &vmid.ok_or("--vmid is required")?,
+        &secrets_dir.ok_or("--secrets-dir is required")?,
+    )
+    .map_err(|err| format!("failed to reconcile Podman secrets: {err}"))
+}
+
+fn reconcile_podman_secrets(rootfs: &Path, vmid: &str, secrets_dir: &Path) -> io::Result<()> {
+    let live_names = if secrets_dir.is_dir() {
+        top_level_yaml_keys(&secrets_dir.join("effective.sops.yaml"))?
+    } else {
+        BTreeSet::new()
+    };
+
+    let secrets_json_path = rootfs.join("var/lib/containers/storage/secrets/secrets.json");
+    let ids_dir = rootfs.join("etc/secrets/.ids");
+
+    fs::create_dir_all(&ids_dir)?;
+    let secrets_json_dir = secrets_json_path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "secrets.json has no parent"))?;
+    fs::create_dir_all(secrets_json_dir)?;
+    set_mode(secrets_json_dir, 0o700)?;
+
+    let mut data = load_json_object(&secrets_json_path);
+    ensure_object_field(&mut data, "secrets");
+    ensure_object_field(&mut data, "nameToID");
+    ensure_object_field(&mut data, "idToName");
+
+    let now = utc_now_isoformat();
+    let mut changed = false;
+
+    let stale_ids = data
+        .get("secrets")
+        .and_then(Value::as_object)
+        .map(|secrets| {
+            secrets
+                .iter()
+                .filter_map(|(sid, entry)| {
+                    let entry = entry.as_object()?;
+                    let labels = entry.get("labels")?.as_object()?;
+                    let managed =
+                        labels.get(PODMAN_LABEL_KEY).and_then(Value::as_str) == Some("true");
+                    let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+                    if managed && !live_names.contains(name) {
+                        Some((sid.clone(), name.to_owned()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    for (sid, name) in stale_ids {
+        object_field_mut(&mut data, "secrets").remove(&sid);
+        object_field_mut(&mut data, "nameToID").remove(&name);
+        object_field_mut(&mut data, "idToName").remove(&sid);
+        match fs::remove_file(ids_dir.join(&sid)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+        eprintln!("[proxnix-mount][{vmid}] Unregistered removed secret: {name}");
+        changed = true;
+    }
+
+    for name in &live_names {
+        let sid = podman_secret_id(vmid, name);
+        let created_at = data
+            .get("secrets")
+            .and_then(Value::as_object)
+            .and_then(|secrets| secrets.get(&sid))
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("createdAt"))
+            .and_then(Value::as_str)
+            .unwrap_or(&now)
+            .to_owned();
+
+        let entry = json!({
+            "name": name,
+            "id": sid,
+            "labels": { PODMAN_LABEL_KEY: "true" },
+            "metadata": {},
+            "createdAt": created_at,
+            "updatedAt": now,
+            "driver": "shell",
+            "driverOptions": podman_driver_options(),
+        });
+
+        if data
+            .get("secrets")
+            .and_then(Value::as_object)
+            .and_then(|secrets| secrets.get(&sid))
+            != Some(&entry)
+        {
+            object_field_mut(&mut data, "secrets").insert(sid.clone(), entry);
+            changed = true;
+        }
+
+        if data
+            .get("nameToID")
+            .and_then(Value::as_object)
+            .and_then(|name_to_id| name_to_id.get(name))
+            != Some(&json!(sid.clone()))
+        {
+            object_field_mut(&mut data, "nameToID").insert(name.clone(), json!(sid.clone()));
+            changed = true;
+        }
+        if data
+            .get("idToName")
+            .and_then(Value::as_object)
+            .and_then(|id_to_name| id_to_name.get(&sid))
+            != Some(&json!(name))
+        {
+            object_field_mut(&mut data, "idToName").insert(sid.clone(), json!(name));
+            changed = true;
+        }
+
+        let ids_file = ids_dir.join(&sid);
+        if fs::read_to_string(&ids_file)
+            .map(|existing| existing != *name)
+            .unwrap_or(true)
+        {
+            fs::write(&ids_file, name)?;
+            set_mode(&ids_file, 0o640)?;
+        }
+    }
+
+    if changed {
+        let tmp_path = secrets_json_path.with_file_name(format!(
+            ".{}.tmp.{}",
+            secrets_json_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("secrets.json"),
+            process::id()
+        ));
+        let rendered = serde_json::to_string_pretty(&Value::Object(data))
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            + "\n";
+        fs::write(&tmp_path, rendered)?;
+        set_mode(&tmp_path, 0o600)?;
+        fs::rename(&tmp_path, &secrets_json_path)?;
+        eprintln!(
+            "[proxnix-mount][{vmid}] Podman secrets.json reconciled ({} secret(s))",
+            live_names.len()
+        );
+    }
+
+    Ok(())
+}
+
+fn top_level_yaml_keys(path: &Path) -> io::Result<BTreeSet<String>> {
+    if !path.exists() {
+        return Ok(BTreeSet::new());
+    }
+
+    let mut keys = BTreeSet::new();
+    for line in fs::read_to_string(path)?.lines() {
+        if line.is_empty() || line.starts_with(char::is_whitespace) || !line.contains(':') {
+            continue;
+        }
+        let Some((key, _)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        if !key.is_empty() && key != "sops" {
+            keys.insert(key.to_owned());
+        }
+    }
+    Ok(keys)
+}
+
+fn podman_secret_id(vmid: &str, name: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_DNS,
+        format!("proxnix:{vmid}:{name}").as_bytes(),
+    )
+    .simple()
+    .to_string()
+}
+
+fn podman_driver_options() -> Value {
+    json!({
+        "store": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman store",
+        "lookup": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman lookup",
+        "list": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman list",
+        "delete": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman delete",
+    })
+}
+
+fn load_json_object(path: &Path) -> Map<String, Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn ensure_object_field(data: &mut Map<String, Value>, field: &str) {
+    if !data.get(field).is_some_and(Value::is_object) {
+        data.insert(field.to_owned(), Value::Object(Map::new()));
+    }
+}
+
+fn object_field_mut<'a>(
+    data: &'a mut Map<String, Value>,
+    field: &str,
+) -> &'a mut Map<String, Value> {
+    data.get_mut(field)
+        .and_then(Value::as_object_mut)
+        .expect("object field was initialized")
+}
+
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+fn utc_now_isoformat() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    isoformat_from_unix_parts(now.as_secs() as i64, now.subsec_micros())
+}
+
+fn isoformat_from_unix_parts(seconds: i64, micros: u32) -> String {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}+00:00")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestTemp {
+        path: PathBuf,
+    }
+
+    impl TestTemp {
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "proxnix-host-test-{}-{}",
+                process::id(),
+                TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTemp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn setup_podman_test(tmp: &Path, sops_yaml: Option<&str>) -> (PathBuf, PathBuf) {
+        let rootfs = tmp.join("rootfs");
+        let secrets_dir = tmp.join("secrets");
+        fs::create_dir_all(rootfs.join("etc/secrets")).unwrap();
+        fs::create_dir_all(&secrets_dir).unwrap();
+        if let Some(sops_yaml) = sops_yaml {
+            fs::write(secrets_dir.join("effective.sops.yaml"), sops_yaml).unwrap();
+        }
+        (rootfs, secrets_dir)
+    }
 
     #[test]
     fn parses_pve_config_fields_used_by_guest_module() {
@@ -285,6 +626,132 @@ memory: 2048
   users.users.root.openssh.authorizedKeys.keys = lib.mkForce [ \"ssh-ed25519 AAA \\\"quoted\\\"\" ];
 }
 "
+        );
+    }
+
+    #[test]
+    fn formats_utc_iso_timestamps_with_python_compatible_offset() {
+        assert_eq!(
+            isoformat_from_unix_parts(0, 123),
+            "1970-01-01T00:00:00.000123+00:00"
+        );
+        assert_eq!(
+            isoformat_from_unix_parts(1_704_067_199, 999_999),
+            "2023-12-31T23:59:59.999999+00:00"
+        );
+    }
+
+    #[test]
+    fn reconciles_podman_secrets_json_for_live_keys() {
+        let tmp = TestTemp::new();
+        let (rootfs, secrets_dir) = setup_podman_test(
+            tmp.path(),
+            Some("alpha: ENC[a]\nbeta: ENC[b]\nsops:\n    version: 3\n"),
+        );
+
+        reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
+
+        let secrets_json = rootfs.join("var/lib/containers/storage/secrets/secrets.json");
+        assert!(secrets_json.exists());
+        let data: Value = serde_json::from_str(&fs::read_to_string(secrets_json).unwrap()).unwrap();
+        let secrets = data["secrets"].as_object().unwrap();
+        let names = secrets
+            .values()
+            .map(|entry| entry["name"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from(["alpha".to_owned(), "beta".to_owned()])
+        );
+        for entry in secrets.values() {
+            assert_eq!(entry["labels"], json!({ "proxnix.managed": "true" }));
+            assert_eq!(entry["driver"], "shell");
+            assert_eq!(entry["driverOptions"], podman_driver_options());
+        }
+
+        let ids_dir = rootfs.join("etc/secrets/.ids");
+        let ids = fs::read_dir(ids_dir)
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids, BTreeSet::from(["alpha".to_owned(), "beta".to_owned()]));
+    }
+
+    #[test]
+    fn reconciles_podman_secrets_json_by_removing_stale_managed_entries() {
+        let tmp = TestTemp::new();
+        let (rootfs, secrets_dir) =
+            setup_podman_test(tmp.path(), Some("alpha: ENC[a]\nsops:\n    version: 3\n"));
+
+        reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
+        fs::write(
+            secrets_dir.join("effective.sops.yaml"),
+            "beta: ENC[b]\nsops:\n    version: 3\n",
+        )
+        .unwrap();
+        reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
+
+        let data: Value = serde_json::from_str(
+            &fs::read_to_string(rootfs.join("var/lib/containers/storage/secrets/secrets.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let names = data["secrets"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|entry| entry["name"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(names, BTreeSet::from(["beta".to_owned()]));
+
+        let ids = fs::read_dir(rootfs.join("etc/secrets/.ids"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids, BTreeSet::from(["beta".to_owned()]));
+    }
+
+    #[test]
+    fn reconciles_podman_secrets_json_without_touching_unmanaged_entries() {
+        let tmp = TestTemp::new();
+        let (rootfs, secrets_dir) =
+            setup_podman_test(tmp.path(), Some("alpha: ENC[a]\nsops:\n    version: 3\n"));
+        let secrets_json = rootfs.join("var/lib/containers/storage/secrets/secrets.json");
+        fs::create_dir_all(secrets_json.parent().unwrap()).unwrap();
+        fs::write(
+            &secrets_json,
+            serde_json::to_string(&json!({
+                "secrets": {
+                    "deadbeef": {
+                        "name": "manual",
+                        "id": "deadbeef",
+                        "labels": { "foo": "bar" },
+                        "driver": "file",
+                    }
+                },
+                "nameToID": { "manual": "deadbeef" },
+                "idToName": { "deadbeef": "manual" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
+
+        let data: Value = serde_json::from_str(&fs::read_to_string(secrets_json).unwrap()).unwrap();
+        assert!(data["secrets"]
+            .as_object()
+            .unwrap()
+            .contains_key("deadbeef"));
+        let names = data["secrets"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|entry| entry["name"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from(["alpha".to_owned(), "manual".to_owned()])
         );
     }
 }

@@ -439,121 +439,16 @@ rm -f "${ROOTFS}/etc/containers/containers.conf.d/age-secrets.conf" 2>/dev/null 
 find "${ROOTFS}/etc/secrets" -maxdepth 1 -type f -name '*.age' -delete 2>/dev/null || true
 
 
-python3 - "$ROOTFS" "$VMID" "$PROXNIX_SECRET_DIR" <<'PYEOF'
-import json
-import os
-import sys
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-
-rootfs = Path(sys.argv[1])
-vmid = sys.argv[2]
-secrets_dir = Path(sys.argv[3])
-
-def top_level_keys(path: Path):
-    if not path.exists():
-        return set()
-    keys = set()
-    for line in path.read_text().splitlines():
-        if not line or line[0].isspace() or ":" not in line:
-            continue
-        key = line.split(":", 1)[0].strip()
-        if key and key != "sops":
-            keys.add(key)
-    return keys
-
-live_names = set()
-if secrets_dir.is_dir():
-    live_names.update(top_level_keys(secrets_dir / "effective.sops.yaml"))
-
-SECRETS_JSON = rootfs / "var/lib/containers/storage/secrets/secrets.json"
-IDS_DIR = rootfs / "etc/secrets/.ids"
-LABEL_KEY = "proxnix.managed"
-
-DRIVER_OPTS = {
-    "store": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman store",
-    "lookup": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman lookup",
-    "list": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman list",
-    "delete": "/var/lib/proxnix/runtime/bin/proxnix-secrets podman delete",
-}
-
-def make_uuid(vmid: str, name: str) -> str:
-    return uuid.uuid5(uuid.NAMESPACE_DNS, f"proxnix:{vmid}:{name}").hex
-
-IDS_DIR.mkdir(parents=True, exist_ok=True)
-SECRETS_JSON.parent.mkdir(parents=True, exist_ok=True)
-SECRETS_JSON.parent.chmod(0o700)
-
-if SECRETS_JSON.exists():
-    try:
-        data = json.loads(SECRETS_JSON.read_text())
-    except Exception:
-        data = {}
-else:
-    data = {}
-
-if not isinstance(data.get("secrets"), dict):
-    data["secrets"] = {}
-if not isinstance(data.get("nameToID"), dict):
-    data["nameToID"] = {}
-if not isinstance(data.get("idToName"), dict):
-    data["idToName"] = {}
-
-now = datetime.now(timezone.utc).isoformat()
-changed = False
-
-stale_ids = [
-    sid for sid, entry in data["secrets"].items()
-    if isinstance(entry.get("labels"), dict)
-    and entry["labels"].get(LABEL_KEY) == "true"
-    and (entry.get("name") or "") not in live_names
-]
-for sid in stale_ids:
-    name = data["secrets"][sid].get("name", "")
-    del data["secrets"][sid]
-    data["nameToID"].pop(name, None)
-    data["idToName"].pop(sid, None)
-    (IDS_DIR / sid).unlink(missing_ok=True)
-    print(f"[proxnix-mount][{vmid}] Unregistered removed secret: {name}", file=sys.stderr)
-    changed = True
-
-for name in sorted(live_names):
-    sid = make_uuid(vmid, name)
-    existing = data["secrets"].get(sid, {})
-    created_at = existing.get("createdAt") or now
-
-    entry = {
-        "name": name,
-        "id": sid,
-        "labels": {LABEL_KEY: "true"},
-        "metadata": {},
-        "createdAt": created_at,
-        "updatedAt": now,
-        "driver": "shell",
-        "driverOptions": DRIVER_OPTS,
-    }
-    if data["secrets"].get(sid) != entry:
-        data["secrets"][sid] = entry
-        data["nameToID"][name] = sid
-        data["idToName"][sid] = name
-        changed = True
-
-    ids_file = IDS_DIR / sid
-    if not ids_file.exists() or ids_file.read_text() != name:
-        ids_file.write_text(name)
-        ids_file.chmod(0o640)
-
-if changed:
-    tmp = SECRETS_JSON.with_name(f".{SECRETS_JSON.name}.tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    tmp.chmod(0o600)
-    os.replace(tmp, SECRETS_JSON)
-    print(
-        f"[proxnix-mount][{vmid}] Podman secrets.json reconciled ({len(live_names)} secret(s))",
-        file=sys.stderr,
-    )
-PYEOF
+PROXNIX_HOST_BIN="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
+if [[ -x "$PROXNIX_HOST_BIN" ]]; then
+    "$PROXNIX_HOST_BIN" reconcile podman-secrets \
+        --rootfs "$ROOTFS" \
+        --vmid "$VMID" \
+        --secrets-dir "$PROXNIX_SECRET_DIR"
+else
+    log "ERROR: ${PROXNIX_HOST_BIN} missing; run host/deploy/ansible/install.yml to refresh runtime files."
+    exit 1
+fi
 
 rm -f "${ROOTFS}/root/proxnix-bootstrap.sh"
 log "Removed legacy guest-side bootstrap helper."
