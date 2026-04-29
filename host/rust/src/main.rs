@@ -4,8 +4,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 fn main() {
     if let Err(err) = run(env::args().collect()) {
         eprintln!("error: {err}");
@@ -21,11 +19,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         Some("-V") | Some("--version") => {
-            println!("proxnix-host {VERSION}");
+            println!("proxnix-host {}", version());
             Ok(())
         }
         Some(command) => Err(format!("unknown subcommand: {command}")),
     }
+}
+
+fn version() -> &'static str {
+    option_env!("PROXNIX_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 fn print_usage() {
