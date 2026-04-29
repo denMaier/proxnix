@@ -2,6 +2,7 @@
 , stdenvNoCC
 , age
 , jq
+, proxnixHostRust
 , rsync
 , sops
 }:
@@ -21,6 +22,7 @@ stdenvNoCC.mkDerivation {
     mkdir -p "$out/bin" "$out/lib/proxnix" "$out/share/proxnix" "$out/share/systemd/system"
 
     cp -R host/runtime/bin/. "$out/bin/"
+    cp ${proxnixHostRust}/bin/proxnix-host "$out/bin/proxnix-host"
     cp host/install/uninstall.sh "$out/bin/proxnix-host-uninstall"
     ln -s proxnix-host-uninstall "$out/bin/proxnix-uninstall"
     chmod +x "$out"/bin/*

@@ -29,7 +29,9 @@
         {
           proxnix-host-rust = pkgs.callPackage ./host/nix/proxnix-host-rust.nix { };
         } // lib.optionalAttrs (lib.elem system hostSystems) {
-          proxnix-host = pkgs.callPackage ./host/nix/proxnix-host.nix { };
+          proxnix-host = pkgs.callPackage ./host/nix/proxnix-host.nix {
+            proxnixHostRust = self.packages.${system}.proxnix-host-rust;
+          };
           default = self.packages.${system}.proxnix-host;
         }
       );
