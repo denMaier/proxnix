@@ -156,7 +156,6 @@ for the local manifest and install metadata.
 └── nixos-proxnix-poststop             thin wrapper for `proxnix-host hook poststop`
 
 /usr/local/lib/proxnix/
-├── nixos-proxnix-common.sh            compatibility helper retained during host migration
 ├── proxnix-secrets-guest              helper injected into guests
 ├── install-manifest.txt               installed-file manifest
 └── install-info.txt                   local install metadata

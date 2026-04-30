@@ -64,14 +64,15 @@ Keep these as non-Rust configuration and packaging surfaces:
   and `proxnix-host reconcile activate`.
 - [x] Replaced `proxnix-reconcile-build` and `proxnix-reconcile-activate` with
   thin Rust dispatch wrappers.
+- [x] Removed the unused `nixos-proxnix-common.sh` hook compatibility helper.
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint in progress is `Port build
-and activate dispatch to Rust`. The last two committed migration steps are:
+As of 2026-04-30, the latest migration checkpoint in progress is `Remove unused
+hook common helper`. The last two committed migration steps are:
 
-- `a4c8cfc Port offline seed to Rust`
 - `7c3f269 Port seed dispatch to Rust`
+- `5a261ec Port phase dispatch wrappers to Rust`
 
 The current migration batch includes:
 
@@ -97,9 +98,11 @@ The current migration batch includes:
   thin dispatch wrappers.
 - `host/runtime/bin/proxnix-reconcile-build`,
   `host/runtime/bin/proxnix-reconcile-build-golden`,
-  `host/runtime/bin/proxnix-reconcile-seed`, and
+  `host/runtime/bin/proxnix-reconcile-seed`,
   `host/runtime/bin/proxnix-reconcile-seed-offline`, and
   `host/runtime/bin/proxnix-reconcile-activate` as thin dispatch wrappers.
+- `host/runtime/lxc/hooks/nixos-proxnix-common.sh` removed after all hook logic
+  moved into `proxnix-host hook`.
 - Replacement Rust tests for LXC hook argument parsing, post-stop stage cleanup,
   relay identity payload parsing, and Proxmox host-root UID detection.
 - Host install and docs updates so shipped LXC hook paths describe and assert
@@ -127,6 +130,9 @@ Verification run for the current migration batch:
 - `nix build --no-link --print-out-paths .#proxnix-host-rust` passed.
 - `nix eval .#packages.x86_64-linux.proxnix-host.name` passed and returned
   `"proxnix-host-0.6.1"`.
+- `nix build --no-link --print-out-paths .#packages.x86_64-linux.proxnix-host`
+  was not run to completion on the local `aarch64-darwin` builder because it
+  requires an `x86_64-linux` build system.
 - `bash -n` passed for the edited host runtime shell scripts, hook, and
   uninstall script.
 - `git diff --check` passed.
@@ -143,7 +149,7 @@ Generated verification artifacts were removed after the run:
 - [x] `host/runtime/lxc/hooks/nixos-proxnix-prestart`
 - [x] `host/runtime/lxc/hooks/nixos-proxnix-mount`
 - [x] `host/runtime/lxc/hooks/nixos-proxnix-poststop`
-- [ ] `host/runtime/lxc/hooks/nixos-proxnix-common.sh`
+- [x] `host/runtime/lxc/hooks/nixos-proxnix-common.sh`
 
 Target: keep tiny shell entrypoints only where LXC requires shell/script files, and move logic into:
 

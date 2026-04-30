@@ -64,10 +64,10 @@ link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-mount" "$LXC_H
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-poststop" "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
 
 rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
+rm -f "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
 rm -f "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"
-link_file "$PROXNIX_PROFILE/lib/proxnix/nixos-proxnix-common.sh" "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
 link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix-secrets-guest" "$PROXNIX_LIB_DIR/proxnix-secrets-guest"
 
 for command in \
@@ -113,7 +113,6 @@ $LXC_CONFIG_DIR/nixos.userns.conf
 $LXC_HOOKS_DIR/nixos-proxnix-prestart
 $LXC_HOOKS_DIR/nixos-proxnix-mount
 $LXC_HOOKS_DIR/nixos-proxnix-poststop
-$PROXNIX_LIB_DIR/nixos-proxnix-common.sh
 $PROXNIX_LIB_DIR/proxnix-secrets-guest
 $PROXNIX_INSTALL_MANIFEST
 $PROXNIX_INSTALL_INFO

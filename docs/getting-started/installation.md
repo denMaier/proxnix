@@ -27,7 +27,6 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/share/lxc/hooks/nixos-proxnix-prestart`
 - `/usr/share/lxc/hooks/nixos-proxnix-mount`
 - `/usr/share/lxc/hooks/nixos-proxnix-poststop`
-- `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
 - `/usr/local/sbin/proxnix-host`
 - `/usr/local/sbin/proxnix-authority-render`

@@ -69,11 +69,9 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn('Command::new("proxnix-reconcile-seed-offline")', rust_host)
         self.assertIn('reconcile_podman_secrets(rootfs, vmid, &secret_dir)', rust_host)
         self.assertIn('sync_build_input_snapshot', rust_host)
-        common = (
-            ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-common.sh"
-        ).read_text(encoding="utf-8")
-        self.assertIn("proxnix_validate_vmid()", common)
-        self.assertNotIn("proxnix-host-identity.XXXXXX.yaml", common)
+        self.assertFalse(
+            (ROOT / "host" / "runtime" / "lxc" / "hooks" / "nixos-proxnix-common.sh").exists()
+        )
 
     def test_flake_packages_host_runtime(self) -> None:
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
