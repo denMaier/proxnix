@@ -263,10 +263,10 @@ manifest placement explicitly targets the current node.
 The phase commands are also exposed as separate host commands:
 
 - `proxnix-reconcile-build-golden` (`proxnix-host reconcile build-golden`)
-- `proxnix-reconcile-build --vmid <id>`
+- `proxnix-reconcile-build --vmid <id>` (`proxnix-host reconcile build`)
 - `proxnix-reconcile-seed --vmid <id>` (`proxnix-host reconcile seed`)
 - `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>` (`proxnix-host reconcile seed-offline`)
-- `proxnix-reconcile-activate --vmid <id>`
+- `proxnix-reconcile-activate --vmid <id>` (`proxnix-host reconcile activate`)
 
 Use those commands when you want to drive build, seed, and activation separately.
 `proxnix-reconcile --vmid <id>` remains the command that runs all three phases

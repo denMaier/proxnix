@@ -31,10 +31,10 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-gc` | Host-side stale stage-dir and deployment GC-root pruner |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
-| `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
+| `host/runtime/bin/proxnix-reconcile-build` | Wrapper for `proxnix-host reconcile build` |
 | `host/runtime/bin/proxnix-reconcile-seed` | Wrapper for `proxnix-host reconcile seed` |
 | `host/runtime/bin/proxnix-reconcile-seed-offline` | Wrapper for `proxnix-host reconcile seed-offline` |
-| `host/runtime/bin/proxnix-reconcile-activate` | Host-side activate phase command |
+| `host/runtime/bin/proxnix-reconcile-activate` | Wrapper for `proxnix-host reconcile activate` |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/systemd/proxnix-flake-update.service` | Host-side flake lock update service |
@@ -170,10 +170,10 @@ for the local manifest and install metadata.
 ├── proxnix-gc                         wrapper for `proxnix-host gc`
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build-golden     wrapper for `proxnix-host reconcile build-golden`
-├── proxnix-reconcile-build            build phase command
+├── proxnix-reconcile-build            wrapper for `proxnix-host reconcile build`
 ├── proxnix-reconcile-seed             wrapper for `proxnix-host reconcile seed`
 ├── proxnix-reconcile-seed-offline     wrapper for `proxnix-host reconcile seed-offline`
-├── proxnix-reconcile-activate         activate phase command
+├── proxnix-reconcile-activate         wrapper for `proxnix-host reconcile activate`
 ├── proxnix-reconciler-state           compatibility wrapper for `proxnix-host state`
 ├── proxnix-host-activate              links the Nix profile payload into host paths
 ├── proxnix-host-uninstall             local uninstall helper

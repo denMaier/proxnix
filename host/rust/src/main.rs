@@ -61,7 +61,9 @@ Usage:
   proxnix-host hook prestart [--vmid <vmid>] [--pve-conf <path>]
   proxnix-host hook mount [--vmid <vmid>] [--rootfs <path>]
   proxnix-host hook poststop [--vmid <vmid>]
+  proxnix-host reconcile build [--vmid <vmid>]
   proxnix-host reconcile build-golden [--node-name <name>]
+  proxnix-host reconcile activate [--vmid <vmid>]
   proxnix-host reconcile podman-secrets --rootfs <path> --vmid <vmid> --secrets-dir <dir>
   proxnix-host reconcile seed --vmid <vmid> [--rootfs <path>]
   proxnix-host reconcile seed-offline --vmid <vmid> --rootfs <path>
@@ -84,6 +86,8 @@ fn authority_main(args: &[String]) -> Result<(), String> {
 
 fn reconcile_main(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("activate") => reconcile_phase::activate_main(&args[1..]),
+        Some("build") => reconcile_phase::build_main(&args[1..]),
         Some("build-golden") => reconcile_phase::build_golden_main(&args[1..]),
         Some("podman-secrets") => reconcile_podman_secrets_main(&args[1..]),
         Some("seed") => reconcile_phase::seed_main(&args[1..]),

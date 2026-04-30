@@ -704,10 +704,10 @@ exit 2
 
     def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
         self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile build-golden "$@"', RECONCILE_BUILD_GOLDEN.read_text(encoding="utf-8"))
-        self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
+        self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile build "$@"', RECONCILE_BUILD.read_text(encoding="utf-8"))
         self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile seed "$@"', RECONCILE_SEED.read_text(encoding="utf-8"))
         self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile seed-offline "$@"', RECONCILE_SEED_OFFLINE.read_text(encoding="utf-8"))
-        self.assertIn("--activate-only", RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
+        self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile activate "$@"', RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
         self.assertIn("--start-stopped", RECONCILE.read_text(encoding="utf-8"))
 
     def test_activate_only_activates_recorded_desired_system(self) -> None:
@@ -777,7 +777,7 @@ esac
             )
 
             result = subprocess.run(
-                [str(RECONCILE_ACTIVATE), "--vmid", "101"],
+                [str(RECONCILE), "--activate-only", "--vmid", "101"],
                 check=False,
                 env=env,
                 text=True,
@@ -840,7 +840,7 @@ exit 2
             )
 
             result = subprocess.run(
-                [str(RECONCILE_ACTIVATE), "--vmid", "101"],
+                [str(RECONCILE), "--activate-only", "--vmid", "101"],
                 check=False,
                 env=env,
                 text=True,

@@ -84,18 +84,30 @@ pub(crate) fn seed_main(args: &[String]) -> Result<(), String> {
                 .map_err(|err| format!("seed failed: {err}"))
         }
         SeedAction::Running(passthrough_args) => {
-            let reconcile = env::var_os("PROXNIX_RECONCILE")
-                .map(PathBuf::from)
-                .or_else(|| find_in_path("proxnix-reconcile"))
-                .unwrap_or_else(|| PathBuf::from("/usr/local/sbin/proxnix-reconcile"));
-            let status = Command::new(reconcile)
-                .arg("--seed-only")
-                .args(passthrough_args)
-                .status()
-                .map_err(|err| format!("failed to run proxnix-reconcile: {err}"))?;
-            process::exit(status.code().unwrap_or(1));
+            run_reconcile_phase("--seed-only", &passthrough_args)
         }
     }
+}
+
+pub(crate) fn build_main(args: &[String]) -> Result<(), String> {
+    run_reconcile_phase("--build-only", args)
+}
+
+pub(crate) fn activate_main(args: &[String]) -> Result<(), String> {
+    run_reconcile_phase("--activate-only", args)
+}
+
+fn run_reconcile_phase(flag: &str, args: &[String]) -> Result<(), String> {
+    let reconcile = env::var_os("PROXNIX_RECONCILE")
+        .map(PathBuf::from)
+        .or_else(|| find_in_path("proxnix-reconcile"))
+        .unwrap_or_else(|| PathBuf::from("/usr/local/sbin/proxnix-reconcile"));
+    let status = Command::new(reconcile)
+        .arg(flag)
+        .args(args)
+        .status()
+        .map_err(|err| format!("failed to run proxnix-reconcile: {err}"))?;
+    process::exit(status.code().unwrap_or(1));
 }
 
 impl BuildGoldenConfig {
