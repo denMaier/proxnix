@@ -63,6 +63,7 @@ Usage:
   proxnix-host hook poststop [--vmid <vmid>]
   proxnix-host reconcile build-golden [--node-name <name>]
   proxnix-host reconcile podman-secrets --rootfs <path> --vmid <vmid> --secrets-dir <dir>
+  proxnix-host reconcile seed --vmid <vmid> [--rootfs <path>]
   proxnix-host reconcile seed-offline --vmid <vmid> --rootfs <path>
   proxnix-host state [--db <path>] <init|observe-container|observe-closure|record-attempt>
   proxnix-host --version
@@ -85,6 +86,7 @@ fn reconcile_main(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("build-golden") => reconcile_phase::build_golden_main(&args[1..]),
         Some("podman-secrets") => reconcile_podman_secrets_main(&args[1..]),
+        Some("seed") => reconcile_phase::seed_main(&args[1..]),
         Some("seed-offline") => reconcile_phase::seed_offline_main(&args[1..]),
         Some("-h") | Some("--help") | None => {
             print_usage();

@@ -32,7 +32,7 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
 | `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
-| `host/runtime/bin/proxnix-reconcile-seed` | Host-side seed phase command |
+| `host/runtime/bin/proxnix-reconcile-seed` | Wrapper for `proxnix-host reconcile seed` |
 | `host/runtime/bin/proxnix-reconcile-seed-offline` | Wrapper for `proxnix-host reconcile seed-offline` |
 | `host/runtime/bin/proxnix-reconcile-activate` | Host-side activate phase command |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
@@ -171,7 +171,7 @@ for the local manifest and install metadata.
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build-golden     wrapper for `proxnix-host reconcile build-golden`
 ├── proxnix-reconcile-build            build phase command
-├── proxnix-reconcile-seed             seed phase command
+├── proxnix-reconcile-seed             wrapper for `proxnix-host reconcile seed`
 ├── proxnix-reconcile-seed-offline     wrapper for `proxnix-host reconcile seed-offline`
 ├── proxnix-reconcile-activate         activate phase command
 ├── proxnix-reconciler-state           compatibility wrapper for `proxnix-host state`

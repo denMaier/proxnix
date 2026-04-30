@@ -705,33 +705,10 @@ exit 2
     def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
         self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile build-golden "$@"', RECONCILE_BUILD_GOLDEN.read_text(encoding="utf-8"))
         self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
-        self.assertIn("--seed-only", RECONCILE_SEED.read_text(encoding="utf-8"))
-        self.assertIn("--rootfs", RECONCILE_SEED.read_text(encoding="utf-8"))
-        self.assertIn("proxnix-reconcile-seed-offline", RECONCILE_SEED.read_text(encoding="utf-8"))
+        self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile seed "$@"', RECONCILE_SEED.read_text(encoding="utf-8"))
         self.assertIn('exec "$PROXNIX_HOST_BIN" reconcile seed-offline "$@"', RECONCILE_SEED_OFFLINE.read_text(encoding="utf-8"))
         self.assertIn("--activate-only", RECONCILE_ACTIVATE.read_text(encoding="utf-8"))
         self.assertIn("--start-stopped", RECONCILE.read_text(encoding="utf-8"))
-
-    def test_seed_wrapper_rejects_stopped_container_without_rootfs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            fake_bin = Path(tmp) / "bin"
-            fake_bin.mkdir()
-            write_executable(fake_bin / "pct", "#!/bin/sh\nprintf '%s\\n' 'status: stopped'\n")
-
-            env = os.environ.copy()
-            env.update({"PATH": f"{fake_bin}:{env['PATH']}"})
-
-            result = subprocess.run(
-                [str(RECONCILE_SEED), "--vmid", "101"],
-                check=False,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("VMID 101 is stopped; pass --rootfs", result.stderr)
 
     def test_activate_only_activates_recorded_desired_system(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

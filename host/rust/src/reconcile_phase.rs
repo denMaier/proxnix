@@ -4,7 +4,7 @@ use std::io;
 use std::os::unix::fs::symlink;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{self, Command, Stdio};
 
 use serde_json::{json, Map, Value};
 
@@ -38,6 +38,21 @@ struct SeedOfflineConfig {
     status_dir: PathBuf,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SeedOptions {
+    vmid: String,
+    rootfs: Option<PathBuf>,
+    passthrough_args: Vec<String>,
+    help: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SeedAction {
+    Help,
+    Offline(SeedOfflineOptions),
+    Running(Vec<String>),
+}
+
 pub(crate) fn build_golden_main(args: &[String]) -> Result<(), String> {
     let options = parse_build_golden_args(args)?;
     let config = BuildGoldenConfig::from_env();
@@ -52,6 +67,35 @@ pub(crate) fn seed_offline_main(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| root.join("status"));
     seed_offline(&SeedOfflineConfig { status_dir }, &options)
         .map_err(|err| format!("seed-offline failed: {err}"))
+}
+
+pub(crate) fn seed_main(args: &[String]) -> Result<(), String> {
+    match seed_action(args)? {
+        SeedAction::Help => {
+            seed_usage();
+            Ok(())
+        }
+        SeedAction::Offline(options) => {
+            let root = env_path("PROXNIX_DIR", "/var/lib/proxnix");
+            let status_dir = env::var_os("PROXNIX_STATUS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("status"));
+            seed_offline(&SeedOfflineConfig { status_dir }, &options)
+                .map_err(|err| format!("seed failed: {err}"))
+        }
+        SeedAction::Running(passthrough_args) => {
+            let reconcile = env::var_os("PROXNIX_RECONCILE")
+                .map(PathBuf::from)
+                .or_else(|| find_in_path("proxnix-reconcile"))
+                .unwrap_or_else(|| PathBuf::from("/usr/local/sbin/proxnix-reconcile"));
+            let status = Command::new(reconcile)
+                .arg("--seed-only")
+                .args(passthrough_args)
+                .status()
+                .map_err(|err| format!("failed to run proxnix-reconcile: {err}"))?;
+            process::exit(status.code().unwrap_or(1));
+        }
+    }
 }
 
 impl BuildGoldenConfig {
@@ -141,6 +185,107 @@ fn parse_seed_offline_args(args: &[String]) -> Result<SeedOfflineOptions, String
         ));
     }
     Ok(SeedOfflineOptions { vmid, rootfs })
+}
+
+fn parse_seed_args(args: &[String]) -> Result<SeedOptions, String> {
+    let mut vmid = None;
+    let mut rootfs = None;
+    let mut passthrough_args = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--vmid" => {
+                let value = take_arg(args, &mut index, "--vmid")?;
+                vmid = Some(value.clone());
+                passthrough_args.push("--vmid".to_owned());
+                passthrough_args.push(value);
+            }
+            "--rootfs" => {
+                rootfs = Some(PathBuf::from(take_arg(args, &mut index, "--rootfs")?));
+            }
+            "-h" | "--help" => {
+                return Ok(SeedOptions {
+                    vmid: String::new(),
+                    rootfs: None,
+                    passthrough_args,
+                    help: true,
+                });
+            }
+            other => passthrough_args.push(other.to_owned()),
+        }
+        index += 1;
+    }
+    let vmid = vmid.ok_or("--vmid is required")?;
+    if !valid_vmid(&vmid) {
+        return Err(format!("invalid VMID: {vmid}"));
+    }
+    Ok(SeedOptions {
+        vmid,
+        rootfs,
+        passthrough_args,
+        help: false,
+    })
+}
+
+fn seed_action(args: &[String]) -> Result<SeedAction, String> {
+    let options = parse_seed_args(args)?;
+    if options.help {
+        return Ok(SeedAction::Help);
+    }
+    if let Some(rootfs) = options.rootfs {
+        if !rootfs.is_dir() {
+            return Err(format!("rootfs not found: {}", rootfs.display()));
+        }
+        if !rootfs.join("etc").is_dir() {
+            return Err(format!(
+                "rootfs does not look like a Linux root: {}",
+                rootfs.display()
+            ));
+        }
+        return Ok(SeedAction::Offline(SeedOfflineOptions {
+            vmid: options.vmid,
+            rootfs,
+        }));
+    }
+    reject_stopped_seed_target(&options.vmid)?;
+    Ok(SeedAction::Running(options.passthrough_args))
+}
+
+fn reject_stopped_seed_target(vmid: &str) -> Result<(), String> {
+    if pct_status_is_stopped(vmid) {
+        return Err(format!(
+            "VMID {vmid} is stopped; pass --rootfs <mounted-rootfs> or let the LXC mount hook run proxnix-reconcile-seed-offline"
+        ));
+    }
+    Ok(())
+}
+
+fn pct_status_is_stopped(vmid: &str) -> bool {
+    let Some(pct) = find_in_path("pct") else {
+        return false;
+    };
+    let Ok(output) = Command::new(pct).arg("status").arg(vmid).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let status = String::from_utf8_lossy(&output.stdout);
+    let mut words = status.split_whitespace();
+    let _label = words.next();
+    words.next() == Some("stopped")
+}
+
+fn seed_usage() {
+    eprintln!(
+        "\
+Usage:
+  proxnix-host reconcile seed --vmid <id> [--rootfs </path/to/mounted/rootfs>]
+
+Seeds into a running CT with pct exec through the main reconciler. When
+--rootfs is provided, seeds the stopped container rootfs directly.
+"
+    );
 }
 
 fn seed_offline_usage() {
@@ -675,6 +820,97 @@ mod tests {
         } else {
             env::remove_var(name);
         }
+    }
+
+    #[test]
+    fn seed_dispatch_preserves_running_seed_arguments() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_path = env::var_os("PATH");
+        let tmp = TestTemp::new();
+        let fake_bin = tmp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                old_path
+                    .as_deref()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+            ),
+        );
+
+        let action = seed_action(&[
+            "--vmid".to_owned(),
+            "101".to_owned(),
+            "--node-name".to_owned(),
+            "pve1".to_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            action,
+            SeedAction::Running(vec![
+                "--vmid".to_owned(),
+                "101".to_owned(),
+                "--node-name".to_owned(),
+                "pve1".to_owned()
+            ])
+        );
+        restore_env("PATH", old_path);
+    }
+
+    #[test]
+    fn seed_dispatch_uses_offline_seed_when_rootfs_is_passed() {
+        let tmp = TestTemp::new();
+        let rootfs = tmp.path().join("rootfs");
+        fs::create_dir_all(rootfs.join("etc")).unwrap();
+
+        let action = seed_action(&[
+            "--vmid".to_owned(),
+            "101".to_owned(),
+            "--rootfs".to_owned(),
+            rootfs.display().to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            action,
+            SeedAction::Offline(SeedOfflineOptions {
+                vmid: "101".to_owned(),
+                rootfs,
+            })
+        );
+    }
+
+    #[test]
+    fn seed_dispatch_rejects_stopped_running_seed_target() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_path = env::var_os("PATH");
+        let tmp = TestTemp::new();
+        let fake_bin = tmp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_executable(
+            &fake_bin.join("pct"),
+            "#!/bin/sh\n[ \"$1\" = status ] || exit 2\nprintf '%s\\n' 'status: stopped'\n",
+        );
+        env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                old_path
+                    .as_deref()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+            ),
+        );
+
+        let error = seed_action(&["--vmid".to_owned(), "101".to_owned()]).unwrap_err();
+
+        assert!(error.contains("VMID 101 is stopped; pass --rootfs"));
+        restore_env("PATH", old_path);
     }
 
     fn fake_nix_copy() -> &'static str {

@@ -58,14 +58,16 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Ported stopped-rootfs seeding into `proxnix-host reconcile seed-offline`.
 - [x] Replaced `proxnix-reconcile-seed-offline` with a thin Rust dispatch
   wrapper.
+- [x] Ported seed dispatch into `proxnix-host reconcile seed`.
+- [x] Replaced `proxnix-reconcile-seed` with a thin Rust dispatch wrapper.
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint in progress is `Port offline
-seed to Rust`. The last two committed migration steps are:
+As of 2026-04-30, the latest migration checkpoint in progress is `Port seed
+dispatch to Rust`. The last two committed migration steps are:
 
-- `e709be4 Port reconciler state to Rust`
-- `Port authority rendering to Rust`
+- `033d674 Port golden template build to Rust`
+- `a4c8cfc Port offline seed to Rust`
 
 The current migration batch includes:
 
@@ -79,15 +81,17 @@ The current migration batch includes:
   forwarding, lock persistence, and root lock propagation.
 - Rust phase-command handling in `host/rust/src/reconcile_phase.rs`, including
   `proxnix-host reconcile build-golden` and
-  `proxnix-host reconcile seed-offline`; replacement tests cover golden template
-  builds, published lock preservation, stopped-rootfs profile repair, runtime
-  markers, and guest activation marker observation.
+  `proxnix-host reconcile seed`, and `proxnix-host reconcile seed-offline`;
+  replacement tests cover golden template builds, published lock preservation,
+  stopped-container rejection for running seed dispatch, stopped-rootfs profile
+  repair, runtime markers, and guest activation marker observation.
 - `host/runtime/lxc/hooks/nixos-proxnix-prestart`,
   `host/runtime/lxc/hooks/nixos-proxnix-mount`, and
   `host/runtime/lxc/hooks/nixos-proxnix-poststop` as thin dispatch wrappers.
 - `host/runtime/bin/proxnix-gc` and `host/runtime/bin/proxnix-flake-update` as
   thin dispatch wrappers.
-- `host/runtime/bin/proxnix-reconcile-build-golden` and
+- `host/runtime/bin/proxnix-reconcile-build-golden`,
+  `host/runtime/bin/proxnix-reconcile-seed`, and
   `host/runtime/bin/proxnix-reconcile-seed-offline` as thin dispatch wrappers.
 - Replacement Rust tests for LXC hook argument parsing, post-stop stage cleanup,
   relay identity payload parsing, and Proxmox host-root UID detection.
@@ -109,8 +113,8 @@ The current migration batch includes:
 Verification run for the current migration batch:
 
 - `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clang -c cargo test`
-  passed with 28 Rust tests.
-- `python -m unittest discover host/tests` passed with 30 host tests.
+  passed with 31 Rust tests.
+- `python -m unittest discover host/tests` passed with 29 host tests.
 - `PYTHONPATH=workstation/cli/src python -m unittest discover workstation/cli/tests`
   passed with 89 workstation tests.
 - `nix build --no-link --print-out-paths .#proxnix-host-rust` passed.
@@ -145,7 +149,7 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 - [ ] `proxnix-reconcile`
 - [x] `proxnix-reconcile-build-golden`
 - [ ] `proxnix-reconcile-build`
-- [ ] `proxnix-reconcile-seed`
+- [x] `proxnix-reconcile-seed`
 - [x] `proxnix-reconcile-seed-offline`
 - [ ] `proxnix-reconcile-activate`
 - [ ] `proxnix-create-lxc`
@@ -159,7 +163,7 @@ Target: make these subcommands of `proxnix-host`, then decide whether old comman
 - [ ] `proxnix-host reconcile`
 - [x] `proxnix-host reconcile build-golden`
 - [ ] `proxnix-host reconcile build`
-- [ ] `proxnix-host reconcile seed`
+- [x] `proxnix-host reconcile seed`
 - [x] `proxnix-host reconcile seed-offline`
 - [ ] `proxnix-host reconcile activate`
 - [ ] `proxnix-host create-lxc`
