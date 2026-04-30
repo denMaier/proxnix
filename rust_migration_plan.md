@@ -4,7 +4,7 @@
 
 The host-side control plane should converge toward:
 
-- [ ] Minimal Proxmox/LXC hook scripts that adapt hook invocation into `proxnix-host`.
+- [x] Minimal Proxmox/LXC hook scripts that adapt hook invocation into `proxnix-host`.
 - [ ] One Rust controller binary, `proxnix-host`, for host orchestration.
 - [ ] A doctor surface, either as the current `proxnix-doctor` shell script or as `proxnix-host doctor`.
 
@@ -68,11 +68,18 @@ Keep these as non-Rust configuration and packaging surfaces:
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint in progress is `Remove unused
-hook common helper`. The last two committed migration steps are:
+As of 2026-04-30, the latest completed migration checkpoint is `Remove unused
+hook common helper`. The last three committed migration steps are:
 
-- `7c3f269 Port seed dispatch to Rust`
+- `ab19fda Remove unused hook common helper`
 - `5a261ec Port phase dispatch wrappers to Rust`
+- `7c3f269 Port seed dispatch to Rust`
+
+The next recommended checkpoint is `Split Rust controller modules`: move
+already-ported hook, authority, reconciler-state, and Podman-secrets code out
+of `host/rust/src/main.rs` before porting another large shell surface. This
+keeps `proxnix-host` as one binary without concentrating all implementation
+detail in one huge `main.rs`.
 
 The current migration batch includes:
 
@@ -218,11 +225,15 @@ Target:
 5. [x] Port authority rendering.
 6. [x] Move hook internals into Rust subcommands and leave thin hook entrypoints.
 7. [x] Port GC and flake-update.
-8. [ ] Port seed/build/activate helpers.
-9. [ ] Port main reconcile orchestration.
-10. [ ] Port or intentionally preserve doctor.
-11. [ ] Replace compatibility wrappers with symlinks or remove them where callers can use `proxnix-host`.
-12. [ ] Update docs to describe the final host-side shape.
+8. [x] Port seed/build/activate helpers.
+9. [ ] Split `host/rust/src/main.rs` into focused modules before adding more
+   large controller surfaces.
+10. [ ] Port `proxnix-create-lxc` into `proxnix-host create-lxc`, or decide it
+    should remain a standalone shell helper temporarily.
+11. [ ] Port main reconcile orchestration.
+12. [ ] Port or intentionally preserve doctor.
+13. [ ] Replace compatibility wrappers with symlinks or remove them where callers can use `proxnix-host`.
+14. [ ] Update docs to describe the final host-side shape.
 
 ## Verification Gates
 
