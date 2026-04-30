@@ -265,7 +265,7 @@ The phase commands are also exposed as separate host commands:
 - `proxnix-reconcile-build-golden` (`proxnix-host reconcile build-golden`)
 - `proxnix-reconcile-build --vmid <id>`
 - `proxnix-reconcile-seed --vmid <id>`
-- `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`
+- `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>` (`proxnix-host reconcile seed-offline`)
 - `proxnix-reconcile-activate --vmid <id>`
 
 Use those commands when you want to drive build, seed, and activation separately.

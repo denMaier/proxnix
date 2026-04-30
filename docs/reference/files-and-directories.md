@@ -33,7 +33,7 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
 | `host/runtime/bin/proxnix-reconcile-build` | Host-side build phase command |
 | `host/runtime/bin/proxnix-reconcile-seed` | Host-side seed phase command |
-| `host/runtime/bin/proxnix-reconcile-seed-offline` | Stopped-CT rootfs seed phase command |
+| `host/runtime/bin/proxnix-reconcile-seed-offline` | Wrapper for `proxnix-host reconcile seed-offline` |
 | `host/runtime/bin/proxnix-reconcile-activate` | Host-side activate phase command |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
@@ -172,7 +172,7 @@ for the local manifest and install metadata.
 ├── proxnix-reconcile-build-golden     wrapper for `proxnix-host reconcile build-golden`
 ├── proxnix-reconcile-build            build phase command
 ├── proxnix-reconcile-seed             seed phase command
-├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
+├── proxnix-reconcile-seed-offline     wrapper for `proxnix-host reconcile seed-offline`
 ├── proxnix-reconcile-activate         activate phase command
 ├── proxnix-reconciler-state           compatibility wrapper for `proxnix-host state`
 ├── proxnix-host-activate              links the Nix profile payload into host paths
