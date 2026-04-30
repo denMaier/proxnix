@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 mod flake_update;
 mod gc;
+mod reconcile_phase;
 
 type HostResult<T> = Result<T, Box<dyn Error>>;
 
@@ -60,6 +61,7 @@ Usage:
   proxnix-host hook prestart [--vmid <vmid>] [--pve-conf <path>]
   proxnix-host hook mount [--vmid <vmid>] [--rootfs <path>]
   proxnix-host hook poststop [--vmid <vmid>]
+  proxnix-host reconcile build-golden [--node-name <name>]
   proxnix-host reconcile podman-secrets --rootfs <path> --vmid <vmid> --secrets-dir <dir>
   proxnix-host state [--db <path>] <init|observe-container|observe-closure|record-attempt>
   proxnix-host --version
@@ -80,6 +82,7 @@ fn authority_main(args: &[String]) -> Result<(), String> {
 
 fn reconcile_main(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("build-golden") => reconcile_phase::build_golden_main(&args[1..]),
         Some("podman-secrets") => reconcile_podman_secrets_main(&args[1..]),
         Some("-h") | Some("--help") | None => {
             print_usage();

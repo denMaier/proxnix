@@ -52,11 +52,14 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Replaced `proxnix-gc` with a thin Rust dispatch wrapper.
 - [x] Ported `proxnix-flake-update` into `proxnix-host flake-update`.
 - [x] Replaced `proxnix-flake-update` with a thin Rust dispatch wrapper.
+- [x] Ported golden-template build warming into
+  `proxnix-host reconcile build-golden`.
+- [x] Replaced `proxnix-reconcile-build-golden` with a thin Rust dispatch wrapper.
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint in progress is `Port GC and
-flake update to Rust`. The last two committed migration steps are:
+As of 2026-04-30, the latest migration checkpoint in progress is `Port golden
+template build warming to Rust`. The last two committed migration steps are:
 
 - `e709be4 Port reconciler state to Rust`
 - `Port authority rendering to Rust`
@@ -71,11 +74,15 @@ The current migration batch includes:
 - Rust flake update handling in `host/rust/src/flake_update.rs`, including
   `proxnix-host flake-update` and replacement tests for frequency gating, input
   forwarding, lock persistence, and root lock propagation.
+- Rust phase-command handling in `host/rust/src/reconcile_phase.rs`, including
+  `proxnix-host reconcile build-golden` and replacement tests for golden
+  template builds and published lock preservation.
 - `host/runtime/lxc/hooks/nixos-proxnix-prestart`,
   `host/runtime/lxc/hooks/nixos-proxnix-mount`, and
   `host/runtime/lxc/hooks/nixos-proxnix-poststop` as thin dispatch wrappers.
 - `host/runtime/bin/proxnix-gc` and `host/runtime/bin/proxnix-flake-update` as
   thin dispatch wrappers.
+- `host/runtime/bin/proxnix-reconcile-build-golden` as a thin dispatch wrapper.
 - Replacement Rust tests for LXC hook argument parsing, post-stop stage cleanup,
   relay identity payload parsing, and Proxmox host-root UID detection.
 - Host install and docs updates so shipped LXC hook paths describe and assert
@@ -96,8 +103,8 @@ The current migration batch includes:
 Verification run for the current migration batch:
 
 - `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clang -c cargo test`
-  passed with 23 Rust tests.
-- `python -m unittest discover host/tests` passed with 35 host tests.
+  passed with 25 Rust tests.
+- `python -m unittest discover host/tests` passed with 33 host tests.
 - `PYTHONPATH=workstation/cli/src python -m unittest discover workstation/cli/tests`
   passed with 89 workstation tests.
 - `nix build --no-link --print-out-paths .#proxnix-host-rust` passed.
@@ -130,7 +137,7 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 ### Controller Commands
 
 - [ ] `proxnix-reconcile`
-- [ ] `proxnix-reconcile-build-golden`
+- [x] `proxnix-reconcile-build-golden`
 - [ ] `proxnix-reconcile-build`
 - [ ] `proxnix-reconcile-seed`
 - [ ] `proxnix-reconcile-seed-offline`
@@ -144,7 +151,7 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 Target: make these subcommands of `proxnix-host`, then decide whether old command names stay as symlinks/wrappers:
 
 - [ ] `proxnix-host reconcile`
-- [ ] `proxnix-host reconcile build-golden`
+- [x] `proxnix-host reconcile build-golden`
 - [ ] `proxnix-host reconcile build`
 - [ ] `proxnix-host reconcile seed`
 - [ ] `proxnix-host reconcile seed-offline`

@@ -169,7 +169,7 @@ for the local manifest and install metadata.
 ├── proxnix-flake-update               wrapper for `proxnix-host flake-update`
 ├── proxnix-gc                         wrapper for `proxnix-host gc`
 ├── proxnix-reconcile                  host-side reconciler
-├── proxnix-reconcile-build-golden     golden-template build warmer
+├── proxnix-reconcile-build-golden     wrapper for `proxnix-host reconcile build-golden`
 ├── proxnix-reconcile-build            build phase command
 ├── proxnix-reconcile-seed             seed phase command
 ├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
