@@ -366,6 +366,10 @@ rm -f "${ROOTFS}/etc/nixos/configuration.nix"
 remove_guest_path "${ROOTFS}/etc/nixos/managed"
 rm -f "${ROOTFS}/etc/nixos/base.nix" "${ROOTFS}/etc/nixos/common.nix" "${ROOTFS}/etc/nixos/proxmox.nix"
 rm -rf "${ROOTFS}/etc/nixos/dropins"
+# Older proxnix versions wired /etc/nixos/local.nix as the experimentation
+# hook. The sandbox now lives under /var/lib/proxnix/build-input/ alongside
+# the snapshot it overrides, so strip any leftover guest-side local.nix.
+rm -f "${ROOTFS}/etc/nixos/local.nix"
 CURRENT_CONFIG_HASH=""
 if [[ -r "${PROXNIX_RUNTIME_CURRENT_HASH}" ]]; then
     CURRENT_CONFIG_HASH="$(tr -d '\r\n' < "${PROXNIX_RUNTIME_CURRENT_HASH}")"

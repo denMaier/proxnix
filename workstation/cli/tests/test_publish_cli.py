@@ -192,6 +192,25 @@ class PublishCliTests(unittest.TestCase):
 
             self.assertIn(PurePosixPath("/var/lib/proxnix/flake.lock"), calls)
 
+    def test_publish_host_preserves_remote_flake_lock_when_local_lock_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            (tree / "containers").mkdir()
+            (tree / "publish-revision.json").write_text("{}\n", encoding="utf-8")
+            session = _FakeSession()
+            removals: list[PurePosixPath] = []
+
+            def fake_remove_remote_file(session_arg, config_arg, destination, **kwargs):
+                removals.append(destination)
+
+            with patch("proxnix_workstation.publish_cli.remove_remote_file", side_effect=fake_remove_remote_file), \
+                patch("proxnix_workstation.publish_cli.sync_file"), \
+                patch("proxnix_workstation.publish_cli.sync_path"), \
+                patch("proxnix_workstation.publish_cli.ensure_remote_dirs"):
+                publish_host(session, _test_config(), PublishOptions(config_only=True), tree)
+
+            self.assertNotIn(PurePosixPath("/var/lib/proxnix/flake.lock"), removals)
+
     def test_materialize_head_site_omits_private_for_external_secret_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

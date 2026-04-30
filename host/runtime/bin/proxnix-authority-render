@@ -3,4 +3,5 @@
 
 set -euo pipefail
 
-exec /usr/bin/env python3 /usr/local/lib/proxnix/proxnix_authority_render.py "$@"
+PROXNIX_HOST_BIN="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
+exec "$PROXNIX_HOST_BIN" authority render "$@"

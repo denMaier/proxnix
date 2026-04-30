@@ -1,0 +1,10 @@
+[Unit]
+Description=Update proxnix Nix flake lock
+Documentation=https://github.com/your-org/proxnix
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/proxnix/flake-update.conf
+ExecStart=/usr/local/sbin/proxnix-flake-update

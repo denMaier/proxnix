@@ -44,10 +44,9 @@ render_authority() {
     return
   fi
 
-  local repo_renderer="${SCRIPT_DIR}/../lib/proxnix_authority_render.py"
-  if [[ -f "$repo_renderer" ]]; then
-    need_cmd python3
-    python3 "$repo_renderer" \
+  local proxnix_host="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
+  if [[ -x "$proxnix_host" ]]; then
+    "$proxnix_host" authority render \
       --root "$NIXLXC_DIR" \
       --authority "$AUTHORITY_DIR" \
       --pve-lxc-dir "$PVE_LXC_DIR" \
@@ -56,18 +55,6 @@ render_authority() {
   fi
 
   die "proxnix-authority-render not found"
-}
-
-protect_golden_closure() {
-  # Register a real Nix indirect gcroot. See protect_host_closure in
-  # proxnix-reconcile for why a bare symlink is not enough — without
-  # nix-store --add-root --indirect there is no auto-root under
-  # /nix/var/nix/gcroots/auto/ and nix-collect-garbage will reap the closure.
-  local system_path="$1"
-  need_cmd nix-store
-  mkdir -p "$GCROOT_DIR"
-  local root_path="${GCROOT_DIR}/golden-template"
-  nix-store --realise --add-root "$root_path" --indirect "$system_path" >/dev/null
 }
 
 while [[ $# -gt 0 ]]; do
@@ -90,10 +77,13 @@ done
 need_cmd nix
 render_authority
 
-lock_args=()
-[[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
-system_path="$(nix build "${lock_args[@]}" --print-out-paths "${AUTHORITY_DIR}#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel")"
+mkdir -p "$GCROOT_DIR"
+root_path="${GCROOT_DIR}/golden-template"
+
+# `nix build --out-link <root>` writes a real Nix indirect gcroot in one step:
+# the closure is pinned against nix-collect-garbage before the command returns,
+# so we no longer need a separate `nix-store --realise --add-root --indirect`.
+system_path="$(nix build --out-link "$root_path" --print-out-paths "${AUTHORITY_DIR}#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel")"
 system_path="$(tr -d '\r\n' <<<"$system_path")"
 [[ -n "$system_path" ]] || die "nix build produced no output path"
-protect_golden_closure "$system_path"
 printf 'golden-template built %s\n' "$system_path"

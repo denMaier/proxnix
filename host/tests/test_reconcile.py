@@ -108,7 +108,65 @@ esac
 """
 
 
+def fake_authority_render_stub() -> str:
+    return r"""#!/bin/sh
+set -eu
+root=""
+authority=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) root="$2"; shift 2;;
+    --authority) authority="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ -n "$authority" ] || exit 3
+mkdir -p "$authority"
+if [ -n "$root" ] && [ -f "$root/flake.lock" ]; then
+  cp "$root/flake.lock" "$authority/flake.lock"
+fi
+"""
+
+
+def fake_socat_bridge_stub() -> str:
+    """Fake a long-running socat listener by creating the requested socket path."""
+    return r"""#!/bin/sh
+listen="$1"
+case "$listen" in
+  UNIX-LISTEN:*)
+    socket="${listen#UNIX-LISTEN:}"
+    socket="${socket%%,*}"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+rm -f "$socket"
+touch "$socket"
+trap 'rm -f "$socket"; exit 0' INT TERM EXIT
+while :; do
+  sleep 1
+done
+"""
+
+
 class ReconcileDryRunTests(unittest.TestCase):
+    def setUp(self) -> None:
+        previous = os.environ.get("PROXNIX_AUTHORITY_RENDER")
+        renderer_tmp = tempfile.TemporaryDirectory()
+        renderer = Path(renderer_tmp.name) / "proxnix-authority-render"
+        write_executable(renderer, fake_authority_render_stub())
+        os.environ["PROXNIX_AUTHORITY_RENDER"] = str(renderer)
+        self.addCleanup(renderer_tmp.cleanup)
+        self.addCleanup(self._restore_authority_render, previous)
+
+    @staticmethod
+    def _restore_authority_render(previous: str | None) -> None:
+        if previous is None:
+            os.environ.pop("PROXNIX_AUTHORITY_RENDER", None)
+        else:
+            os.environ["PROXNIX_AUTHORITY_RENDER"] = previous
+
     def test_golden_template_build_warms_and_protects_local_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
@@ -126,6 +184,14 @@ class ReconcileDryRunTests(unittest.TestCase):
                 fake_bin / "nix",
                 """#!/bin/sh
 printf '%s\n' "$*" > "$PROXNIX_NIX_ARGS_FILE"
+out_link=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out-link) out_link="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/golden-template-system "$out_link"; }
 printf '%s\n' /nix/store/golden-template-system
 """,
             )
@@ -159,7 +225,7 @@ printf '%s\n' /nix/store/golden-template-system
                 "#nixosConfigurations.proxnix-golden-template.config.system.build.toplevel",
                 nix_args_file.read_text(encoding="utf-8"),
             )
-            self.assertIn("--no-write-lock-file", nix_args_file.read_text(encoding="utf-8"))
+            self.assertNotIn("--no-write-lock-file", nix_args_file.read_text(encoding="utf-8"))
             self.assertEqual(os.readlink(gcroots / "golden-template"), "/nix/store/golden-template-system")
 
     def test_golden_template_build_uses_published_lock_when_present(self) -> None:
@@ -467,6 +533,15 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/eval-system-101 "$out_link"; }
     printf '%s\n' /nix/store/eval-system-101
     ;;
   *)
@@ -598,7 +673,9 @@ esac
             run_dir = Path(tmp) / "run"
             status_dir = root / "status"
             fake_bin.mkdir()
+            run_dir.mkdir()
             status_dir.mkdir(parents=True)
+            (run_dir / "ct-101.sock").write_text("stale socket", encoding="utf-8")
             (status_dir / "101.json").write_text(
                 json.dumps(
                     {
@@ -620,6 +697,18 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
+            nix_remote_marker = Path(tmp) / "nix-remote"
+            write_executable(
+                fake_bin / "nix",
+                f"""#!/bin/sh
+if [ "$1" = "copy" ]; then
+  printf '%s\\n' "$NIX_REMOTE" > {nix_remote_marker}
+  exit 0
+fi
+exit 2
+""",
+            )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 """#!/bin/sh
@@ -660,11 +749,13 @@ exit 2
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "101 seeded /nix/store/built-system-101")
+            self.assertEqual(nix_remote_marker.read_text(encoding="utf-8").strip(), f"unix://{run_dir}/ct-101.sock")
+            self.assertFalse((run_dir / "ct-101.sock").exists())
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
             self.assertEqual(status["lastDeployStatus"], "seeded")
             self.assertIsNone(status["lastError"])
 
-    def test_seed_only_records_failed_import(self) -> None:
+    def test_seed_only_records_failed_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
             fake_bin = Path(tmp) / "bin"
@@ -686,10 +777,15 @@ exit 2
             )
 
             write_executable(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
-            write_executable(fake_bin / "nix-store", "#!/bin/sh\nprintf '%s\\n' /nix/store/built-system-101\n")
+            write_executable(fake_bin / "nix-store", fake_nix_store_stub())
+            write_executable(
+                fake_bin / "nix",
+                "#!/bin/sh\nif [ \"$1\" = copy ]; then echo copy failed >&2; exit 1; fi\nexit 2\n",
+            )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
-                "#!/bin/sh\nif [ \"$1\" = status ]; then exit 0; fi\necho import failed >&2\nexit 1\n",
+                "#!/bin/sh\nif [ \"$1\" = status ]; then exit 0; fi\nexit 2\n",
             )
 
             env = os.environ.copy()
@@ -714,8 +810,9 @@ exit 2
             status = json.loads((status_dir / "101.json").read_text(encoding="utf-8"))
             self.assertEqual(status["lastDeployStatus"], "failed")
             self.assertIn("closure seed failed", status["lastError"])
+            self.assertFalse((run_dir / "ct-101.sock").exists())
 
-    def test_seed_offline_copies_to_rootfs_and_stages_next_system(self) -> None:
+    def test_seed_offline_copies_to_rootfs_and_sets_boot_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proxnix"
             rootfs = Path(tmp) / "rootfs"
@@ -724,6 +821,8 @@ exit 2
             fake_bin.mkdir()
             status_dir.mkdir(parents=True)
             (rootfs / "etc").mkdir(parents=True)
+            (rootfs / "sbin").mkdir()
+            (rootfs / "sbin" / "init").write_text("# old concrete NixOS LXC init\n", encoding="utf-8")
             status_file = status_dir / "101.json"
             status_file.write_text(
                 json.dumps(
@@ -751,6 +850,8 @@ system="$5"
 mkdir -p "${root}${system}/bin"
 printf '#!/bin/sh\\nexit 0\\n' > "${root}${system}/bin/switch-to-configuration"
 chmod +x "${root}${system}/bin/switch-to-configuration"
+printf '#!/bin/sh\\nexit 0\\n' > "${root}${system}/init"
+chmod +x "${root}${system}/init"
 """,
             )
 
@@ -782,6 +883,15 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
                 (runtime / "previous-system").read_text(encoding="utf-8").strip(),
                 "/nix/store/old-system-101",
             )
+            profiles = rootfs / "nix" / "var" / "nix" / "profiles"
+            system_profile = profiles / "system"
+            self.assertTrue(system_profile.is_symlink())
+            generation_link = profiles / os.readlink(system_profile)
+            self.assertTrue(generation_link.is_symlink())
+            self.assertEqual(os.readlink(generation_link), "/nix/store/built-system-101")
+            self.assertTrue((rootfs / "sbin" / "init").is_symlink())
+            self.assertEqual(os.readlink(rootfs / "sbin" / "init"), "/nix/var/nix/profiles/system/init")
+            self.assertTrue((rootfs / "nix" / "var" / "nix" / "gcroots" / "profiles").is_symlink())
             status = json.loads(status_file.read_text(encoding="utf-8"))
             self.assertEqual(status["lastDeployStatus"], "offline-seeded")
             self.assertTrue(status["container_has_closure"])
@@ -831,6 +941,65 @@ chmod +x "${root}${system}/bin/switch-to-configuration"
             self.assertEqual(status["lastDeployStatus"], "offline-seeded")
             self.assertEqual(status["guestActivatedSystem"], "/nix/store/built-system-101")
             self.assertTrue(status["guestActivationMarkerDrift"])
+
+    def test_seed_offline_repairs_profile_even_when_status_is_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proxnix"
+            rootfs = Path(tmp) / "rootfs"
+            fake_bin = Path(tmp) / "bin"
+            status_dir = root / "status"
+            fake_bin.mkdir()
+            status_dir.mkdir(parents=True)
+            (rootfs / "etc").mkdir(parents=True)
+            (status_dir / "101.json").write_text(
+                json.dumps(
+                    {
+                        "vmid": 101,
+                        "hostname": "ct101",
+                        "desiredSystem": "/nix/store/built-system-101",
+                        "currentSystem": "/nix/store/built-system-101",
+                        "previousSystem": None,
+                        "lastBuildStatus": "ok",
+                        "lastDeployStatus": "not-run",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_executable(
+                fake_bin / "nix",
+                """#!/bin/sh
+root="${4#local?root=}"
+system="$5"
+mkdir -p "${root}${system}/bin"
+printf '#!/bin/sh\\nexit 0\\n' > "${root}${system}/bin/switch-to-configuration"
+chmod +x "${root}${system}/bin/switch-to-configuration"
+printf '#!/bin/sh\\nexit 0\\n' > "${root}${system}/init"
+chmod +x "${root}${system}/init"
+""",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                    "PROXNIX_DIR": str(root),
+                }
+            )
+
+            result = subprocess.run(
+                [str(RECONCILE_SEED_OFFLINE), "--vmid", "101", "--rootfs", str(rootfs)],
+                check=False,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "101 offline-seeded /nix/store/built-system-101")
+            profiles = rootfs / "nix" / "var" / "nix" / "profiles"
+            generation_link = profiles / os.readlink(profiles / "system")
+            self.assertEqual(os.readlink(generation_link), "/nix/store/built-system-101")
 
     def test_phase_commands_wrap_build_seed_and_activate(self) -> None:
         self.assertIn("--build-only", RECONCILE_BUILD.read_text(encoding="utf-8"))
@@ -1030,7 +1199,19 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/built-system-101 "$out_link"; }
     printf '%s\n' /nix/store/built-system-101
+    ;;
+  copy)
+    exit 0
     ;;
   *)
     exit 2
@@ -1042,6 +1223,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh
@@ -1144,7 +1326,19 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/built-system-101 "$out_link"; }
     printf '%s\n' /nix/store/built-system-101
+    ;;
+  copy)
+    exit 0
     ;;
   *)
     exit 2
@@ -1156,6 +1350,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/built-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh
@@ -1456,7 +1651,20 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/desired-system-101 "$out_link"; }
     printf '%s\n' /nix/store/desired-system-101
+    ;;
+  copy)
+    printf '%s\n' 'copy failed' >&2
+    exit 1
     ;;
   *)
     exit 2
@@ -1468,6 +1676,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/dep-a /nix/store/desired-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 """#!/bin/sh
@@ -1557,7 +1766,19 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/desired-system-101 "$out_link"; }
     printf '%s\n' /nix/store/desired-system-101
+    ;;
+  copy)
+    exit 0
     ;;
   *)
     exit 2
@@ -1569,6 +1790,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/desired-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh
@@ -1661,7 +1883,19 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/desired-system-101 "$out_link"; }
     printf '%s\n' /nix/store/desired-system-101
+    ;;
+  copy)
+    exit 0
     ;;
   *)
     exit 2
@@ -1673,6 +1907,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/desired-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh
@@ -1770,7 +2005,19 @@ case "$1" in
 JSON
     ;;
   build)
+    shift
+    out_link=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --out-link) out_link="$2"; shift 2;;
+        *) shift;;
+      esac
+    done
+    [ -n "$out_link" ] && { mkdir -p "$(dirname "$out_link")"; ln -sfn /nix/store/built-system-101 "$out_link"; }
     printf '%s\n' /nix/store/built-system-101
+    ;;
+  copy)
+    exit 0
     ;;
   *)
     exit 2
@@ -1782,6 +2029,7 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/built-system-101"),
             )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_create,
                 f"""#!/bin/sh
@@ -1890,6 +2138,11 @@ esac
                 fake_bin / "nix-store",
                 fake_nix_store_stub(requisites="/nix/store/old-system-101"),
             )
+            write_executable(
+                fake_bin / "nix",
+                "#!/bin/sh\nif [ \"$1\" = copy ]; then exit 0; fi\nexit 2\n",
+            )
+            write_executable(fake_bin / "socat", fake_socat_bridge_stub())
             write_executable(
                 fake_bin / "pct",
                 f"""#!/bin/sh

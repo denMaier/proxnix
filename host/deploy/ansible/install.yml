@@ -90,8 +90,6 @@
         marker: "# {mark} proxnix managed Nix settings"
         block: |
           experimental-features = nix-command flakes
-          keep-outputs = true
-          keep-derivations = true
 
     - name: Restart nix-daemon after nix.conf changes
       ansible.builtin.systemd:
@@ -164,6 +162,7 @@
       changed_when: false
       loop:
         - proxnix-doctor
+        - proxnix-flake-update
         - proxnix-reconcile
         - proxnix-host-activate
 

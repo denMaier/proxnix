@@ -100,7 +100,7 @@ Installed by `host/install/install.sh`:
 - `/usr/share/lxc/hooks/nixos-proxnix-mount`
 - `/usr/share/lxc/hooks/nixos-proxnix-poststop`
 - `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
-- `/usr/local/lib/proxnix/pve-conf-to-nix.py`
+- `proxnix-host pve-conf-to-nix`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
@@ -132,7 +132,7 @@ Current durable host state:
 
 - reads `/etc/pve/lxc/<vmid>.conf`
 - validates shared files under `/var/lib/proxnix`
-- renders Proxmox CT config with `pve-conf-to-nix.py`
+- renders Proxmox CT config with `proxnix-host pve-conf-to-nix`
 - copies `site.nix`, selected templates, and `containers/<vmid>/dropins`
 - computes `current-config-hash`
 - generates `proxnix-apply-config-runner`
@@ -409,7 +409,7 @@ Generated manifest inputs:
 - `/var/lib/proxnix/site.nix`, if present
 - `/var/lib/proxnix/containers/<vmid>/dropins/*.nix`
 - `/var/lib/proxnix/containers/<vmid>/templates/*.template`
-- `/etc/pve/lxc/<vmid>.conf`, converted with `pve-conf-to-nix.py`
+- `/etc/pve/lxc/<vmid>.conf`, converted with `proxnix-host pve-conf-to-nix`
 - `/var/lib/proxnix/publish-revision.json`
 
 Generated manifest output shape:
@@ -1017,7 +1017,7 @@ Concrete tasks:
 
 - Add generated authority wrapper under `/var/lib/proxnix/authority`.
 - Render per-CT `proxmox.nix` from `/etc/pve/lxc/<vmid>.conf` using existing
-  `pve-conf-to-nix.py`.
+  `proxnix-host pve-conf-to-nix`.
 - Generate a node manifest from existing `/var/lib/proxnix/containers`.
 - Keep the first schema small: `vmid`, `hostname`, `systemAttr`, `system`,
   `sourceRevision`, and normalized `pve`.

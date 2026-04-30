@@ -685,8 +685,6 @@ def publish_host(
     flake_lock = tree / "flake.lock"
     if flake_lock.is_file():
         sync_file(session, config, flake_lock, config.remote_dir / "flake.lock", dry_run=options.dry_run, report=report)
-    else:
-        remove_remote_file(session, config, config.remote_dir / "flake.lock", dry_run=options.dry_run, report=report)
 
     sync_path(session, config, tree / "containers", config.remote_dir / "containers", dry_run=options.dry_run, report=report)
 

@@ -104,6 +104,7 @@ do_rm "$PROXNIX_SBIN_DIR/proxnix-doctor"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-create-lxc"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-authority-render"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-host"
+do_rm "$PROXNIX_SBIN_DIR/proxnix-flake-update"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-gc"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden"
@@ -135,6 +136,16 @@ if [[ $DRY_RUN -eq 0 ]]; then
 fi
 do_rm "$SYSTEMD_UNIT_DIR/proxnix-gc.timer"
 do_rm "$SYSTEMD_UNIT_DIR/proxnix-gc.service"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+fi
+
+action "Flake update timer"
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl disable --now proxnix-flake-update.timer 2>/dev/null || true
+fi
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer"
+do_rm "$SYSTEMD_UNIT_DIR/proxnix-flake-update.service"
 if [[ $DRY_RUN -eq 0 ]]; then
     systemctl daemon-reload
 fi

@@ -21,14 +21,16 @@ Addresses findings #1, #2, #15, #16.
       (`host/runtime/bin/proxnix-reconcile`)
 - [x] `protect_golden_closure` uses `nix-store --add-root --indirect`
       (`host/runtime/bin/proxnix-reconcile-build-golden`)
-- [x] `proxnix_reconciler_state.py` reports truthful gcroot status
+- [x] `proxnix-host state` reports truthful gcroot status
       (verified via `nix-store --query --roots`, not hardcoded)
 - [x] Test in `host/tests/` asserts `nix-store --query --roots <closure>` lists
       the gcroot path
 - [x] `host/install/uninstall.sh` removes indirect roots so subsequent host GC
       can reclaim space
-- [x] Ansible install drops a host nix.conf snippet (`keep-outputs = true`,
-      `keep-derivations = true`)
+- [x] Ansible install drops a host nix.conf snippet
+      (`experimental-features = nix-command flakes` only — indirect gcroots
+      already pin the closures we need; we deliberately do not enable
+      `keep-outputs` / `keep-derivations` system-wide)
 - [x] Operator runbook entry: do not run `nix-collect-garbage` against the host
       store; use `proxnix-gc` instead
 
@@ -87,8 +89,8 @@ Addresses findings #4, #5, #9, #12.
 
 Addresses findings #13, #14, #17.
 
-- [x] `proxnix-doctor` required-files list includes
-      `proxnix_reconciler_state.py`
+- [x] `proxnix-doctor` required-files list reflected the state helper while it
+      was Python-based; the helper has since moved behind `proxnix-host state`
 - [x] `proxnix-host-activate` drops the `systemctl disable --now
       proxnix-reconcile.timer` line (timer not installed in this version)
 - [x] `host/nix/proxnix-host.nix` drops the redundant `cp` of

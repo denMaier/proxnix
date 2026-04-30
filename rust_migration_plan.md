@@ -42,6 +42,58 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Ported reconciler SQLite state into `proxnix-host state`.
 - [x] Replaced `proxnix-reconciler-state` with a thin Rust dispatch wrapper.
 - [x] Removed the Python `proxnix_reconciler_state.py` implementation.
+- [x] Ported authority rendering into `proxnix-host authority render`.
+- [x] Replaced `proxnix-authority-render` with a thin Rust dispatch wrapper.
+- [x] Removed the Python `proxnix_authority_render.py` implementation.
+
+## Current Status
+
+As of 2026-04-30, the latest migration checkpoint is `Port authority rendering
+to Rust`. The last two committed migration steps are:
+
+- `e709be4 Port reconciler state to Rust`
+- `Port authority rendering to Rust`
+
+The current migration batch includes:
+
+- Rust authority rendering in `host/rust/src/main.rs`, including
+  `proxnix-host authority render` and replacement tests for the deleted Python
+  authority renderer.
+- `host/runtime/bin/proxnix-authority-render` as a thin dispatch wrapper to
+  `proxnix-host authority render`.
+- Deletion of `host/runtime/lib/proxnix_authority_render.py` and
+  `host/tests/test_authority_render.py`.
+- Host activation, doctor, packaging, uninstall, reconcile, build-golden,
+  mount-hook, and docs updates so shipped host paths no longer rely on deleted
+  Python helpers.
+- Broader in-progress host runtime changes around closure seeding, gcroots,
+  `nix copy`, offline seed profile repair, and flake update.
+- Flake update files:
+  `host/runtime/bin/proxnix-flake-update`,
+  `host/runtime/systemd/proxnix-flake-update.service`,
+  `host/runtime/systemd/proxnix-flake-update.timer`, and
+  `host/tests/test_flake_update.py`.
+- Workstation publish CLI/test edits that preserve a host-managed remote
+  `flake.lock` when the local tree omits one.
+
+Verification run for the current migration batch:
+
+- `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clang -c cargo test`
+  passed with 14 Rust tests.
+- `python -m unittest discover host/tests` passed with 39 host tests.
+- `PYTHONPATH=workstation/cli/src python -m unittest discover workstation/cli/tests`
+  passed with 89 workstation tests.
+- `nix build --no-link --print-out-paths .#proxnix-host-rust` passed.
+- `nix eval .#packages.x86_64-linux.proxnix-host.name` passed and returned
+  `"proxnix-host-0.6.1"`.
+- `bash -n` passed for the edited host runtime shell scripts, hook, and
+  uninstall script.
+- `git diff --check` passed.
+
+Generated verification artifacts were removed after the run:
+
+- `host/rust/target/`
+- temporary generated `flake.lock`
 
 ## Current Host Runtime To Collapse
 
@@ -69,7 +121,7 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 - [ ] `proxnix-create-lxc`
 - [ ] `proxnix-gc`
 - [ ] `proxnix-flake-update`
-- [ ] `proxnix-authority-render`
+- [x] `proxnix-authority-render`
 - [x] `proxnix-reconciler-state`
 
 Target: make these subcommands of `proxnix-host`, then decide whether old command names stay as symlinks/wrappers:
@@ -83,18 +135,18 @@ Target: make these subcommands of `proxnix-host`, then decide whether old comman
 - [ ] `proxnix-host create-lxc`
 - [ ] `proxnix-host gc`
 - [ ] `proxnix-host flake-update`
-- [ ] `proxnix-host authority render`
+- [x] `proxnix-host authority render`
 - [x] `proxnix-host state`
 
 ### Python Libraries
 
-- [ ] `host/runtime/lib/proxnix_authority_render.py`
+- [x] `host/runtime/lib/proxnix_authority_render.py`
 - [x] `host/runtime/lib/proxnix_reconciler_state.py`
 - [x] `host/runtime/lib/proxnix_reconcile_podman_secrets.py`
 
 Target:
 
-- [ ] Port authority rendering to Rust and delete `proxnix_authority_render.py`.
+- [x] Port authority rendering to Rust and delete `proxnix_authority_render.py`.
 - [x] Port reconciler SQLite state to Rust and delete `proxnix_reconciler_state.py`.
 - [x] Port Podman `secrets.json` reconciliation to Rust and delete `proxnix_reconcile_podman_secrets.py`.
 
@@ -116,7 +168,7 @@ Target:
 2. [x] Port a pure helper and delete the old implementation.
 3. [x] Port Podman secrets reconciliation, because it is bounded and file-oriented.
 4. [x] Port reconciler state, including SQLite schema and CLI.
-5. [ ] Port authority rendering.
+5. [x] Port authority rendering.
 6. [ ] Move hook internals into Rust subcommands and leave thin hook entrypoints.
 7. [ ] Port GC and flake-update.
 8. [ ] Port seed/build/activate helpers.
@@ -130,10 +182,10 @@ Target:
 - [x] Rust unit tests cover pure parsing/rendering/state transformations.
 - [x] Existing Python/shell tests are retired only when equivalent Rust tests exist.
 - [x] `nix build .#proxnix-host-rust` succeeds locally.
-- [ ] `nix eval .#packages.x86_64-linux.proxnix-host.name` succeeds for Linux package shape.
-- [ ] Host install tests assert only the intended runtime files are shipped.
+- [x] `nix eval .#packages.x86_64-linux.proxnix-host.name` succeeds for Linux package shape.
+- [x] Host install tests assert only the intended runtime files are shipped.
 - [ ] Hook tests or harnesses exercise the same entrypoints used by Proxmox.
-- [ ] Reconcile tests prove locality checks still run immediately before mutating CTs.
+- [x] Reconcile tests prove locality checks still run immediately before mutating CTs.
 
 ## Open Decisions
 

@@ -9,8 +9,10 @@ let
       ++ lib.optionals cfg.inheritRootAuthorizedKeys inheritedRootAuthorizedKeys
     );
 in {
-  # Trusted host-side security policy. This module is intentionally forceful so
-  # guest-local /etc/nixos/local.nix cannot relax core access controls.
+  # Trusted host-side security policy. This module is intentionally forceful
+  # so guest-side experimentation (build-input/local.nix, manual overrides)
+  # cannot relax core access controls — and because any guest-side activation
+  # is reverted on the next host reconcile anyway.
 
   proxnix.common = {
     enable = lib.mkForce true;

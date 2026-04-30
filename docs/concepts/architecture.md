@@ -22,7 +22,7 @@ That gives proxnix these properties:
   ┌─────────────────────────────────────────────┐
   │  1. pre-start hook (host)                    │
   │     Read PVE conf + Nix drop-ins             │
-  │     Run pve-conf-to-nix.py                   │
+  │     Run proxnix-host pve-conf-to-nix         │
   │     Stage secrets, scripts                    │
   │     Compute diagnostic config hash            │
   │     Build desired NixOS closure if needed     │
@@ -81,7 +81,7 @@ Important stage subtrees:
 | `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
 
 The pre-start hook copies the node-local managed Nix files, runs
-`pve-conf-to-nix.py`, pulls in host-side drop-ins, stages the compiled
+`proxnix-host pve-conf-to-nix`, pulls in host-side drop-ins, stages the compiled
 per-container runtime store plus the container identity, and computes a hash of
 the rendered managed tree.
 
@@ -123,27 +123,29 @@ The phases are split into commands:
   and protects it with a GC root so later CT builds reuse common store paths.
 - `proxnix-reconcile-build` evaluates and builds the desired closure.
 - `proxnix-reconcile-seed` imports the closure into a running CT.
-- `proxnix-reconcile-seed-offline` copies the closure into a mounted stopped CT rootfs and writes `/var/lib/proxnix/runtime/next-system`.
+- `proxnix-reconcile-seed-offline` copies the closure into a mounted stopped CT rootfs, advances `/nix/var/nix/profiles/system`, and writes `/var/lib/proxnix/runtime/next-system` as a compatibility marker.
 - `proxnix-reconcile-activate` switches a running CT to the recorded desired system.
 
 For a stopped CT, start convergence follows the LXC lifecycle. The pre-start
 hook renders guest inputs, opportunistically warms the golden-template build,
 and runs the CT build phase. The mount hook seeds the closure into the rootfs.
-The guest `proxnix-boot-activate.service` consumes
-`next-system`, runs `switch-to-configuration switch`, verifies
-`/run/current-system`, and reverts to `previous-system` if activation fails.
-For a running CT, explicit reconcile commands keep using `pct exec` for seed
-and activation; there is no guest activation timer.
+The rootfs system profile is already pointed at the desired closure before LXC
+starts, so the CT boots the desired system directly. `next-system` remains as a
+compatibility marker for older boot activation flows.
+For a running CT, explicit reconcile commands seed through a short-lived
+host-side Unix socket bridge to the container's Nix daemon, then activate the
+exact system path from the host; there is no guest activation timer.
 
 Build reuse is optimized per host. Each host should keep a golden-template
 build warm so container-specific builds mostly reuse already-realized store
-paths. `flake.lock` is optional. When the workstation publishes one, the host
-carries it into `/var/lib/proxnix/authority/flake.lock`, so golden and CT builds
-resolve the same pinned nixpkgs revision. When no lock is published, host
-builds run with `--no-write-lock-file` and follow the configured nixpkgs branch
-at build time. Build failures before seeding leave the CT's current generation
-untouched. Local coordination details such as build observations, attempts, and
-GC protection live in
+paths. The host uses a durable `flake.lock`. When the workstation publishes
+one, the host carries it into `/var/lib/proxnix/authority/flake.lock`; when the
+workstation does not publish one, the existing host-managed lock is preserved
+and can be advanced by `proxnix-flake-update.timer`. Golden and CT builds
+therefore resolve the same pinned nixpkgs revision until that lock changes.
+Build failures before seeding leave the CT's current generation untouched.
+Local coordination details such as build observations, attempts, and GC
+protection live in
 `/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status files remain
 the operator-facing status surface.
 
@@ -167,11 +169,12 @@ Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
 hook no longer starts a full reconcile service. Operators and workstation
 deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
 <id>` or `systemctl start proxnix-reconcile@<id>.service` when they want the
-running-CT path. The only remaining proxnix timer is `proxnix-gc.timer`.
-It removes copied pre-start stage directories from `/run/proxnix`, keeps the
-`golden-template` root and one `<vmid>-desired` root for every CT that is still
-present on this host, and prunes desired roots for CTs that moved away or were
-deleted.
+running-CT path. `proxnix-gc.timer` removes copied pre-start stage directories
+from `/run/proxnix`, keeps the `golden-template` root and one `<vmid>-desired`
+root for every CT that is still present on this host, and prunes desired roots
+for CTs that moved away or were deleted. `proxnix-flake-update.timer` advances
+the host flake lock on the configured daily, weekly, or monthly cadence, but it
+does not itself reconcile running CTs.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically update proxnix Nix flake lock
+
+[Timer]
+OnBootSec=10min
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+Unit=proxnix-flake-update.service
+
+[Install]
+WantedBy=timers.target

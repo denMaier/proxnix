@@ -16,6 +16,9 @@ GCROOT_DIR="${PROXNIX_GCROOT_DIR:-${NIXLXC_DIR}/gcroots/deploy}"
 NODE_NAME="${PROXNIX_NODE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
 AUTHORITY_RENDER="${PROXNIX_AUTHORITY_RENDER:-/usr/local/sbin/proxnix-authority-render}"
 CREATE_LXC="${PROXNIX_CREATE_LXC:-/usr/local/sbin/proxnix-create-lxc}"
+CONTAINER_NIX_DAEMON_SOCKET="${PROXNIX_CONTAINER_NIX_DAEMON_SOCKET:-/nix/var/nix/daemon-socket/socket}"
+CONTAINER_NIX_DAEMON_BRIDGE_READY_TIMEOUT="${PROXNIX_CONTAINER_NIX_DAEMON_BRIDGE_READY_TIMEOUT:-15}"
+CONTAINER_NIX_COMMAND_TIMEOUT="${PROXNIX_CONTAINER_NIX_COMMAND_TIMEOUT:-0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -65,10 +68,9 @@ render_authority() {
     return
   fi
 
-  local repo_renderer="${SCRIPT_DIR}/../lib/proxnix_authority_render.py"
-  if [[ -f "$repo_renderer" ]]; then
-    need_cmd python3
-    python3 "$repo_renderer" \
+  local proxnix_host="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
+  if [[ -x "$proxnix_host" ]]; then
+    "$proxnix_host" authority render \
       --root "$NIXLXC_DIR" \
       --authority "$AUTHORITY_DIR" \
       --pve-lxc-dir "$PVE_LXC_DIR" \
@@ -91,9 +93,7 @@ eval_node_manifest() {
   need_cmd nix
   local attr
   attr="$(node_attr_fragment)"
-  local lock_args=()
-  [[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
-  nix eval "${lock_args[@]}" --json "${AUTHORITY_DIR}#${attr}"
+  nix eval --json "${AUTHORITY_DIR}#${attr}"
 }
 
 is_local_container() {
@@ -130,11 +130,15 @@ selected_container_is_local_or_skip() {
   return 1
 }
 
+GLOBAL_LOCK_HELD=0
+
 take_global_lock() {
+  [[ "$GLOBAL_LOCK_HELD" -eq 1 ]] && return 0
   need_cmd flock
   mkdir -p "$LOCK_DIR"
   exec 9>"${LOCK_DIR}/reconcile.lock"
   flock -n 9 || die "another proxnix-reconcile run is active"
+  GLOBAL_LOCK_HELD=1
 }
 
 take_container_lock() {
@@ -347,10 +351,15 @@ write_noop_status() {
   # substituter fetches just to refresh a gcroot for a closure we no longer have).
   local host_has_closure="false"
   local protected="false"
+  local was_protected="false"
   if [[ -e "$desired_system" ]]; then
     host_has_closure="true"
+    was_protected="$(gcroot_present "$vmid" "$desired_system")"
     if protect_host_closure "$vmid" "$desired_system" 2>/dev/null; then
       protected="$(gcroot_present "$vmid" "$desired_system")"
+    fi
+    if [[ "$was_protected" != "true" && "$protected" == "true" ]]; then
+      echo "warning: re-registered missing gcroot for VMID ${vmid} (${desired_system}); something on this host is reaping proxnix gcroots — check for stray nix-collect-garbage" >&2
     fi
   fi
 
@@ -491,21 +500,28 @@ update_lost_locality_status() {
 }
 
 build_manifest_system() {
+  # `nix build --out-link <root>` builds the closure AND registers a real Nix
+  # indirect gcroot atomically — the closure is pinned against
+  # nix-collect-garbage before this returns, so the build path no longer needs
+  # a separate `nix-store --realise --add-root --indirect` step. The
+  # self-heal/noop path still uses protect_host_closure when no rebuild runs.
   local selected_vmid="$1" manifest="$2"
   local system_attr
   system_attr="$(jq -r --arg vmid "$selected_vmid" '.containers[$vmid].systemAttr // empty' <<<"$manifest")"
   [[ -n "$system_attr" ]] || die "manifest for VMID ${selected_vmid} is missing systemAttr"
-  local lock_args=()
-  [[ -f "${AUTHORITY_DIR}/flake.lock" ]] || lock_args+=(--no-write-lock-file)
-  nix build "${lock_args[@]}" --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
+  mkdir -p "$GCROOT_DIR"
+  local root_path="${GCROOT_DIR}/${selected_vmid}-desired"
+  nix build --out-link "$root_path" --print-out-paths "${AUTHORITY_DIR}#${system_attr}"
 }
 
 protect_host_closure() {
-  # Register a real Nix indirect gcroot so nix-collect-garbage on the host
-  # cannot reap the desired closure. `nix-store --realise --add-root --indirect`
-  # creates both the symlink at $root_path AND a paired indirect auto-root
-  # under /nix/var/nix/gcroots/auto/ — only the latter actually pins the
-  # closure against GC. A bare `ln -s` looks identical but protects nothing.
+  # Used by the self-heal / noop path where no rebuild happens. Registers a
+  # real Nix indirect gcroot so nix-collect-garbage cannot reap the desired
+  # closure. `nix-store --realise --add-root --indirect` creates both the
+  # symlink at $root_path AND a paired indirect auto-root under
+  # /nix/var/nix/gcroots/auto/ — only the latter actually pins against GC.
+  # The build path uses `nix build --out-link` instead, which has the same
+  # effect in a single step.
   local vmid="$1" system_path="$2"
   need_cmd nix-store
   mkdir -p "$GCROOT_DIR"
@@ -592,6 +608,151 @@ container_state() {
   pct status "$vmid" 2>/dev/null | awk '{ print $2 }' || true
 }
 
+positive_integer_or_zero() {
+  local value="$1" name="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "${name} must be a non-negative integer"
+}
+
+container_init_pid() {
+  local vmid="$1"
+  local pid=""
+  if command -v lxc-info >/dev/null 2>&1; then
+    pid="$(lxc-info -n "$vmid" -p -H 2>/dev/null | awk 'NR == 1 { print $1 }' || true)"
+    if [[ "$pid" =~ ^[0-9]+$ && -d "/proc/${pid}" ]]; then
+      printf '%s\n' "$pid"
+      return
+    fi
+  fi
+
+  local pid_file
+  for pid_file in "/run/lxc/${vmid}.pid" "/var/lib/lxc/${vmid}/init.pid"; do
+    [[ -r "$pid_file" ]] || continue
+    pid="$(awk 'NR == 1 { print $1 }' "$pid_file" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ && -d "/proc/${pid}" ]]; then
+      printf '%s\n' "$pid"
+      return
+    fi
+  done
+
+  return 1
+}
+
+container_nix_daemon_connect_command() {
+  local vmid="$1"
+  local pid=""
+  if command -v nsenter >/dev/null 2>&1 && pid="$(container_init_pid "$vmid")"; then
+    printf 'nsenter --target %q --user --net --setgid 0 --setuid 0 -- socat STDIO UNIX-CONNECT:%q\n' \
+      "$pid" \
+      "/proc/${pid}/root${CONTAINER_NIX_DAEMON_SOCKET}"
+    return
+  fi
+  if command -v lxc-attach >/dev/null 2>&1; then
+    printf 'lxc-attach -n %q -- socat STDIO UNIX-CONNECT:%q\n' "$vmid" "$CONTAINER_NIX_DAEMON_SOCKET"
+    return
+  fi
+  if command -v pct >/dev/null 2>&1; then
+    printf 'pct exec %q -- socat STDIO UNIX-CONNECT:%q\n' "$vmid" "$CONTAINER_NIX_DAEMON_SOCKET"
+    return
+  fi
+  die "neither lxc-attach nor pct found for container Nix daemon bridge"
+}
+
+start_container_nix_daemon_bridge() {
+  local vmid="$1" socket_path="$2" log_path="$3"
+  need_cmd socat
+
+  local connect_cmd
+  connect_cmd="$(container_nix_daemon_connect_command "$vmid")"
+
+  rm -f "$socket_path" "$log_path"
+  socat \
+    "UNIX-LISTEN:${socket_path},fork,mode=0600" \
+    "EXEC:${connect_cmd},nofork" \
+    >/dev/null 2>"$log_path" &
+  CONTAINER_NIX_BRIDGE_PID="$!"
+}
+
+stop_container_nix_daemon_bridge() {
+  local bridge_pid="$1" socket_path="$2" log_path="$3"
+  if [[ -n "$bridge_pid" ]] && kill -0 "$bridge_pid" 2>/dev/null; then
+    kill "$bridge_pid" 2>/dev/null || true
+    local attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$bridge_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$bridge_pid" 2>/dev/null; then
+      kill -KILL "$bridge_pid" 2>/dev/null || true
+    fi
+  fi
+  [[ -z "$bridge_pid" ]] || wait "$bridge_pid" 2>/dev/null || true
+  rm -f "$socket_path" "$log_path"
+}
+
+wait_for_container_nix_daemon_bridge() {
+  local socket_path="$1" bridge_pid="$2" log_path="$3"
+  positive_integer_or_zero "$CONTAINER_NIX_DAEMON_BRIDGE_READY_TIMEOUT" "PROXNIX_CONTAINER_NIX_DAEMON_BRIDGE_READY_TIMEOUT"
+
+  local deadline=$((SECONDS + CONTAINER_NIX_DAEMON_BRIDGE_READY_TIMEOUT))
+  while (( SECONDS <= deadline )); do
+    if [[ -e "$socket_path" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$bridge_pid" 2>/dev/null; then
+      if [[ -s "$log_path" ]]; then
+        sed 's/^/socat: /' "$log_path" >&2 || true
+      fi
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  printf 'timed out waiting for Nix daemon bridge socket: %s\n' "$socket_path" >&2
+  if [[ -s "$log_path" ]]; then
+    sed 's/^/socat: /' "$log_path" >&2 || true
+  fi
+  return 1
+}
+
+run_container_nix_command() {
+  positive_integer_or_zero "$CONTAINER_NIX_COMMAND_TIMEOUT" "PROXNIX_CONTAINER_NIX_COMMAND_TIMEOUT"
+  if [[ "$CONTAINER_NIX_COMMAND_TIMEOUT" -gt 0 ]]; then
+    need_cmd timeout
+    timeout "$CONTAINER_NIX_COMMAND_TIMEOUT" env NIX_REMOTE="$NIX_REMOTE" "$@"
+  else
+    "$@"
+  fi
+}
+
+with_container_nix_daemon() {
+  local vmid="$1"
+  shift
+  mkdir -p "$LOCK_DIR"
+
+  local socket_path="${LOCK_DIR}/ct-${vmid}.sock"
+  local log_path="${LOCK_DIR}/ct-${vmid}.socat.log"
+  local bridge_pid="" rc=0
+
+  start_container_nix_daemon_bridge "$vmid" "$socket_path" "$log_path"
+  bridge_pid="$CONTAINER_NIX_BRIDGE_PID"
+
+  if ! wait_for_container_nix_daemon_bridge "$socket_path" "$bridge_pid" "$log_path"; then
+    stop_container_nix_daemon_bridge "$bridge_pid" "$socket_path" "$log_path"
+    return 2
+  fi
+
+  set +e
+  NIX_REMOTE="unix://${socket_path}" "$@"
+  rc=$?
+  set -e
+
+  if [[ "$rc" -ne 0 && -s "$log_path" ]]; then
+    sed 's/^/socat: /' "$log_path" >&2 || true
+  fi
+  stop_container_nix_daemon_bridge "$bridge_pid" "$socket_path" "$log_path"
+  return "$rc"
+}
+
 build_only() {
   local selected_vmid="$1"
   [[ -n "$selected_vmid" ]] || die "--build-only requires --vmid"
@@ -639,7 +800,6 @@ build_only() {
   system_path="$(tr -d '\r\n' <<<"$system_path")"
   [[ -n "$system_path" ]] || die "nix build produced no output path for VMID ${selected_vmid}"
   [[ "$system_path" == "$desired_system" ]] || die "nix build produced ${system_path}, expected ${desired_system}"
-  protect_host_closure "$selected_vmid" "$system_path"
 
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$system_path" "$current_system" "$previous_system" "$last_deploy_status"
   printf '%s built %s\n' "$selected_vmid" "$system_path"
@@ -647,16 +807,16 @@ build_only() {
 
 seed_closure() {
   local vmid="$1" system_path="$2"
+  need_cmd nix
   need_cmd nix-store
-  need_cmd pct
-  need_cmd xargs
 
-  local closure_file="${LOCK_DIR}/closure-${vmid}.txt"
-  mkdir -p "$LOCK_DIR"
-  nix-store --query --requisites "$system_path" | tr '\n' '\0' > "$closure_file"
-  [[ -s "$closure_file" ]] || die "nix-store returned no requisites for ${system_path}"
-  xargs -0 -r nix-store --export < "$closure_file" | pct exec "$vmid" -- nix-store --import
-  pct exec "$vmid" -- test -x "${system_path}/bin/switch-to-configuration"
+  with_container_nix_daemon "$vmid" copy_and_realise_closure_in_container "$system_path"
+}
+
+copy_and_realise_closure_in_container() {
+  local system_path="$1"
+  run_container_nix_command nix copy --from local --no-check-sigs "$system_path" || return
+  run_container_nix_command nix-store --realise "$system_path" >/dev/null || return
 }
 
 seed_only() {
@@ -822,7 +982,6 @@ reconcile_build_phase() {
     printf '%s build failed\n' "$selected_vmid" >&2
     return 2
   fi
-  protect_host_closure "$selected_vmid" "$desired_system"
   write_build_status "$selected_vmid" "$hostname" "$source_revision" "$desired_system" "$live_current" "$previous_system" "not-run"
 }
 
@@ -956,8 +1115,10 @@ reconcile_selected() {
 reconcile_all_running() {
   local recreate_missing="$1" start_stopped="$2"
   need_cmd jq
+  need_cmd flock
   need_cmd pct
   need_cmd awk
+  take_global_lock
   render_authority
 
   local manifest

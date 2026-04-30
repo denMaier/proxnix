@@ -10,9 +10,10 @@ Most proxnix problems can be diagnosed by checking these in order:
    journalctl -t lxc-<vmid>-start -n 50   # raw LXC hook output, also useful with pct start <vmid> --debug
    ```
 
-2. **Guest boot activation:** Did the seeded closure activate?
+2. **Guest system profile:** Did the mount hook point the rootfs profile at the seeded closure?
    ```bash
-   pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
+   pct exec <vmid> -- readlink -f /nix/var/nix/profiles/system
+   pct exec <vmid> -- readlink -f /sbin/init
    ```
 
 3. **Reconciler status:** Does the recorded desired system match the guest?
@@ -28,12 +29,14 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 ---
 
-## Boot activation does not finish
+## The seeded system does not boot
 
-Check the boot activation service log:
+Check the booted system profile:
 
 ```bash
-pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
+pct exec <vmid> -- readlink -f /run/current-system
+pct exec <vmid> -- readlink -f /nix/var/nix/profiles/system
+pct exec <vmid> -- readlink -f /sbin/init
 ```
 
 If you need to debug manually inside the guest, inspect the host-rendered build
@@ -203,15 +206,15 @@ pct exec <vmid> -- readlink -f /run/current-system
 If they differ, inspect activation:
 
 ```bash
-pct exec <vmid> -- systemctl status proxnix-boot-activate.service
-pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b
+pct exec <vmid> -- readlink -f /nix/var/nix/profiles/system
+pct exec <vmid> -- readlink -f /sbin/init
 ```
 
 Common causes:
 
 - The host build failed before seeding
 - Offline closure seeding failed in the mount hook
-- Boot activation failed and reverted to `previous-system`
+- The rootfs system profile was not advanced to the desired closure before start
 
 ## The hooks seem broken on one node
 
@@ -234,7 +237,7 @@ ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/instal
 
 proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a container to another node, make sure that node has both proxnix installed and the expected `/var/lib/proxnix/` data for that container.
 
-## `pve-conf-to-nix.py` fails
+## `proxnix-host pve-conf-to-nix` fails
 
 Check the pre-start hook log:
 
@@ -245,7 +248,8 @@ journalctl -t lxc-<vmid>-start -n 50
 Common causes:
 
 - Missing PVE config file for the VMID
-- Python3 not installed on the Proxmox host
+- Stale host runtime symlinks after an incomplete install or upgrade
+- `proxnix-host` missing from `/usr/local/sbin`
 
 ## Need a broad sanity check
 

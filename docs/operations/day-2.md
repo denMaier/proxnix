@@ -30,10 +30,10 @@ build-input snapshot, seeds the closure, and activates it on boot:
 pct restart <vmid>
 ```
 
-Watch activation:
+Watch the booted system:
 
 ```bash
-pct exec <vmid> -- journalctl -u proxnix-boot-activate.service -b -f
+pct exec <vmid> -- readlink -f /run/current-system
 ```
 
 ## Change container workloads

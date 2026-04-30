@@ -599,7 +599,7 @@ Add a small Python helper or shell wrapper for state updates.
 Suggested path:
 
 ```text
-host/runtime/lib/proxnix_reconciler_state.py
+proxnix-host state
 ```
 
 Suggested command wrapper:

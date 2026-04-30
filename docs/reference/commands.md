@@ -167,7 +167,7 @@ This expects the tag version to match both `VERSION` and
 Activate the Nix-installed proxnix host profile on a Proxmox node. It creates
 the host integration symlinks for LXC hooks, helper commands, host tools,
 shared Nix modules, and systemd units, then reloads systemd and enables the GC
-timer.
+and flake-update timers.
 
 This command is normally called by `host/deploy/ansible/install.yml`.
 
@@ -236,7 +236,8 @@ Non-local targets are reported as `skip not-local`.
 writes `/var/lib/proxnix/status/<vmid>.json` without activating it. If the
 recorded current system already equals the evaluated desired system, it exits
 as `noop-current` without running `nix build`. `--seed-only --vmid <id>`
-imports the recorded desired closure into a running target CT and verifies
+copies the recorded desired closure into a running target CT through a
+temporary host Unix socket bridge to the CT's Nix daemon and verifies
 `switch-to-configuration` exists. `--activate-only --vmid <id>` activates the
 recorded desired system in a running CT and verifies `/run/current-system`.
 `--vmid <id>` is the orchestration command: evaluate desired path, skip as
@@ -256,13 +257,22 @@ Use those commands when you want to drive build, seed, and activation separately
 `proxnix-reconcile --vmid <id>` remains the command that runs all three phases
 for a running CT.
 
+The running-CT seed path creates `/run/proxnix/ct-<vmid>.sock` for the
+duration of the reconcile run and points the host-side Nix client at it with
+`NIX_REMOTE=unix:///run/proxnix/ct-<vmid>.sock`. The bridge connects to the
+container-local Nix daemon socket, normally
+`/nix/var/nix/daemon-socket/socket`, through `nsenter`, `lxc-attach`, or
+`pct exec`. It does not run a custom in-container proxnix agent.
+
 Normal convergence is not run by a full-host timer. For a stopped CT start,
 the LXC pre-start hook opportunistically warms the host-local golden-template
 build with `proxnix-reconcile-build-golden` and then runs
 `proxnix-reconcile-build --vmid <id>`. The mount hook runs
 `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`,
-and the guest `proxnix-boot-activate.service` activates the staged
-`next-system` at boot. Explicit operator/workstation flows can still run
+which copies the closure into the mounted rootfs and advances the rootfs NixOS
+system profile so the CT boots the desired system directly. It also writes
+`next-system` as a compatibility marker for older activation flows. Explicit
+operator/workstation flows can still run
 `proxnix-reconcile --vmid <id>` or start `proxnix-reconcile@<id>.service` for a
 running CT. `proxnix-reconcile.service` remains available for an explicit
 all-local-container run, but no `proxnix-reconcile.timer` is installed or
@@ -310,6 +320,41 @@ On Proxmox hosts, do not run `nix-collect-garbage` against the host store for
 normal proxnix cleanup. `proxnix-gc` understands the deployment GC roots that
 protect desired closures; direct host store collection should be reserved for
 manual recovery after checking those roots.
+
+### `proxnix-flake-update`
+
+Update the host-managed authority flake lock. The command renders
+`/var/lib/proxnix/authority`, runs `nix flake update --flake
+/var/lib/proxnix/authority`, copies the resulting
+`/var/lib/proxnix/authority/flake.lock` back to `/var/lib/proxnix/flake.lock`,
+and records the last successful update under
+`/var/lib/proxnix/state/flake-update.last-success`.
+
+The installed `proxnix-flake-update.timer` runs daily. The command gates actual
+updates with `PROXNIX_FLAKE_UPDATE_FREQUENCY`, so the same timer can provide
+daily, weekly, or monthly updates. Configure it in
+`/etc/proxnix/flake-update.conf`:
+
+```bash
+PROXNIX_FLAKE_UPDATE_FREQUENCY=weekly
+# PROXNIX_FLAKE_UPDATE_INPUTS=nixpkgs
+```
+
+Supported frequencies are `daily`, `weekly`, `monthly`, and `disabled`.
+`PROXNIX_FLAKE_UPDATE_INPUTS` is optional and is passed to `nix flake update`
+to update only selected inputs. The command shares the reconciler global lock,
+so it does not race a build or activation run.
+
+```bash
+proxnix-flake-update --force
+proxnix-flake-update --frequency monthly
+systemctl start proxnix-flake-update.service
+systemctl edit proxnix-flake-update.service
+```
+
+Updating the lock only changes future desired closures. A stopped CT picks up
+the new inputs on its next pre-start build. A running CT picks them up when an
+operator or workstation flow runs `proxnix-reconcile --vmid <id>`.
 
 ### `proxnix-authority-render`
 
@@ -509,9 +554,10 @@ are ignored.
 If the site has a committed `flake.lock`, publish also copies it to
 `/var/lib/proxnix/flake.lock`. The host authority renderer then carries that
 lock into `/var/lib/proxnix/authority/flake.lock`, making the golden-template
-build and every CT build use the same locked Nix inputs. If no `flake.lock` is
-published, host builds stay in rolling mode and use `--no-write-lock-file`, so
-the generated authority does not silently pin itself.
+build and every CT build use the same locked Nix inputs. If no local lock is
+published, publish leaves any host-managed `/var/lib/proxnix/flake.lock` in
+place. The host can advance that durable lock with `proxnix-flake-update` and
+its timer.
 
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
 

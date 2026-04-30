@@ -27,13 +27,13 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/share/lxc/hooks/nixos-proxnix-prestart`
 - `/usr/share/lxc/hooks/nixos-proxnix-mount`
 - `/usr/share/lxc/hooks/nixos-proxnix-poststop`
-- `/usr/local/lib/proxnix/pve-conf-to-nix.py`
-- `/usr/local/lib/proxnix/proxnix_authority_render.py`
 - `/usr/local/lib/proxnix/nixos-proxnix-common.sh`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
+- `/usr/local/sbin/proxnix-host`
 - `/usr/local/sbin/proxnix-authority-render`
 - `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
+- `/usr/local/sbin/proxnix-flake-update`
 - `/usr/local/sbin/proxnix-gc`
 - `/usr/local/sbin/proxnix-reconcile`
 - `/usr/local/sbin/proxnix-reconcile-build-golden`
@@ -41,7 +41,9 @@ These are installed locally on each node because the LXC hooks execute on that n
 - `/usr/local/sbin/proxnix-reconcile-seed`
 - `/usr/local/sbin/proxnix-reconcile-seed-offline`
 - `/usr/local/sbin/proxnix-reconcile-activate`
+- `/usr/local/sbin/proxnix-reconciler-state`
 - `proxnix-gc.service` and `proxnix-gc.timer`
+- `proxnix-flake-update.service` and `proxnix-flake-update.timer`
 - `proxnix-reconcile.service` and `proxnix-reconcile@.service`
 
 ### Node-local relay cache

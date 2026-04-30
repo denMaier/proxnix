@@ -38,10 +38,11 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("nix profile install --no-write-lock-file --profile", playbook)
         self.assertIn("proxnix-host-activate", playbook)
         self.assertIn("Verify proxnix host tools are installed", playbook)
+        self.assertIn("proxnix-flake-update", playbook)
         self.assertIn("path: /etc/nix/nix.conf", playbook)
         self.assertIn("experimental-features = nix-command flakes", playbook)
-        self.assertIn("keep-outputs = true", playbook)
-        self.assertIn("keep-derivations = true", playbook)
+        self.assertNotIn("keep-outputs = true", playbook)
+        self.assertNotIn("keep-derivations = true", playbook)
         self.assertIn("install Nix first or rerun with -e proxnix_nix_install_mode=determinate", playbook)
         self.assertIn('nix --extra-experimental-features "nix-command flakes" eval --expr true', playbook)
         self.assertIn("proxnix-reconcile", playbook)
@@ -91,7 +92,7 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("proxnix-host-uninstall", package)
         self.assertIn("ln -s proxnix-host-uninstall", package)
         self.assertNotIn("pve-conf-to-nix.py", package)
-        self.assertIn("proxnix_authority_render.py", package)
+        self.assertNotIn("proxnix_authority_render.py", package)
         self.assertNotIn("proxnix_reconciler_state.py", package)
         self.assertNotIn("proxnix_reconcile_podman_secrets.py", package)
         self.assertIn("${age}/bin/age", package)
@@ -100,9 +101,11 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("${sops}/bin/sops", package)
         self.assertIn("/nix/var/nix/profiles/proxnix-host", activate)
         self.assertIn("systemctl enable --now proxnix-gc.timer", activate)
+        self.assertIn("systemctl enable --now proxnix-flake-update.timer", activate)
         self.assertNotIn("systemctl disable --now proxnix-reconcile.timer", activate)
         self.assertNotIn('cp host/runtime/bin/proxnix-host-activate "$out/bin/proxnix-host-activate"', package)
         self.assertIn("proxnix-authority-render", activate)
+        self.assertIn("proxnix-flake-update", activate)
         self.assertIn("proxnix-gc", activate)
         self.assertIn("proxnix-host", activate)
         self.assertIn("proxnix-reconcile-build-golden", activate)
@@ -120,14 +123,21 @@ class AnsibleInstallTests(unittest.TestCase):
         doctor = (ROOT / "host" / "runtime" / "bin" / "proxnix-doctor").read_text(
             encoding="utf-8"
         )
+        authority_wrapper = (
+            ROOT / "host" / "runtime" / "bin" / "proxnix-authority-render"
+        ).read_text(encoding="utf-8")
         state_wrapper = (
             ROOT / "host" / "runtime" / "bin" / "proxnix-reconciler-state"
         ).read_text(encoding="utf-8")
+        self.assertNotIn("proxnix_authority_render.py", doctor)
         self.assertNotIn("proxnix_reconciler_state.py", doctor)
         self.assertNotIn("proxnix_reconcile_podman_secrets.py", doctor)
+        self.assertIn("/nix/var/nix/daemon-socket/socket", doctor)
+        self.assertIn('rm -f "$PROXNIX_LIB_DIR/proxnix_authority_render.py"', activate)
         self.assertIn('rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"', activate)
-        self.assertIn('"$PROXNIX_HOST_BIN" state "$@"', state_wrapper)
         self.assertIn('rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"', activate)
+        self.assertIn('"$PROXNIX_HOST_BIN" authority render "$@"', authority_wrapper)
+        self.assertIn('"$PROXNIX_HOST_BIN" state "$@"', state_wrapper)
 
     def test_uninstall_removes_proxnix_host_profile(self) -> None:
         uninstall = (ROOT / "host" / "install" / "uninstall.sh").read_text(
@@ -141,8 +151,10 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/jq"', uninstall)
         self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/rsync"', uninstall)
         self.assertIn('do_rm "$PROXNIX_LOCAL_BIN_DIR/sops"', uninstall)
+        self.assertIn('do_rm "$PROXNIX_SBIN_DIR/proxnix-flake-update"', uninstall)
         self.assertIn('do_rm "$PROXNIX_SBIN_DIR/proxnix-host"', uninstall)
         self.assertIn('do_rm "$PROXNIX_SBIN_DIR/proxnix-host-activate"', uninstall)
+        self.assertIn("proxnix-flake-update.timer", uninstall)
         self.assertIn('do_rm "$PROXNIX_SBIN_DIR/proxnix-host-uninstall"', uninstall)
         self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', uninstall)
         self.assertIn('"$PROXNIX_HOST_PROFILE"-*-link', uninstall)
@@ -161,6 +173,19 @@ class AnsibleInstallTests(unittest.TestCase):
         self.assertIn("ExecStart=/usr/local/sbin/proxnix-gc", service)
         self.assertIn("stale proxnix host state", service)
         self.assertIn("stale proxnix host state", timer)
+
+    def test_flake_update_service_uses_runtime_helper(self) -> None:
+        service = (
+            ROOT / "host" / "runtime" / "systemd" / "proxnix-flake-update.service"
+        ).read_text(encoding="utf-8")
+        timer = (
+            ROOT / "host" / "runtime" / "systemd" / "proxnix-flake-update.timer"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ExecStart=/usr/local/sbin/proxnix-flake-update", service)
+        self.assertIn("EnvironmentFile=-/etc/proxnix/flake-update.conf", service)
+        self.assertIn("OnCalendar=daily", timer)
+        self.assertIn("Persistent=true", timer)
 
     def test_guest_boot_activation_unit_is_in_base_nix(self) -> None:
         base_nix = (ROOT / "host" / "runtime" / "nix" / "base.nix").read_text(

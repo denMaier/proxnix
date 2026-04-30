@@ -13,7 +13,9 @@ Usage:
   ${SELF_NAME} --vmid <id> --rootfs </path/to/mounted/rootfs>
 
 Copies the host-built desired NixOS closure into a stopped container rootfs and
-stages /var/lib/proxnix/runtime/next-system for guest boot activation.
+sets the rootfs NixOS system profile so the container boots the desired system
+directly. It also stages /var/lib/proxnix/runtime/next-system as a compatibility
+marker for older boot activation flows.
 EOF
 }
 
@@ -79,6 +81,118 @@ mark_offline_seeded() {
   mv "$tmp" "$status_file"
 }
 
+profile_target_store_path() {
+  local profiles_dir="$1" link_path="$2" target generation_target
+  [[ -L "$link_path" ]] || return 1
+
+  target="$(readlink "$link_path")"
+  case "$target" in
+    /nix/store/*)
+      printf '%s\n' "$target"
+      return
+      ;;
+    /nix/var/nix/profiles/*)
+      target="${profiles_dir}/${target##*/}"
+      ;;
+    /*)
+      return 1
+      ;;
+    *)
+      target="${profiles_dir}/${target}"
+      ;;
+  esac
+
+  [[ -L "$target" ]] || return 1
+  generation_target="$(readlink "$target")"
+  case "$generation_target" in
+    /nix/store/*)
+      printf '%s\n' "$generation_target"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+next_system_generation_number() {
+  local profiles_dir="$1" max=0 path base n
+  shopt -s nullglob
+  for path in "${profiles_dir}"/system-*-link; do
+    base="${path##*/}"
+    n="${base#system-}"
+    n="${n%-link}"
+    if [[ "$n" =~ ^[0-9]+$ && "$n" -gt "$max" ]]; then
+      max="$n"
+    fi
+  done
+  shopt -u nullglob
+  printf '%s\n' "$((max + 1))"
+}
+
+rootfs_sbin_dir() {
+  local rootfs="$1" sbin_path="${rootfs}/sbin" target
+  if [[ -L "$sbin_path" ]]; then
+    target="$(readlink "$sbin_path")"
+    case "$target" in
+      /*)
+        printf '%s\n' "${rootfs}${target}"
+        ;;
+      *)
+        printf '%s\n' "${rootfs}/${target}"
+        ;;
+    esac
+    return
+  fi
+  printf '%s\n' "$sbin_path"
+}
+
+rootfs_init_points_to_profile() {
+  local rootfs="$1" sbin_dir init_path
+  sbin_dir="$(rootfs_sbin_dir "$rootfs")"
+  init_path="${sbin_dir}/init"
+  [[ -L "$init_path" ]] || return 1
+  [[ "$(readlink "$init_path")" == "/nix/var/nix/profiles/system/init" ]]
+}
+
+set_rootfs_system_profile() {
+  local rootfs="$1" desired_system="$2"
+  local profiles_dir="${rootfs}/nix/var/nix/profiles"
+  local gcroots_dir="${rootfs}/nix/var/nix/gcroots"
+  local generation generation_link generation_tmp current_profile sbin_dir init_path
+
+  [[ "$desired_system" == /nix/store/* ]] || die "desired system is not a store path: ${desired_system}"
+  [[ -x "${rootfs}${desired_system}/init" ]] || die "seeded system is missing init: ${desired_system}"
+
+  sbin_dir="$(rootfs_sbin_dir "$rootfs")"
+  mkdir -p "$profiles_dir" "$gcroots_dir" "$sbin_dir"
+
+  current_profile="$(profile_target_store_path "$profiles_dir" "${profiles_dir}/system" 2>/dev/null || true)"
+  if [[ "$current_profile" != "$desired_system" ]]; then
+    generation="$(next_system_generation_number "$profiles_dir")"
+    generation_link="${profiles_dir}/system-${generation}-link"
+    generation_tmp="${profiles_dir}/.system-${generation}-link.$$"
+    while [[ -e "$generation_link" || -e "$generation_tmp" ]]; do
+      generation="$((generation + 1))"
+      generation_link="${profiles_dir}/system-${generation}-link"
+      generation_tmp="${profiles_dir}/.system-${generation}-link.$$"
+    done
+
+    ln -s "$desired_system" "$generation_link"
+    ln -sfn "${generation_link##*/}" "${profiles_dir}/system"
+  fi
+
+  if [[ ! -e "${gcroots_dir}/profiles" && ! -L "${gcroots_dir}/profiles" ]]; then
+    ln -s /nix/var/nix/profiles "${gcroots_dir}/profiles"
+  fi
+
+  init_path="${sbin_dir}/init"
+  if [[ -e "$init_path" && ! -L "$init_path" ]]; then
+    [[ -f "$init_path" ]] || die "refusing to replace non-file ${init_path}"
+    rm -f "$init_path"
+  fi
+  ln -sfn /nix/var/nix/profiles/system/init "$init_path"
+}
+
 vmid=""
 rootfs=""
 while [[ $# -gt 0 ]]; do
@@ -131,7 +245,10 @@ if [[ "$last_build_status" != "ok" ]]; then
   printf '%s offline seed skipped build not ok\n' "$vmid"
   exit 0
 fi
-if [[ "$current_system" == "$desired_system" ]]; then
+profiles_dir="${rootfs}/nix/var/nix/profiles"
+profile_system="$(profile_target_store_path "$profiles_dir" "${profiles_dir}/system" 2>/dev/null || true)"
+
+if [[ "$current_system" == "$desired_system" && "$profile_system" == "$desired_system" ]] && rootfs_init_points_to_profile "$rootfs"; then
   rm -f "${rootfs}/var/lib/proxnix/runtime/next-system"
   printf '%s offline seed skipped current\n' "$vmid"
   exit 0
@@ -143,6 +260,7 @@ mkdir -p "$runtime_dir"
 
 nix copy --no-check-sigs --to "local?root=${rootfs}" "$desired_system"
 [[ -x "${rootfs}${desired_system}/bin/switch-to-configuration" ]] || die "seeded system is missing switch-to-configuration: ${desired_system}"
+set_rootfs_system_profile "$rootfs" "$desired_system"
 
 printf '%s\n' "$desired_system" > "${runtime_dir}/next-system"
 chmod 0644 "${runtime_dir}/next-system"

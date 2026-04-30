@@ -144,12 +144,12 @@ pct start 100
 At this point proxnix has already:
 
 1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/` and ran `proxnix-reconcile-build --vmid 100`
-2. Run the **mount hook** — copied the rendered build input into `/var/lib/proxnix/build-input/` with `rsync`, copied root-only secret files into `/var/lib/proxnix/secrets/`, and ran `proxnix-reconcile-seed-offline --vmid 100 --rootfs <mounted-rootfs>`
-3. Run the guest **`proxnix-boot-activate.service`** — activated the staged `next-system` and verified `/run/current-system`
+2. Run the **mount hook** — copied the rendered build input into `/var/lib/proxnix/build-input/` with `rsync`, copied root-only secret files into `/var/lib/proxnix/secrets/`, ran `proxnix-reconcile-seed-offline --vmid 100 --rootfs <mounted-rootfs>`, and advanced the rootfs NixOS system profile
+3. Booted the desired system directly and verified `/run/current-system`
 4. Removed any legacy guest-side `proxnix-apply-config` service files
 
 The Proxmox node owns builds and seeding. A stopped container activates the
-preseeded closure during boot; a running container can still be reconciled
+preseeded closure by booting its system profile directly; a running container can still be reconciled
 explicitly from the host.
 
 ## 4. Deploy the desired system
@@ -162,9 +162,10 @@ proxnix-reconcile --vmid 100
 ```
 
 The host evaluates the generated authority, builds the desired NixOS closure,
-imports it into the running CT without guest networking, activates the exact
-system path, and records status under `/var/lib/proxnix/status/100.json`. The
-same per-VMID running-CT path is also available as `systemctl start
+copies it into the running CT through a temporary bridge to the CT's Nix daemon,
+activates the exact system path, and records status under
+`/var/lib/proxnix/status/100.json`. The same per-VMID running-CT path is also
+available as `systemctl start
 proxnix-reconcile@100.service`.
 
 If the CT is already running the evaluated desired system, the command exits as
@@ -177,7 +178,7 @@ If activation fails, check:
 
 - Did the host build complete? (`proxnix-reconcile --status --vmid 100`)
 - Did offline seeding complete in the mount hook logs?
-- Did `proxnix-boot-activate.service` revert to `previous-system`?
+- Does `/nix/var/nix/profiles/system` in the CT point at the desired system?
 
 You can test the copied build input manually inside the guest if needed:
 

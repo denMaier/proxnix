@@ -45,7 +45,7 @@ There are four main layers:
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
 2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
 3. **Host authority and build**: the Proxmox node renders a local authority wrapper, evaluates the desired CT system, and builds the NixOS closure
-4. **Seed and activation**: a stopped CT is seeded during the LXC mount hook and activates the exact system path on guest boot; a running CT can be seeded and activated explicitly with `proxnix-reconcile`
+4. **Seed and activation**: a stopped CT is seeded during the LXC mount hook and boots the exact system path directly; a running CT can be seeded through its Nix daemon and activated explicitly with `proxnix-reconcile`
 
 ## The guest is not a black box
 
@@ -70,16 +70,15 @@ While the host is the *source of truth* for your declarative config, the guest i
 │                                         ▼                       │
 │                              ┌─────────────────────┐            │
 │                              │  mount hook          │            │
-│                              │  sync + seed rootfs  │            │
+│                              │  seed + set profile  │            │
 │                              └──────────┬──────────┘            │
 │                                         │                       │
 ├─────────────────────────────────────────┼───────────────────────┤
 │                     Guest (NixOS LXC)   │                       │
 │                                         ▼                       │
 │                              ┌─────────────────────┐            │
-│                              │  boot activate unit  │            │
-│                              │  switch next-system  │            │
-│                              │  verify or revert    │            │
+│                              │  boot desired system │            │
+│                              │  directly            │            │
 │                              └─────────────────────┘            │
 └─────────────────────────────────────────────────────────────────┘
 ```

@@ -95,7 +95,7 @@ import any shared container module layer, such as `quadlet-nix`, from
 
 ## Generated files
 
-`pve-conf-to-nix.py` generates:
+`proxnix-host pve-conf-to-nix` generates:
 
 - `proxmox.nix`
 

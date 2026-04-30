@@ -166,7 +166,6 @@ check_host_files() {
       "$LXC_CONFIG_DIR/nixos.userns.conf" \
       "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
       "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
-      "$PROXNIX_LIB_DIR/proxnix_authority_render.py" \
       "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
@@ -341,6 +340,15 @@ check_container() {
     else
       warn "reconciler status file exists but desiredSystem is missing: ${status_file}"
     fi
+  fi
+
+  # The host-side reconciler streams incremental closures into the running guest
+  # via socat → /nix/var/nix/daemon-socket/socket. If the daemon socket is not
+  # present, only full offline reseeds (mount hook) work; online deltas fail.
+  if guest_test "$vmid" -S /nix/var/nix/daemon-socket/socket >/dev/null 2>&1; then
+    ok "guest nix-daemon socket reachable at /nix/var/nix/daemon-socket/socket"
+  else
+    fail "guest nix-daemon socket missing at /nix/var/nix/daemon-socket/socket; host online closure transfer cannot connect"
   fi
 
   for guest_file in \

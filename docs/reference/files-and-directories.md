@@ -23,12 +23,11 @@ This page maps every important proxnix path by role.
 | `ci/render-homebrew-cask.sh` | Renders a concrete Homebrew cask for Proxnix Manager from the template |
 | `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `proxnix-workstation` from the template |
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/cli/pyproject.toml` |
-| `host/runtime/lib/pve-conf-to-nix.py` | Renders `proxmox.nix` from Proxmox LXC config |
-| `host/runtime/lib/proxnix_authority_render.py` | Renders the generated host authority wrapper |
-| `host/runtime/lib/proxnix_reconciler_state.py` | Node-local SQLite journal helper for reconciler state |
+| `host/rust/` | Rust source for the `proxnix-host` controller binary |
 | `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
 | `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
 | `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
+| `host/runtime/bin/proxnix-flake-update` | Host-side flake lock updater |
 | `host/runtime/bin/proxnix-gc` | Host-side stale stage-dir and deployment GC-root pruner |
 | `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
 | `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
@@ -37,6 +36,9 @@ This page maps every important proxnix path by role.
 | `host/runtime/bin/proxnix-reconcile-seed-offline` | Stopped-CT rootfs seed phase command |
 | `host/runtime/bin/proxnix-reconcile-activate` | Host-side activate phase command |
 | `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
+| `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
+| `host/runtime/systemd/proxnix-flake-update.service` | Host-side flake lock update service |
+| `host/runtime/systemd/proxnix-flake-update.timer` | Daily timer that gates daily, weekly, or monthly flake updates |
 | `host/runtime/systemd/proxnix-reconcile.service` | Explicit all-local-container reconcile service |
 | `host/runtime/systemd/proxnix-reconcile@.service` | Explicit per-VMID running-CT reconcile service |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
@@ -100,7 +102,9 @@ Current top-level layout:
 
 ## Node-local host paths
 
-These paths are the published host-side state on the Proxmox node. The workstation-owned site repo is the source of truth.
+These paths are the published host-side state on the Proxmox node. The
+workstation-owned site repo is the source of truth for configuration; the flake
+lock can also be advanced on the host by `proxnix-flake-update`.
 
 ```text
 /var/lib/proxnix/
@@ -108,12 +112,13 @@ These paths are the published host-side state on the Proxmox node. The workstati
 ├── common.nix                         shared operator module
 ├── security-policy.nix                host-enforced security policy
 ├── configuration.nix                  NixOS entrypoint
-├── flake.lock                         optional published Nix input lock
+├── flake.lock                         host-managed Nix input lock
 ├── site.nix                           published site override
 ├── authority/                         generated host authority flake wrapper
 ├── status/                            reconciler status JSON
 ├── state/
-│   └── proxnix-reconciler.sqlite      node-local reconciliation journal
+│   ├── proxnix-reconciler.sqlite      node-local reconciliation journal
+│   └── flake-update.last-success      last successful flake update timestamp
 ├── gcroots/
 │   └── deploy/
 │       └── <vmid>-desired             host GC root for desired closure
@@ -151,18 +156,17 @@ for the local manifest and install metadata.
 └── nixos-proxnix-poststop             post-stop cleanup hook
 
 /usr/local/lib/proxnix/
-├── pve-conf-to-nix.py                 local runtime helper
-├── proxnix_authority_render.py        authority renderer library
-├── proxnix_reconciler_state.py        reconciler SQLite journal helper
 ├── nixos-proxnix-common.sh            shared hook helper
 ├── proxnix-secrets-guest              helper injected into guests
 ├── install-manifest.txt               installed-file manifest
 └── install-info.txt                   local install metadata
 
 /usr/local/sbin/
+├── proxnix-host                       Rust host controller
 ├── proxnix-authority-render           authority wrapper renderer
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
+├── proxnix-flake-update               flake lock updater
 ├── proxnix-gc                         stale state and GC-root pruner
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build-golden     golden-template build warmer
@@ -170,7 +174,7 @@ for the local manifest and install metadata.
 ├── proxnix-reconcile-seed             seed phase command
 ├── proxnix-reconcile-seed-offline     stopped-CT rootfs seed phase command
 ├── proxnix-reconcile-activate         activate phase command
-├── proxnix-reconciler-state           local state journal helper
+├── proxnix-reconciler-state           compatibility wrapper for `proxnix-host state`
 ├── proxnix-host-activate              links the Nix profile payload into host paths
 ├── proxnix-host-uninstall             local uninstall helper
 └── proxnix-uninstall                  compatibility alias

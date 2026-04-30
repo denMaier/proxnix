@@ -64,7 +64,7 @@ link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-mount" "$LXC_H
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-poststop" "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
 
 rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
-link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix_authority_render.py" "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
+rm -f "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"
 link_file "$PROXNIX_PROFILE/lib/proxnix/nixos-proxnix-common.sh" "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
@@ -75,6 +75,7 @@ for command in \
     proxnix-create-lxc \
     proxnix-doctor \
     proxnix-host \
+    proxnix-flake-update \
     proxnix-gc \
     proxnix-reconcile \
     proxnix-reconcile-build-golden \
@@ -96,6 +97,8 @@ done
 
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-gc.service" "$SYSTEMD_UNIT_DIR/proxnix-gc.service"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-gc.timer" "$SYSTEMD_UNIT_DIR/proxnix-gc.timer"
+link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.service" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.service"
+link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.timer" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile@.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service"
 
@@ -110,7 +113,6 @@ $LXC_CONFIG_DIR/nixos.userns.conf
 $LXC_HOOKS_DIR/nixos-proxnix-prestart
 $LXC_HOOKS_DIR/nixos-proxnix-mount
 $LXC_HOOKS_DIR/nixos-proxnix-poststop
-$PROXNIX_LIB_DIR/proxnix_authority_render.py
 $PROXNIX_LIB_DIR/nixos-proxnix-common.sh
 $PROXNIX_LIB_DIR/proxnix-secrets-guest
 $PROXNIX_INSTALL_MANIFEST
@@ -119,6 +121,7 @@ $PROXNIX_SBIN_DIR/proxnix-doctor
 $PROXNIX_SBIN_DIR/proxnix-create-lxc
 $PROXNIX_SBIN_DIR/proxnix-authority-render
 $PROXNIX_SBIN_DIR/proxnix-host
+$PROXNIX_SBIN_DIR/proxnix-flake-update
 $PROXNIX_SBIN_DIR/proxnix-gc
 $PROXNIX_SBIN_DIR/proxnix-reconcile
 $PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden
@@ -135,6 +138,8 @@ $PROXNIX_LOCAL_BIN_DIR/jq
 $PROXNIX_LOCAL_BIN_DIR/rsync
 $PROXNIX_LOCAL_BIN_DIR/sops
 $PROXNIX_PROFILE
+$SYSTEMD_UNIT_DIR/proxnix-flake-update.service
+$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer
 $SYSTEMD_UNIT_DIR/proxnix-gc.service
 $SYSTEMD_UNIT_DIR/proxnix-gc.timer
 $SYSTEMD_UNIT_DIR/proxnix-reconcile.service
@@ -157,6 +162,7 @@ Installed local commands:
 - proxnix-create-lxc
 - proxnix-doctor
 - proxnix-host
+- proxnix-flake-update
 - proxnix-gc
 - proxnix-reconcile
 - proxnix-reconcile-build-golden
@@ -186,5 +192,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now proxnix-gc.timer
+systemctl enable --now proxnix-flake-update.timer
 
 echo "proxnix host runtime activated from $PROXNIX_PROFILE"

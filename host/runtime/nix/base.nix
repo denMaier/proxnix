@@ -101,14 +101,25 @@ let
     printf '  Root FS:     %s\n\n' "''${fs_type:-unknown}"
 
     printf 'Host-built system\n'
-    printf '  Build input: /var/lib/proxnix/build-input/ (debug snapshot)\n'
+    printf '  Build input: /var/lib/proxnix/build-input/ (snapshot + sandbox)\n'
     printf '  Runtime:     ${proxnixRuntimeBinDir}/* on PATH\n'
-    printf '  Local hook:  /etc/nixos/local.nix (guest-only debugging)\n'
     if [ -n "$current" ]; then
       printf '  Hash:        %s (diagnostic; host reconciler owns activation)\n\n' "$current"
     else
       printf '  Hash:        unavailable\n\n'
     fi
+
+    printf 'Ephemeral by design\n'
+    printf '  Anything you change inside this CT — nixos-rebuild, /etc edits,\n'
+    printf '  podman secret create, systemctl edit — is reverted on the next host\n'
+    printf '  reconcile or container restart. Promote successful changes to your\n'
+    printf '  site repo so the host owns the durable state.\n\n'
+
+    printf 'Sandbox (safe experiments)\n'
+    printf '  echo "...nix..." > /var/lib/proxnix/build-input/local.nix\n'
+    printf '  nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix\n'
+    printf '  build-input is rewritten on container start, so save your work\n'
+    printf '  into the site repo before restarting.\n\n'
 
     printf 'Workloads\n'
     printf '  Guest-owned services and containers are compiled into the host-built system closure\n'
@@ -123,11 +134,11 @@ let
     printf '  systemctl       status podman-NAME.service\n'
     printf '\n'
 
-    printf 'Secrets\n'
+    printf 'Secrets (read-only inside CT)\n'
     printf '  proxnix-secrets ls\n'
     printf '  proxnix-secrets get NAME\n'
-    printf '  proxnix-secrets set NAME\n'
-    printf '  native services read proxnix-managed secrets from their configured paths\n\n'
+    printf '  set/rotate via the workstation CLI; native services read managed\n'
+    printf '  secrets from their configured paths.\n\n'
 
   '';
 in {
@@ -360,17 +371,25 @@ in {
     ========
 
     Host-built system
-      /var/lib/proxnix/build-input/  debug snapshot
+      /var/lib/proxnix/build-input/  snapshot of evaluated input + sandbox
       ${proxnixRuntimeBinDir}/* on PATH
-      /etc/nixos/local.nix  guest-only debugging
+
+    Ephemeral by design
+      Anything you change in here — nixos-rebuild, /etc edits, podman secret
+      create — is reverted on the next host reconcile or container restart.
+      Promote durable changes to your site repo.
+
+    Safe experiments
+      echo "...nix..." > /var/lib/proxnix/build-input/local.nix
+      nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix
 
     Workloads
       guest-owned services and containers are compiled into the active closure
 
-    Secrets
+    Secrets (read-only inside CT)
       proxnix-secrets ls
       proxnix-secrets get NAME
-      proxnix-secrets set NAME
+      set/rotate via the workstation CLI
 
     Live state
       proxnix-help               full status and commands
