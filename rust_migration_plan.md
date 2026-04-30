@@ -45,27 +45,33 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Ported authority rendering into `proxnix-host authority render`.
 - [x] Replaced `proxnix-authority-render` with a thin Rust dispatch wrapper.
 - [x] Removed the Python `proxnix_authority_render.py` implementation.
+- [x] Ported LXC prestart, mount, and poststop hook internals into
+  `proxnix-host hook`.
+- [x] Replaced LXC hook scripts with thin dispatch wrappers.
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint is `Port authority rendering
-to Rust`. The last two committed migration steps are:
+As of 2026-04-30, the latest migration checkpoint in progress is `Port LXC hook
+internals to Rust`. The last two committed migration steps are:
 
 - `e709be4 Port reconciler state to Rust`
 - `Port authority rendering to Rust`
 
 The current migration batch includes:
 
-- Rust authority rendering in `host/rust/src/main.rs`, including
-  `proxnix-host authority render` and replacement tests for the deleted Python
-  authority renderer.
-- `host/runtime/bin/proxnix-authority-render` as a thin dispatch wrapper to
-  `proxnix-host authority render`.
-- Deletion of `host/runtime/lib/proxnix_authority_render.py` and
-  `host/tests/test_authority_render.py`.
-- Host activation, doctor, packaging, uninstall, reconcile, build-golden,
-  mount-hook, and docs updates so shipped host paths no longer rely on deleted
-  Python helpers.
+- Rust hook handling in `host/rust/src/main.rs`, including
+  `proxnix-host hook prestart`, `proxnix-host hook mount`, and
+  `proxnix-host hook poststop`.
+- `host/runtime/lxc/hooks/nixos-proxnix-prestart`,
+  `host/runtime/lxc/hooks/nixos-proxnix-mount`, and
+  `host/runtime/lxc/hooks/nixos-proxnix-poststop` as thin dispatch wrappers.
+- Replacement Rust tests for LXC hook argument parsing, post-stop stage cleanup,
+  relay identity payload parsing, and Proxmox host-root UID detection.
+- Host install and docs updates so shipped LXC hook paths describe and assert
+  the Rust hook controller surface.
+- Previous authority rendering migration remains in the batch history:
+  `proxnix-host authority render`, the thin `proxnix-authority-render` wrapper,
+  and deletion of the Python authority renderer.
 - Broader in-progress host runtime changes around closure seeding, gcroots,
   `nix copy`, offline seed profile repair, and flake update.
 - Flake update files:
@@ -79,7 +85,7 @@ The current migration batch includes:
 Verification run for the current migration batch:
 
 - `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clang -c cargo test`
-  passed with 14 Rust tests.
+  passed with 18 Rust tests.
 - `python -m unittest discover host/tests` passed with 39 host tests.
 - `PYTHONPATH=workstation/cli/src python -m unittest discover workstation/cli/tests`
   passed with 89 workstation tests.
@@ -99,16 +105,16 @@ Generated verification artifacts were removed after the run:
 
 ### Hook Layer
 
-- [ ] `host/runtime/lxc/hooks/nixos-proxnix-prestart`
-- [ ] `host/runtime/lxc/hooks/nixos-proxnix-mount`
-- [ ] `host/runtime/lxc/hooks/nixos-proxnix-poststop`
+- [x] `host/runtime/lxc/hooks/nixos-proxnix-prestart`
+- [x] `host/runtime/lxc/hooks/nixos-proxnix-mount`
+- [x] `host/runtime/lxc/hooks/nixos-proxnix-poststop`
 - [ ] `host/runtime/lxc/hooks/nixos-proxnix-common.sh`
 
 Target: keep tiny shell entrypoints only where LXC requires shell/script files, and move logic into:
 
-- [ ] `proxnix-host hook prestart`
-- [ ] `proxnix-host hook mount`
-- [ ] `proxnix-host hook poststop`
+- [x] `proxnix-host hook prestart`
+- [x] `proxnix-host hook mount`
+- [x] `proxnix-host hook poststop`
 
 ### Controller Commands
 
@@ -169,7 +175,7 @@ Target:
 3. [x] Port Podman secrets reconciliation, because it is bounded and file-oriented.
 4. [x] Port reconciler state, including SQLite schema and CLI.
 5. [x] Port authority rendering.
-6. [ ] Move hook internals into Rust subcommands and leave thin hook entrypoints.
+6. [x] Move hook internals into Rust subcommands and leave thin hook entrypoints.
 7. [ ] Port GC and flake-update.
 8. [ ] Port seed/build/activate helpers.
 9. [ ] Port main reconcile orchestration.
@@ -184,7 +190,7 @@ Target:
 - [x] `nix build .#proxnix-host-rust` succeeds locally.
 - [x] `nix eval .#packages.x86_64-linux.proxnix-host.name` succeeds for Linux package shape.
 - [x] Host install tests assert only the intended runtime files are shipped.
-- [ ] Hook tests or harnesses exercise the same entrypoints used by Proxmox.
+- [x] Hook tests or harnesses exercise the same entrypoints used by Proxmox.
 - [x] Reconcile tests prove locality checks still run immediately before mutating CTs.
 
 ## Open Decisions

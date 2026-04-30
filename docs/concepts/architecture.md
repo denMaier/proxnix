@@ -51,15 +51,19 @@ That gives proxnix these properties:
 
 ### 1. Proxmox starts a NixOS CT
 
-When `ostype=nixos`, Proxmox auto-includes the proxnix LXC config snippets. Those register two hooks:
+When `ostype=nixos`, Proxmox auto-includes the proxnix LXC config snippets. Those register three thin hook entrypoints:
 
 - `nixos-proxnix-prestart`
 - `nixos-proxnix-mount`
+- `nixos-proxnix-poststop`
 
 Local harnesses should invoke those same scripts directly rather than
-reimplementing their behavior. `nixos-proxnix-prestart` accepts
-`--vmid/--pve-conf`, and `nixos-proxnix-mount` accepts `--vmid/--rootfs`, so a
-test VM can drive the exact render/apply path without drifting from production.
+reimplementing their behavior. The scripts dispatch to
+`proxnix-host hook prestart`, `proxnix-host hook mount`, and
+`proxnix-host hook poststop`. `nixos-proxnix-prestart` accepts
+`--vmid/--pve-conf`, and `nixos-proxnix-mount` accepts `--vmid/--rootfs`, so
+a test VM can drive the exact render/apply path without drifting from
+production.
 
 ### 2. Pre-start hook renders desired state
 
@@ -80,8 +84,8 @@ Important stage subtrees:
 | `bind/secrets/` | Compiled encrypted per-container runtime store plus staged identity |
 | `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
 
-The pre-start hook copies the node-local managed Nix files, runs
-`proxnix-host pve-conf-to-nix`, pulls in host-side drop-ins, stages the compiled
+`proxnix-host hook prestart` copies the node-local managed Nix files, renders
+the Proxmox CT config, pulls in host-side drop-ins, stages the compiled
 per-container runtime store plus the container identity, and computes a hash of
 the rendered managed tree.
 

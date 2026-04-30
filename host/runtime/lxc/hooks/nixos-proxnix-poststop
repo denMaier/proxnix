@@ -1,46 +1,5 @@
 #!/bin/bash
-# LXC post-stop hook: remove any proxnix staging artefacts left for this container.
-#
-# The mount hook leaves the staging dir in place for the container lifetime
-# because read-only bind mounts may use it as their source. This hook removes
-# that staged state after the container stops, and also covers the case where
-# the container failed to start after pre-start rendered the tree.
-
 set -euo pipefail
 
-VMID="${LXC_NAME:-${1:-}}"
-PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
-COMMON_LIB="${PROXNIX_LIB_DIR}/nixos-proxnix-common.sh"
-
-log() {
-    local message="[proxnix-poststop][${VMID:-unknown}] $*"
-    echo "$message" >&2
-    if command -v logger >/dev/null 2>&1; then
-        logger -t proxnix-poststop -- "$message"
-    fi
-}
-
-if [[ -z "$VMID" ]]; then
-    exit 0
-fi
-
-if [[ ! -f "$COMMON_LIB" ]]; then
-    log "ERROR: ${COMMON_LIB} not found."
-    exit 1
-fi
-
-# shellcheck source=/dev/null
-source "$COMMON_LIB"
-
-if ! proxnix_validate_vmid "$VMID"; then
-    log "ERROR: invalid VMID: ${VMID}"
-    exit 1
-fi
-
-STAGE_DIR="$(proxnix_stage_dir "$VMID")"
-if [[ -d "$STAGE_DIR" ]]; then
-    rm -rf "$STAGE_DIR"
-    log "Removed staged state at ${STAGE_DIR}."
-else
-    log "No staged state to remove at ${STAGE_DIR}."
-fi
+PROXNIX_HOST_BIN="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
+exec "$PROXNIX_HOST_BIN" hook poststop "$@"

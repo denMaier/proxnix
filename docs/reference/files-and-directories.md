@@ -151,12 +151,12 @@ for the local manifest and install metadata.
 └── nixos.userns.conf                  auto-included for unprivileged
 
 /usr/share/lxc/hooks/
-├── nixos-proxnix-prestart             pre-start render hook; also supports direct `--vmid/--pve-conf` invocation
-├── nixos-proxnix-mount                mount-time sync hook; also supports direct `--vmid/--rootfs` invocation
-└── nixos-proxnix-poststop             post-stop cleanup hook
+├── nixos-proxnix-prestart             thin wrapper for `proxnix-host hook prestart`
+├── nixos-proxnix-mount                thin wrapper for `proxnix-host hook mount`
+└── nixos-proxnix-poststop             thin wrapper for `proxnix-host hook poststop`
 
 /usr/local/lib/proxnix/
-├── nixos-proxnix-common.sh            shared hook helper
+├── nixos-proxnix-common.sh            compatibility helper retained during host migration
 ├── proxnix-secrets-guest              helper injected into guests
 ├── install-manifest.txt               installed-file manifest
 └── install-info.txt                   local install metadata

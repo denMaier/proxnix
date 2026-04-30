@@ -162,6 +162,21 @@ Create an annotated release tag and optionally push it:
 This expects the tag version to match both `VERSION` and
 `workstation/cli/pyproject.toml`.
 
+### `proxnix-host`
+
+Rust host controller for migrated host-side behavior. Current subcommands
+include:
+
+```bash
+proxnix-host pve-conf-to-nix --pve-conf /etc/pve/lxc/101.conf --out-dir /tmp/out
+proxnix-host authority render
+proxnix-host hook prestart --vmid 101
+proxnix-host hook mount --vmid 101 --rootfs /path/to/rootfs
+proxnix-host hook poststop --vmid 101
+proxnix-host reconcile podman-secrets --rootfs /path/to/rootfs --vmid 101 --secrets-dir /path/to/secrets
+proxnix-host state init
+```
+
 ### `proxnix-host-activate`
 
 Activate the Nix-installed proxnix host profile on a Proxmox node. It creates
