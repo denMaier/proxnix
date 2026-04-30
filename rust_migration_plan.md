@@ -48,11 +48,15 @@ Keep these as non-Rust configuration and packaging surfaces:
 - [x] Ported LXC prestart, mount, and poststop hook internals into
   `proxnix-host hook`.
 - [x] Replaced LXC hook scripts with thin dispatch wrappers.
+- [x] Ported `proxnix-gc` into `proxnix-host gc`.
+- [x] Replaced `proxnix-gc` with a thin Rust dispatch wrapper.
+- [x] Ported `proxnix-flake-update` into `proxnix-host flake-update`.
+- [x] Replaced `proxnix-flake-update` with a thin Rust dispatch wrapper.
 
 ## Current Status
 
-As of 2026-04-30, the latest migration checkpoint in progress is `Port LXC hook
-internals to Rust`. The last two committed migration steps are:
+As of 2026-04-30, the latest migration checkpoint in progress is `Port GC and
+flake update to Rust`. The last two committed migration steps are:
 
 - `e709be4 Port reconciler state to Rust`
 - `Port authority rendering to Rust`
@@ -62,9 +66,16 @@ The current migration batch includes:
 - Rust hook handling in `host/rust/src/main.rs`, including
   `proxnix-host hook prestart`, `proxnix-host hook mount`, and
   `proxnix-host hook poststop`.
+- Rust GC handling in `host/rust/src/gc.rs`, including `proxnix-host gc` and
+  replacement tests for stale stage and GC-root pruning.
+- Rust flake update handling in `host/rust/src/flake_update.rs`, including
+  `proxnix-host flake-update` and replacement tests for frequency gating, input
+  forwarding, lock persistence, and root lock propagation.
 - `host/runtime/lxc/hooks/nixos-proxnix-prestart`,
   `host/runtime/lxc/hooks/nixos-proxnix-mount`, and
   `host/runtime/lxc/hooks/nixos-proxnix-poststop` as thin dispatch wrappers.
+- `host/runtime/bin/proxnix-gc` and `host/runtime/bin/proxnix-flake-update` as
+  thin dispatch wrappers.
 - Replacement Rust tests for LXC hook argument parsing, post-stop stage cleanup,
   relay identity payload parsing, and Proxmox host-root UID detection.
 - Host install and docs updates so shipped LXC hook paths describe and assert
@@ -85,8 +96,8 @@ The current migration batch includes:
 Verification run for the current migration batch:
 
 - `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clang -c cargo test`
-  passed with 18 Rust tests.
-- `python -m unittest discover host/tests` passed with 39 host tests.
+  passed with 23 Rust tests.
+- `python -m unittest discover host/tests` passed with 35 host tests.
 - `PYTHONPATH=workstation/cli/src python -m unittest discover workstation/cli/tests`
   passed with 89 workstation tests.
 - `nix build --no-link --print-out-paths .#proxnix-host-rust` passed.
@@ -125,8 +136,8 @@ Target: keep tiny shell entrypoints only where LXC requires shell/script files, 
 - [ ] `proxnix-reconcile-seed-offline`
 - [ ] `proxnix-reconcile-activate`
 - [ ] `proxnix-create-lxc`
-- [ ] `proxnix-gc`
-- [ ] `proxnix-flake-update`
+- [x] `proxnix-gc`
+- [x] `proxnix-flake-update`
 - [x] `proxnix-authority-render`
 - [x] `proxnix-reconciler-state`
 
@@ -139,8 +150,8 @@ Target: make these subcommands of `proxnix-host`, then decide whether old comman
 - [ ] `proxnix-host reconcile seed-offline`
 - [ ] `proxnix-host reconcile activate`
 - [ ] `proxnix-host create-lxc`
-- [ ] `proxnix-host gc`
-- [ ] `proxnix-host flake-update`
+- [x] `proxnix-host gc`
+- [x] `proxnix-host flake-update`
 - [x] `proxnix-host authority render`
 - [x] `proxnix-host state`
 
@@ -176,7 +187,7 @@ Target:
 4. [x] Port reconciler state, including SQLite schema and CLI.
 5. [x] Port authority rendering.
 6. [x] Move hook internals into Rust subcommands and leave thin hook entrypoints.
-7. [ ] Port GC and flake-update.
+7. [x] Port GC and flake-update.
 8. [ ] Port seed/build/activate helpers.
 9. [ ] Port main reconcile orchestration.
 10. [ ] Port or intentionally preserve doctor.

@@ -166,8 +166,8 @@ for the local manifest and install metadata.
 ├── proxnix-authority-render           authority wrapper renderer
 ├── proxnix-create-lxc                 CT creation helper
 ├── proxnix-doctor                     health check tool
-├── proxnix-flake-update               flake lock updater
-├── proxnix-gc                         stale state and GC-root pruner
+├── proxnix-flake-update               wrapper for `proxnix-host flake-update`
+├── proxnix-gc                         wrapper for `proxnix-host gc`
 ├── proxnix-reconcile                  host-side reconciler
 ├── proxnix-reconcile-build-golden     golden-template build warmer
 ├── proxnix-reconcile-build            build phase command

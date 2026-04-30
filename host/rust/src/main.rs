@@ -12,6 +12,9 @@ use std::process::{self, Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+mod flake_update;
+mod gc;
+
 type HostResult<T> = Result<T, Box<dyn Error>>;
 
 fn main() {
@@ -25,6 +28,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("pve-conf-to-nix") => pve_conf_to_nix_main(&args[2..]),
         Some("authority") => authority_main(&args[2..]),
+        Some("flake-update") => flake_update::main(&args[2..]),
+        Some("gc") => gc::main(&args[2..]),
         Some("hook") => hook_main(&args[2..]),
         Some("reconcile") => reconcile_main(&args[2..]),
         Some("state") => state_main(&args[2..]),
@@ -50,6 +55,8 @@ fn print_usage() {
 Usage:
   proxnix-host pve-conf-to-nix --pve-conf <path> --out-dir <dir>
   proxnix-host authority render --root <dir> --authority <dir> --pve-lxc-dir <dir> --node-name <name>
+  proxnix-host flake-update [--force] [--frequency daily|weekly|monthly|disabled] [--input <name>] [input ...]
+  proxnix-host gc [--dry-run]
   proxnix-host hook prestart [--vmid <vmid>] [--pve-conf <path>]
   proxnix-host hook mount [--vmid <vmid>] [--rootfs <path>]
   proxnix-host hook poststop [--vmid <vmid>]
@@ -3231,14 +3238,14 @@ mod tests {
     use std::sync::Mutex;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    struct TestTemp {
+    pub(crate) struct TestTemp {
         path: PathBuf,
     }
 
     impl TestTemp {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let path = env::temp_dir().join(format!(
                 "proxnix-host-test-{}-{}",
                 process::id(),
@@ -3249,7 +3256,7 @@ mod tests {
             Self { path }
         }
 
-        fn path(&self) -> &Path {
+        pub(crate) fn path(&self) -> &Path {
             &self.path
         }
     }

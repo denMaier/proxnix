@@ -321,6 +321,7 @@ include `noop-current`, `build-failed`, `lost-locality`, `failed`, and `ok`.
 ### `proxnix-gc`
 
 Prune host-side transient state without deleting useful local build cache roots.
+This installed command is a compatibility wrapper for `proxnix-host gc`.
 The command removes copied pre-start stage directories under `/run/proxnix/`,
 keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
 `<vmid>-desired` roots for CTs still present on this host, and removes
@@ -338,7 +339,8 @@ manual recovery after checking those roots.
 
 ### `proxnix-flake-update`
 
-Update the host-managed authority flake lock. The command renders
+Update the host-managed authority flake lock. This installed command is a
+compatibility wrapper for `proxnix-host flake-update`. It renders
 `/var/lib/proxnix/authority`, runs `nix flake update --flake
 /var/lib/proxnix/authority`, copies the resulting
 `/var/lib/proxnix/authority/flake.lock` back to `/var/lib/proxnix/flake.lock`,
