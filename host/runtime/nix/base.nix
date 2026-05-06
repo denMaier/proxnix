@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, modulesPath, nixpkgs-unstable ? null, pkgs, ... }:
 
 let
   proxnixStateDir = "/var/lib/proxnix";
@@ -143,17 +143,15 @@ let
   '';
 in {
   imports = [
-    <nixpkgs/nixos/modules/virtualisation/proxmox-lxc.nix>
+    (modulesPath + "/virtualisation/proxmox-lxc.nix")
   ];
 
-  nixpkgs.overlays = [
-    (final: prev: {
-      unstable = import <nixpkgs-unstable> {
-        inherit (prev) config;
-        inherit (prev.stdenv.hostPlatform) system;
-      };
-    })
-  ];
+  nixpkgs.overlays = lib.optional (nixpkgs-unstable != null) (final: prev: {
+    unstable = import nixpkgs-unstable {
+      inherit (prev) config;
+      inherit (prev.stdenv.hostPlatform) system;
+    };
+  });
 
   # Shared cross-container operator baseline translated from the legacy
   # Ansible bootstrap: admin user defaults, journald caps, timesync,
@@ -235,7 +233,8 @@ in {
   environment.systemPackages = [
     pkgs.age
     pkgs.sops
-    pkgs.python3Minimal
+    pkgs.socat
+    pkgs.jq
     proxnixBootActivate
     proxnixHelp
   ];
@@ -244,7 +243,7 @@ in {
     PROXNIX_GUEST_SECRET_DIR = proxnixSecretDir;
   };
 
-  # Ensure the guest-owned proxnix layout exists. Host-side proxnix-reconcile
+  # Ensure the guest-owned proxnix layout exists. Host-side `proxnix-host reconcile`
   # owns builds and seeding; this boot unit only activates a preseeded closure.
   system.activationScripts.proxnix-runtime-setup = lib.stringAfter [ "etc" ] ''
     set -eu
@@ -279,9 +278,9 @@ in {
   };
 
   # Wire the proxnix helper as the system-wide Podman secret backend.
-  # The mount hook pre-registers all proxnix-managed secrets in Podman's
-  # metadata (secrets.json) so `podman run --secret name` works immediately
-  # after container start without any manual `podman secret create` step.
+  # Reconciliation copies proxnix-managed secret material into
+  # /var/lib/proxnix/secrets so `podman run --secret name` can resolve through
+  # the shell driver without any manual `podman secret create` step.
   environment.etc."containers/containers.conf.d/proxnix-secrets.conf" = {
     mode = "0644";
     text = ''

@@ -4,7 +4,6 @@ This tree owns the Proxmox host install and runtime layer.
 
 ```text
 host/
-  uninstall.sh        Stable local uninstall entrypoint
   install/            Uninstall implementation copied to hosts
   runtime/            Source payload installed onto Proxmox nodes
   deploy/             Ansible playbooks and example inventory
@@ -16,13 +15,17 @@ host/
 ```text
 runtime/
   lxc/config/         LXC config snippets
-  lxc/hooks/          Proxmox/LXC lifecycle hooks
   lib/                Host-side helper scripts installed under /usr/local/lib/proxnix
   bin/                Host admin commands installed under /usr/local/sbin
   nix/                Shared managed NixOS modules installed under /var/lib/proxnix
   systemd/            Proxnix-owned systemd units installed under /etc/systemd/system
 ```
 
-Install host runtime files with `host/deploy/ansible/install.yml`. Keep
-`host/uninstall.sh` stable as the repo-local source for the `proxnix-uninstall`
-helper installed by Ansible.
+The Rust host controller lives in `../crates/proxnix-host`. The host package
+installs it as `/usr/local/sbin/proxnix-host`; systemd units dispatch directly
+into that binary. Proxnix registers one narrow LXC `start-host` hook for
+pre-init payload refresh and idempotent closure copy.
+
+Install host runtime files with `host/deploy/ansible/install.yml`. The
+uninstall implementation in `host/install/uninstall.sh` is installed as
+`proxnix-host-uninstall`.

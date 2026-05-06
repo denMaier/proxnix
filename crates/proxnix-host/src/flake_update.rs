@@ -1,11 +1,17 @@
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{default_node_name, env_path, find_in_path, render_authority, set_mode, take_arg};
+use unix::fcntl::{Flock, FlockArg};
+
+use crate::authority::render_authority;
+use crate::common::{
+    default_node_name, env_path, find_in_path, set_mode, take_arg, HostResult, DEFAULT_PROXNIX_DIR,
+    DEFAULT_PVE_LXC_DIR,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
@@ -22,11 +28,11 @@ struct Config {
     lock_dir: PathBuf,
     stamp_file: PathBuf,
     node_name: String,
-    authority_render: PathBuf,
+    authority_render: Option<PathBuf>,
     now: Option<i64>,
 }
 
-pub(crate) fn main(args: &[String]) -> Result<(), String> {
+pub(crate) fn main(args: &[String]) -> HostResult<()> {
     let mut inputs = env::var("PROXNIX_FLAKE_UPDATE_INPUTS")
         .unwrap_or_default()
         .split_whitespace()
@@ -38,20 +44,17 @@ pub(crate) fn main(args: &[String]) -> Result<(), String> {
         &mut inputs,
     )?;
     let config = Config::from_env()?;
-    if env::var("PROXNIX_FLAKE_UPDATE_LOCKED").ok().as_deref() != Some("1") {
-        return run_under_flock(args, &config.lock_dir)
-            .map_err(|err| format!("flake-update failed: {err}"));
-    }
-    run(&config, &options).map_err(|err| format!("flake-update failed: {err}"))
+    run_under_lock(&config, &options).map_err(|err| format!("flake-update failed: {err}"))?;
+    Ok(())
 }
 
 impl Config {
     fn from_env() -> Result<Self, String> {
-        let root = env_path("PROXNIX_DIR", "/var/lib/proxnix");
+        let root = env_path("PROXNIX_DIR", DEFAULT_PROXNIX_DIR);
         let authority = env::var_os("PROXNIX_AUTHORITY_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("authority"));
-        let pve_lxc_dir = env_path("PROXNIX_PVE_LXC_DIR", "/etc/pve/lxc");
+        let pve_lxc_dir = env_path("PROXNIX_PVE_LXC_DIR", DEFAULT_PVE_LXC_DIR);
         let lock_dir = env_path("PROXNIX_RUN_DIR", "/run/proxnix");
         let state_dir = env::var_os("PROXNIX_STATE_DIR")
             .map(PathBuf::from)
@@ -60,10 +63,7 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|| state_dir.join("flake-update.last-success"));
         let node_name = env::var("PROXNIX_NODE_NAME").unwrap_or_else(|_| default_node_name());
-        let authority_render = env_path(
-            "PROXNIX_AUTHORITY_RENDER",
-            "/usr/local/sbin/proxnix-authority-render",
-        );
+        let authority_render = env::var_os("PROXNIX_AUTHORITY_RENDER").map(PathBuf::from);
         let now = env::var("PROXNIX_FLAKE_UPDATE_NOW")
             .ok()
             .map(|value| {
@@ -140,7 +140,7 @@ the resulting lock back to /var/lib/proxnix/flake.lock.
 fn run(config: &Config, options: &Options) -> io::Result<()> {
     if !should_update(config, options)? {
         println!(
-            "proxnix-flake-update: flake update skipped; frequency={}",
+            "proxnix-host flake-update: flake update skipped; frequency={}",
             options.frequency
         );
         return Ok(());
@@ -151,33 +151,25 @@ fn run(config: &Config, options: &Options) -> io::Result<()> {
     persist_authority_lock(&config.root, &config.authority)?;
     write_stamp(&config.stamp_file, current_epoch(config)?)?;
     println!(
-        "proxnix-flake-update: updated flake lock; frequency={}",
+        "proxnix-host flake-update: updated flake lock; frequency={}",
         options.frequency
     );
     Ok(())
 }
 
-fn run_under_flock(args: &[String], lock_dir: &Path) -> io::Result<()> {
-    let Some(flock) = find_in_path("flock") else {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "flock not found"));
-    };
+fn run_under_lock(config: &Config, options: &Options) -> io::Result<()> {
+    let _guard = take_update_lock(&config.lock_dir)?;
+    run(config, options)
+}
+
+fn take_update_lock(lock_dir: &Path) -> io::Result<Flock<File>> {
     fs::create_dir_all(lock_dir)?;
-    let exe = env::current_exe()?;
-    let status = Command::new(flock)
-        .arg("-n")
-        .arg(lock_dir.join("reconcile.lock"))
-        .arg(exe)
-        .arg("flake-update")
-        .args(args)
-        .env("PROXNIX_FLAKE_UPDATE_LOCKED", "1")
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            "another proxnix reconcile or flake update run is active",
+    let file = File::create(lock_dir.join("reconcile.lock"))?;
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|err| {
+        io::Error::other(format!(
+            "another proxnix reconcile or flake update run is active: {err:?}"
         ))
-    }
+    })
 }
 
 fn should_update(config: &Config, options: &Options) -> io::Result<bool> {
@@ -227,8 +219,8 @@ fn last_success_epoch(stamp_file: &Path) -> io::Result<i64> {
 }
 
 fn render(config: &Config) -> io::Result<()> {
-    if config.authority_render.is_file() {
-        let status = Command::new(&config.authority_render)
+    if let Some(authority_render) = &config.authority_render {
+        let status = Command::new(authority_render)
             .arg("--root")
             .arg(&config.root)
             .arg("--authority")
@@ -242,7 +234,7 @@ fn render(config: &Config) -> io::Result<()> {
         if status.success() {
             return Ok(());
         }
-        return Err(io::Error::other("proxnix-authority-render failed"));
+        return Err(io::Error::other("PROXNIX_AUTHORITY_RENDER failed"));
     }
 
     render_authority(
@@ -351,7 +343,7 @@ mod tests {
                 lock_dir: run_dir,
                 stamp_file: state_dir.join("flake-update.last-success"),
                 node_name: "pve1".to_owned(),
-                authority_render: fake_bin.join("proxnix-authority-render"),
+                authority_render: Some(fake_bin.join("proxnix-authority-render")),
                 now: Some(1000),
             },
             root,

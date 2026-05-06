@@ -2,8 +2,7 @@
 , stdenvNoCC
 , age
 , jq
-, proxnixHostRust
-, rsync
+, proxnixHostController
 , sops
 }:
 
@@ -22,9 +21,8 @@ stdenvNoCC.mkDerivation {
     mkdir -p "$out/bin" "$out/lib/proxnix" "$out/share/proxnix" "$out/share/systemd/system"
 
     cp -R host/runtime/bin/. "$out/bin/"
-    cp ${proxnixHostRust}/bin/proxnix-host "$out/bin/proxnix-host"
+    cp ${proxnixHostController}/bin/proxnix-host "$out/bin/proxnix-host"
     cp host/install/uninstall.sh "$out/bin/proxnix-host-uninstall"
-    ln -s proxnix-host-uninstall "$out/bin/proxnix-uninstall"
     chmod +x "$out"/bin/*
 
     cp -R host/runtime/lib/. "$out/lib/proxnix/"
@@ -32,17 +30,13 @@ stdenvNoCC.mkDerivation {
 
     mkdir -p "$out/share/proxnix/lxc/config" "$out/share/proxnix/lxc/hooks" "$out/share/proxnix/nix"
     cp -R host/runtime/lxc/config/. "$out/share/proxnix/lxc/config/"
-    cp host/runtime/lxc/hooks/nixos-proxnix-prestart "$out/share/proxnix/lxc/hooks/"
-    cp host/runtime/lxc/hooks/nixos-proxnix-mount "$out/share/proxnix/lxc/hooks/"
-    cp host/runtime/lxc/hooks/nixos-proxnix-poststop "$out/share/proxnix/lxc/hooks/"
-    chmod +x "$out/share/proxnix/lxc/hooks/"*
+    ln -s ../../../../bin/proxnix-host "$out/share/proxnix/lxc/hooks/nixos-proxnix-start-host"
 
     cp -R host/runtime/nix/. "$out/share/proxnix/nix/"
     cp -R host/runtime/systemd/. "$out/share/systemd/system/"
 
     ln -s ${age}/bin/age "$out/bin/age"
     ln -s ${jq}/bin/jq "$out/bin/jq"
-    ln -s ${rsync}/bin/rsync "$out/bin/rsync"
     ln -s ${sops}/bin/sops "$out/bin/sops"
 
     runHook postInstall

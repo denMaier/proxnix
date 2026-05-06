@@ -1,0 +1,94 @@
+---
+- name: Inspect proxnix template storage before install lock
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/storage/{{ proxnix_template_storage }}"
+      - --output-format
+      - json
+  register: proxnix_template_storage_config
+  changed_when: false
+
+- name: Store proxnix template storage API data
+  ansible.builtin.set_fact:
+    proxnix_template_storage_api: "{{ proxnix_template_storage_config.stdout | from_json }}"
+
+- name: Store proxnix template storage install lock facts
+  ansible.builtin.set_fact:
+    proxnix_template_storage_shared: "{{ (proxnix_template_storage_api.shared | default(0) | int) == 1 }}"
+    proxnix_template_storage_path: "{{ proxnix_template_storage_api.path | default('', true) }}"
+    proxnix_template_storage_lock_slug: "{{ proxnix_template_storage | regex_replace('[^A-Za-z0-9_.-]', '_') }}"
+
+- name: Assert shared proxnix template storage has a filesystem path
+  ansible.builtin.assert:
+    that:
+      - proxnix_template_storage_path | length > 0
+    fail_msg: >-
+      proxnix_template_storage={{ proxnix_template_storage }} is shared but pvesh storage API does not expose a path.
+      proxnix cannot coordinate cluster-safe template bootstrap for this storage.
+  when: proxnix_template_storage_shared | bool
+
+- name: Acquire shared proxnix template storage install lock
+  ansible.builtin.shell: |
+    set -eu
+    flock_bin="$(command -v flock)"
+    nohup_bin="$(command -v nohup)"
+    lock_dir={{ (proxnix_template_storage_path ~ '/.proxnix-locks') | quote }}
+    lock_file="$lock_dir/install-{{ proxnix_template_storage_lock_slug }}.lock"
+    release_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.release"
+    ready_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.ready"
+    pid_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.pid"
+    wait_seconds={{ proxnix_template_install_lock_wait_seconds | int }}
+    ttl_seconds={{ proxnix_template_install_lock_ttl_seconds | int }}
+
+    mkdir -p "$lock_dir" /run/proxnix
+    rm -f "$release_file" "$ready_file" "$pid_file"
+
+    "$nohup_bin" /bin/sh -c '
+      set -eu
+      lock_file=$1
+      release_file=$2
+      ready_file=$3
+      pid_file=$4
+      ttl_seconds=$5
+      flock_bin=$6
+
+      exec 9>"$lock_file"
+      "$flock_bin" -x 9
+      printf "%s\n" "$$" > "$pid_file"
+      : > "$ready_file"
+
+      deadline=$(( $(date +%s) + ttl_seconds ))
+      while [ ! -e "$release_file" ]; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+          exit 0
+        fi
+        sleep 1
+      done
+    ' sh "$lock_file" "$release_file" "$ready_file" "$pid_file" "$ttl_seconds" "$flock_bin" >/dev/null 2>&1 &
+    holder_pid=$!
+
+    i=0
+    while [ "$i" -lt "$wait_seconds" ]; do
+      if [ -e "$ready_file" ]; then
+        exit 0
+      fi
+      if ! kill -0 "$holder_pid" 2>/dev/null; then
+        wait "$holder_pid" || true
+        echo "proxnix template storage lock holder exited before acquiring $lock_file" >&2
+        exit 1
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+
+    kill "$holder_pid" 2>/dev/null || true
+    echo "timed out waiting for proxnix template storage install lock $lock_file" >&2
+    exit 1
+  args:
+    executable: /bin/bash
+  register: proxnix_template_install_lock_result
+  changed_when: true
+  when: proxnix_template_storage_shared | bool
+

@@ -13,37 +13,27 @@ This page covers installing proxnix on Proxmox nodes and setting up the workstat
 ## What the node install does
 
 Every Proxmox node that may start proxnix-managed containers needs the same
-installed assets. The only supported host deployment path is
+installed assets. The production host deployment path is
 `host/deploy/ansible/install.yml` from an Ansible control machine over SSH.
 
 It installs two kinds of assets:
 
 ### Per-node files
 
-These are installed locally on each node because the LXC hooks execute on that node at container startup time.
+These are installed locally on each node because reconciliation and helper
+commands execute on the node that owns the CT.
 
 - `/usr/share/lxc/config/nixos.common.conf`
 - `/usr/share/lxc/config/nixos.userns.conf`
-- `/usr/share/lxc/hooks/nixos-proxnix-prestart`
-- `/usr/share/lxc/hooks/nixos-proxnix-mount`
-- `/usr/share/lxc/hooks/nixos-proxnix-poststop`
+- `/usr/share/lxc/hooks/nixos-proxnix-start-host`
 - `/usr/local/lib/proxnix/proxnix-secrets-guest`
 - `/usr/local/sbin/proxnix-host`
-- `/usr/local/sbin/proxnix-authority-render`
-- `/usr/local/sbin/proxnix-create-lxc`
 - `/usr/local/sbin/proxnix-doctor`
-- `/usr/local/sbin/proxnix-flake-update`
-- `/usr/local/sbin/proxnix-gc`
-- `/usr/local/sbin/proxnix-reconcile`
-- `/usr/local/sbin/proxnix-reconcile-build-golden`
-- `/usr/local/sbin/proxnix-reconcile-build`
-- `/usr/local/sbin/proxnix-reconcile-seed`
-- `/usr/local/sbin/proxnix-reconcile-seed-offline`
-- `/usr/local/sbin/proxnix-reconcile-activate`
-- `/usr/local/sbin/proxnix-reconciler-state`
+- `/usr/local/sbin/proxnix-host-activate`
+- `/usr/local/sbin/proxnix-host-uninstall`
 - `proxnix-gc.service` and `proxnix-gc.timer`
 - `proxnix-flake-update.service` and `proxnix-flake-update.timer`
-- `proxnix-reconcile.service` and `proxnix-reconcile@.service`
+- `proxnix-reconcile.service`, `proxnix-reconcile.timer`, and `proxnix-reconcile@.service`
 
 ### Node-local relay cache
 
@@ -63,29 +53,60 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 ## Step 1: Install on the Proxmox host
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
-By default the playbook requires an existing Nix installation. It enables
-`nix-command flakes`, stages the host flake source under
-`/var/lib/proxnix/install-source`, installs or upgrades the
+The playbook checks whether Nix is installed, installs Nix with the Determinate
+Systems installer when missing, enables `nix-command flakes`, installs or upgrades the
 `/nix/var/nix/profiles/proxnix-host` profile, runs `proxnix-host-activate`, and
-verifies the installed commands. Activation links the proxnix files from the
-Nix profile into the mutable Proxmox paths that LXC and systemd expect. Run the
+verifies the installed commands. Activation links the proxnix files from the Nix
+profile into the mutable Proxmox paths that LXC and systemd expect. Run the
 playbook from your workstation or another Ansible control machine, not from the
-target node itself.
+target node itself. By default it installs `github:denMaier/proxnix#proxnix-host`;
+pin a release or branch by overriding `proxnix_host_flake_ref`.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
-If you want the playbook to install Nix when missing, opt into the Determinate
-Systems installer explicitly:
-
 ```bash
-ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml \
+  -e proxnix_host_flake_ref='github:denMaier/proxnix?ref=v0.6.1#proxnix-host'
 ```
 
+For development against the current checkout, use `install-local.yml`. It stages
+a small tar archive of the host-side flake inputs under
+`/var/lib/proxnix/install-source`, then calls the normal installer with that
+local flake ref.
+
+```bash
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install-local.yml
+```
+
+If the install should also coordinate the proxnix golden LXC template storage,
+pass the template vars explicitly. `proxnix_template_storage` is the Proxmox
+storage ID, not a filesystem path. On shared storage the installer acquires a
+storage-wide lock before it starts the host install work, so simultaneous
+installs on all nodes serialize the storage bootstrap path and only one node
+controls template download/creation at a time.
+
+```bash
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml \
+  -e proxnix_target_hosts=proxmox_cluster \
+  -e proxnix_template_bootstrap_enabled=true \
+  -e proxnix_template_bootstrap_dry_run=true \
+  -e proxnix_template_storage=mooseFS \
+  -e proxnix_template_source_name=nixos-golden-25.11.tar.xz \
+  -e proxnix_template_rootfs_storage=local-zfs \
+  -e proxnix_template_name=proxnix-nixos-golden.tar.xz
+```
+
+Use `-e proxnix_template_force=true` when you intentionally want to refresh an
+existing shared template. The force path still runs under the same storage lock.
+The bootstrap creates a temporary stopped CT from the downloaded NixOS LXC
+template, mounts it, imports its system closure into the host store, destroys
+the temporary CT, and builds the host-pinned proxnix golden closure.
+
 `proxnix-host-uninstall` removes the proxnix host symlinks and Nix profile, but
-does not remove Nix itself. `proxnix-uninstall` is kept as a compatibility
-alias. For a Determinate-installed Nix, remove Nix separately with:
+does not remove Nix itself. For a Determinate-installed Nix, remove Nix
+separately with:
 
 ```bash
 /nix/nix-installer uninstall
@@ -235,7 +256,7 @@ exports `./workstation#proxnix-workstation` and
 
 ### Required Proxmox host runtime tool
 
-- `sops` — the pre-start hook uses the shared host relay key to decrypt guest identities just before staging them into the CT
+- `sops` — the reconciler uses the shared host relay key to decrypt guest identities just before staging them into the CT
 
 ## Step 4: Initialize identities and secrets
 
@@ -282,18 +303,18 @@ This pushes:
 - the shared plaintext host relay key under `/etc/proxnix/host_relay_identity`
 - container identities re-encrypted at rest for both the host relay key and the master recovery key under `/var/lib/proxnix/private/...`
 
-That means each Proxmox host persistently stores only one plaintext relay key. Guest identities remain encrypted at rest on the host and are decrypted only transiently during the pre-start staging flow. In practice the Proxmox host is still the trust boundary for secret relay.
+That means each Proxmox host persistently stores only one plaintext relay key. Guest identities remain encrypted at rest on the host and are decrypted only transiently during reconcile staging. In practice the Proxmox host is still the trust boundary for secret relay.
 
 ## Upgrading proxnix files
 
-If the host runtime, hooks, systemd units, or shared Nix modules change, rerun
+If the host runtime, systemd units, or shared Nix modules change, rerun
 the Ansible playbook from your control machine:
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
-After upgrading, restart managed containers so they pick up the new hook/runtime code.
+After upgrading, reconcile managed containers so they pick up the new runtime code.
 
 ## Uninstalling
 
@@ -304,8 +325,7 @@ uninstall helper installed by the Ansible playbook:
 proxnix-host-uninstall
 ```
 
-`proxnix-uninstall` is kept as a compatibility alias. This removes only the
-installed hooks, helpers, services, timers, and proxnix host profile. It
+This removes only the installed helpers, services, timers, and proxnix host profile. It
 intentionally leaves `/var/lib/proxnix` and `/etc/proxnix` state alone.
 
 ## What you should have when done

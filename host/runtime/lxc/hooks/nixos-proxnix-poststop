@@ -1,5 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-PROXNIX_HOST_BIN="${PROXNIX_HOST_BIN:-/usr/local/sbin/proxnix-host}"
-exec "$PROXNIX_HOST_BIN" hook poststop "$@"

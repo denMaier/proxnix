@@ -1605,7 +1605,7 @@ in {
   options.proxnix._internal = lib.mkOption {
     default = {};
     description = lib.mdDoc ''
-      Internal proxnix plumbing and compatibility hooks.
+      Internal proxnix plumbing and compatibility options.
     '';
     type = lib.types.submodule {
       options = {

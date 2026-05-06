@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically run proxnix host event reconciliation
+
+[Timer]
+OnBootSec=30min
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+Unit=proxnix-reconcile.service
+
+[Install]
+WantedBy=timers.target

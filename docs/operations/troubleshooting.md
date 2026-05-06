@@ -4,13 +4,14 @@
 
 Most proxnix problems can be diagnosed by checking these in order:
 
-1. **Host hooks:** Did the pre-start and mount hooks run?
+1. **Host reconcile:** Did the reconcile command or timer run?
    ```bash
-   journalctl -t proxnix-prestart -t proxnix-mount -t proxnix-poststop -n 100
-   journalctl -t lxc-<vmid>-start -n 50   # raw LXC hook output, also useful with pct start <vmid> --debug
+   proxnix-host reconcile --status --vmid <vmid>
+   journalctl -u proxnix-reconcile@<vmid>.service -n 100
+   journalctl -u proxnix-reconcile.service -n 100
    ```
 
-2. **Guest system profile:** Did the mount hook point the rootfs profile at the seeded closure?
+2. **Guest system profile:** Did offline seeding point the rootfs profile at the desired closure?
    ```bash
    pct exec <vmid> -- readlink -f /nix/var/nix/profiles/system
    pct exec <vmid> -- readlink -f /sbin/init
@@ -18,7 +19,7 @@ Most proxnix problems can be diagnosed by checking these in order:
 
 3. **Reconciler status:** Does the recorded desired system match the guest?
    ```bash
-   proxnix-reconcile --status --vmid <vmid>
+   proxnix-host reconcile --status --vmid <vmid>
    pct exec <vmid> -- readlink -f /run/current-system
    ```
 
@@ -199,7 +200,7 @@ This is the expected behavior, not a bug. See [day-2 operations](day-2.md).
 From the host, compare:
 
 ```bash
-proxnix-reconcile --status --vmid <vmid>
+proxnix-host reconcile --status --vmid <vmid>
 pct exec <vmid> -- readlink -f /run/current-system
 ```
 
@@ -213,10 +214,10 @@ pct exec <vmid> -- readlink -f /sbin/init
 Common causes:
 
 - The host build failed before seeding
-- Offline closure seeding failed in the mount hook
+- Offline closure seeding failed during reconcile
 - The rootfs system profile was not advanced to the desired closure before start
 
-## The hooks seem broken on one node
+## Host runtime files seem broken on one node
 
 Rerun the Ansible host deployment for that node:
 
@@ -224,7 +225,8 @@ Rerun the Ansible host deployment for that node:
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ```
 
-The hooks and helper binaries are per-node assets. If a node was reinstalled or upgraded, the local files may be missing.
+The helper binaries, LXC config snippets, and systemd units are per-node
+assets. If a node was reinstalled or upgraded, the local files may be missing.
 The original repo checkout is not required on the Proxmox node after a successful install.
 
 ## Container migration to another node
@@ -239,10 +241,10 @@ proxnix keeps its host-side data under `/var/lib/proxnix/`. If you migrate a con
 
 ## `proxnix-host pve-conf-to-nix` fails
 
-Check the pre-start hook log:
+Check the render and reconcile logs:
 
 ```bash
-journalctl -t lxc-<vmid>-start -n 50
+journalctl -u proxnix-reconcile@<vmid>.service -n 100
 ```
 
 Common causes:

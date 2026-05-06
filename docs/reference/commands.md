@@ -5,20 +5,50 @@
 ### `host/deploy/ansible/install.yml`
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
-This is the only supported host deployment path. It verifies Proxmox and Nix,
-enables flakes for an existing Nix installation, stages the host flake source
-under `/var/lib/proxnix/install-source`, installs or upgrades
+This is the production host deployment path. It verifies Proxmox, checks
+whether Nix is installed, installs Nix with the Determinate Systems installer
+when missing, enables flakes, installs or upgrades
 `/nix/var/nix/profiles/proxnix-host`, and runs `proxnix-host-activate`. The
 activation command links the Nix-profile payload into the mutable Proxmox paths
 that LXC and systemd expect. It is not meant to run against `localhost`. By
-default Nix must already be installed. To install Nix when missing, explicitly
-set `proxnix_nix_install_mode=determinate`; this uses the Determinate Systems
-installer.
+default it installs `github:denMaier/proxnix#proxnix-host`; override
+`proxnix_host_flake_ref` to pin a release, branch, or local flake ref.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
-ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_host_flake_ref='github:denMaier/proxnix?ref=v0.6.1#proxnix-host'
+```
+
+Template bootstrap is controlled with Ansible vars. When enabled against shared
+storage, the playbook takes a storage-wide lock at the start of the host install
+work, then releases it after the template bootstrap step. Concurrent installs on
+other nodes wait on the same shared lock before they stage, build, download, or
+create storage-backed template artifacts.
+
+```bash
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml \
+  -e proxnix_template_bootstrap_enabled=true \
+  -e proxnix_template_bootstrap_dry_run=true \
+  -e proxnix_template_storage=mooseFS \
+  -e proxnix_template_source_name=nixos-golden-25.11.tar.xz \
+  -e proxnix_template_rootfs_storage=local-zfs \
+  -e proxnix_template_name=proxnix-nixos-golden.tar.xz
+```
+
+Set `proxnix_template_force=true` to force a template refresh. The force path
+still uses the shared-storage lock, so only one node refreshes the storage at a
+time.
+
+### `host/deploy/ansible/install-local.yml`
+
+Development-only installer for the current checkout. It archives the host-side
+flake inputs, stages them under `/var/lib/proxnix/install-source` on each target,
+then imports `install.yml` with `/var/lib/proxnix/install-source#proxnix-host`.
+Use this for testing unpushed changes; use `install.yml` for production.
+
+```bash
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install-local.yml
 ```
 
 ### `host/deploy/ansible/ai-agent-bootstrap.yml`
@@ -170,19 +200,16 @@ include:
 ```bash
 proxnix-host pve-conf-to-nix --pve-conf /etc/pve/lxc/101.conf --out-dir /tmp/out
 proxnix-host authority render
-proxnix-host hook prestart --vmid 101
-proxnix-host hook mount --vmid 101 --rootfs /path/to/rootfs
-proxnix-host hook poststop --vmid 101
+proxnix-host api site-updated
 proxnix-host reconcile podman-secrets --rootfs /path/to/rootfs --vmid 101 --secrets-dir /path/to/secrets
-proxnix-host state init
 ```
 
 ### `proxnix-host-activate`
 
 Activate the Nix-installed proxnix host profile on a Proxmox node. It creates
-the host integration symlinks for LXC hooks, helper commands, host tools,
-shared Nix modules, and systemd units, then reloads systemd and enables the GC
-and flake-update timers.
+the host integration symlinks for LXC config snippets, helper commands, host
+tools, shared Nix modules, and systemd units, then reloads systemd and enables
+the GC, reconcile, and flake-update timers.
 
 This command is normally called by `host/deploy/ansible/install.yml`.
 
@@ -195,16 +222,16 @@ This command is installed onto the host by `host/deploy/ansible/install.yml`, so
 you do not need to keep the original repo checkout around just to uninstall
 proxnix.
 
-`proxnix-uninstall` is kept as a compatibility alias.
-
-### `host/uninstall.sh`
+### `host/install/uninstall.sh`
 
 Repo-local source for the same uninstall logic shipped as
 `proxnix-host-uninstall`.
 
 ### `proxnix-doctor <vmid>`
 
-Run host and per-container health checks.
+Run host and per-container health checks. This host command intentionally
+remains a shell script rather than a `proxnix-host` subcommand so emergency
+diagnostics stay readable and runnable with baseline Proxmox host tools.
 
 ```bash
 proxnix-doctor 100
@@ -237,15 +264,14 @@ Sample output for a healthy relay-backed container:
   INFO  legacy managed config hash is informational because reconciler status exists
 ```
 
-### `proxnix-reconcile`
+### `proxnix-host reconcile`
 
-Host-side reconciler entrypoint. The phase-1 command installs status plumbing
-and host prerequisite validation. Dry-run renders and evaluates the generated
-authority manifest, then prints planned actions without building or modifying
-containers. Managed CTs are cluster-scoped and can float between nodes; each
-node only acts on CTs that are local according to Proxmox cluster placement,
-falling back to `pct status <vmid>` when the cluster view is unavailable.
-Non-local targets are reported as `skip not-local`.
+Host-side reconciler entrypoint. Dry-run
+renders and evaluates the generated authority manifest, then prints planned
+actions without building or modifying containers. Managed CTs are cluster-scoped
+and can float between nodes; each node only acts on CTs that are local according
+to Proxmox cluster placement, falling back to `pct status <vmid>` when the
+cluster view is unavailable. Non-local targets are reported as `skip not-local`.
 
 `--build-only --vmid <id>` builds one selected local system closure and
 writes `/var/lib/proxnix/status/<vmid>.json` without activating it. If the
@@ -256,91 +282,167 @@ temporary host Unix socket bridge to the CT's Nix daemon and verifies
 `switch-to-configuration` exists. `--activate-only --vmid <id>` activates the
 recorded desired system in a running CT and verifies `/run/current-system`.
 `--vmid <id>` is the orchestration command: evaluate desired path, skip as
-`noop-current` if `/run/current-system` already matches, otherwise build, seed,
-activate, verify, and write status. `--recreate-missing` creates a CT only when
-manifest placement explicitly targets the current node.
+`noop-current` if `/run/current-system` already matches, otherwise build on the
+host, mount the stopped CT rootfs with `pct mount`, run `seed-offline`, unmount,
+and start the CT when requested. A running CT is restarted after the host-context
+offline seed; a stopped CT is seeded but left stopped unless `--start-stopped`
+is passed.
+`--all-ct` is required for an explicit all-local-container run; omitting both
+`--vmid` and `--all-ct` is an error. Held CTs refuse reconciliation unless
+`--force` is passed. A Proxmox CT tag named `nix-hold` is also treated as an
+operator hold and blocks reconciliation unless `--force` is passed.
+`--recreate-missing` creates a CT only when manifest placement explicitly
+targets the current node.
 
-The phase commands are also exposed as separate host commands:
+Use `proxnix-host reconcile build-golden`, `build`, `seed`, `seed-offline`, and
+`activate` when you want to drive build, seed, and activation separately.
+Use `proxnix-host reconcile --online --vmid <id>` when uptime matters and you
+want to seed through the running guest Nix daemon bridge instead of restarting.
 
-- `proxnix-reconcile-build-golden` (`proxnix-host reconcile build-golden`)
-- `proxnix-reconcile-build --vmid <id>` (`proxnix-host reconcile build`)
-- `proxnix-reconcile-seed --vmid <id>` (`proxnix-host reconcile seed`)
-- `proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>` (`proxnix-host reconcile seed-offline`)
-- `proxnix-reconcile-activate --vmid <id>` (`proxnix-host reconcile activate`)
-
-Use those commands when you want to drive build, seed, and activation separately.
-`proxnix-reconcile --vmid <id>` remains the command that runs all three phases
-for a running CT.
-
-The running-CT seed path creates `/run/proxnix/ct-<vmid>.sock` for the
+The online running-CT seed path creates `/run/proxnix/ct-<vmid>.sock` for the
 duration of the reconcile run and points the host-side Nix client at it with
 `NIX_REMOTE=unix:///run/proxnix/ct-<vmid>.sock`. The bridge connects to the
 container-local Nix daemon socket, normally
 `/nix/var/nix/daemon-socket/socket`, through `nsenter`, `lxc-attach`, or
 `pct exec`. It does not run a custom in-container proxnix agent.
 
-Normal convergence is not run by a full-host timer. For a stopped CT start,
-the LXC pre-start hook opportunistically warms the host-local golden-template
-build with `proxnix-reconcile-build-golden` and then runs
-`proxnix-reconcile-build --vmid <id>`. The mount hook runs
-`proxnix-reconcile-seed-offline --vmid <id> --rootfs <mounted-rootfs>`,
-which copies the closure into the mounted rootfs and advances the rootfs NixOS
-system profile so the CT boots the desired system directly. It also writes
-`next-system` as a compatibility marker for older activation flows. Explicit
-operator/workstation flows can still run
-`proxnix-reconcile --vmid <id>` or start `proxnix-reconcile@<id>.service` for a
-running CT. `proxnix-reconcile.service` remains available for an explicit
-all-local-container run, but no `proxnix-reconcile.timer` is installed or
-enabled.
+Builds are decoupled from PVE start. For a stopped CT, run
+`proxnix-host reconcile --vmid <id>` to build and offline-seed while leaving it
+stopped, or `proxnix-host start --vmid <id>` to reconcile and then start it. The
+`start-host` hook also refreshes config, secrets, and helper payload files on
+Web UI starts, then runs an idempotent `nix copy` of the already-built desired
+closure into the mounted rootfs before init starts.
+
+`proxnix-reconcile.timer` runs `proxnix-host reconcile --auto-tag` daily, with
+jitter, as a low-frequency safety net.
+That mode builds every local managed CT, then applies Proxmox tag policy:
+`nix-stage` offline-seeds stopped CTs but leaves running CTs untouched,
+`nix-auto` also reconciles running CTs through the online Nix daemon bridge, and
+`nix-hold` blocks runtime changes.
+
+For Web UI starts, Proxnix does not build in the LXC lifecycle. Use explicit
+reconcile before starting a CT when exact build freshness matters, or rely on
+`api site-updated` / the timer to keep host closures built outside the Proxmox
+start path.
 
 ```bash
-proxnix-reconcile --dry-run
-proxnix-reconcile --dry-run --vmid 100
-proxnix-reconcile-build-golden
-proxnix-reconcile --build-only --vmid 100
-proxnix-reconcile --seed-only --vmid 100
-proxnix-reconcile --activate-only --vmid 100
-proxnix-reconcile --vmid 100
-proxnix-reconcile --vmid 100 --recreate-missing
-proxnix-reconcile --rollback --vmid 100
-proxnix-reconcile --status
-proxnix-reconcile --status --vmid 100
-proxnix-reconcile-build --vmid 100
-proxnix-reconcile-seed --vmid 100
-proxnix-reconcile-seed-offline --vmid 100 --rootfs /run/lxc/100/rootfs
-proxnix-reconcile-activate --vmid 100
+proxnix-host reconcile --dry-run --all-ct
+proxnix-host reconcile --dry-run --vmid 100
+proxnix-host reconcile --auto-tag
+proxnix-host reconcile build-golden
+proxnix-host reconcile --build-only --vmid 100
+proxnix-host reconcile --seed-only --vmid 100
+proxnix-host reconcile --activate-only --vmid 100
+proxnix-host reconcile --vmid 100
+proxnix-host start --vmid 100
+proxnix-host reconcile --online --vmid 100
+proxnix-host reconcile --all-ct
+proxnix-host reconcile --vmid 100 --recreate-missing
+proxnix-host reconcile --vmid 100 --force
+proxnix-host reconcile --status
+proxnix-host reconcile --status --vmid 100
+proxnix-host reconcile build --vmid 100
+proxnix-host reconcile seed --vmid 100
+proxnix-host reconcile seed-offline --vmid 100 --rootfs /run/lxc/100/rootfs
+proxnix-host reconcile activate --vmid 100
 systemctl start proxnix-reconcile@100.service
 ```
 
-Status JSON keeps compatibility fields such as `desiredSystem` and
-`currentSystem`, and also includes descriptive fields such as `desired_system`,
-`current_system`, `container_is_local`, `host_has_closure`,
+Status JSON uses descriptive fields such as `desired_system`,
+`current_system`, `previous_system`, `container_is_local`, `host_has_closure`,
 `container_has_closure`, and `protected_by_host_gc_root`. Common status names
 include `noop-current`, `build-failed`, `lost-locality`, `failed`, and `ok`.
 
-### `proxnix-gc`
+### `proxnix-host api`
 
-Prune host-side transient state without deleting useful local build cache roots.
-This installed command is a compatibility wrapper for `proxnix-host gc`.
-The command removes copied pre-start stage directories under `/run/proxnix/`,
-keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
-`<vmid>-desired` roots for CTs still present on this host, and removes
-`<vmid>-desired` roots for CTs that are no longer local/present.
+Stable host-side API for workstation handoff and information retrieval. The
+workstation should copy site files and secrets, then call `api site-updated`
+rather than depending on host-internal paths or lower-level build/seed/activate
+commands.
 
 ```bash
-proxnix-gc --dry-run
+proxnix-host api site-updated
+proxnix-host api status
+proxnix-host api status --vmid 100
+proxnix-host api plan --vmid 100
+proxnix-host api plan --all-ct
+```
+
+`api site-updated` is the post-publish handoff. It runs the host's automatic
+event policy, so the host decides what to build, copy, or activate from Proxmox
+tags and local CT state. Every local managed CT is built. CTs tagged
+`nix-stage` are offline-seeded when stopped, but running CTs are only built.
+CTs tagged `nix-auto` are offline-seeded when stopped and reconciled online
+when running. `nix-hold` wins over both runtime tags and leaves runtime state
+untouched after the build. `api status` and `api plan` are read-oriented calls
+for workstation UI or scripts.
+
+### `proxnix-host ct`
+
+Run CT-specific recovery actions. Operator-visible decisions live in Proxmox
+metadata: `nix-hold` blocks reconciliation unless forced, `nix-stage` allows
+event-driven offline seeding of stopped CTs, and `nix-auto` opts a CT into
+running online reconciliation. The readable status JSON remains a deployment
+snapshot.
+
+```bash
+proxnix-host ct rollback --vmid 100
+```
+
+`rollback` activates the previous recorded system path in the running CT.
+Rollback is an operational recovery action; it does not mutate the host desired
+state. If you need the host to leave the CT alone while you investigate, set the
+Proxmox `nix-hold` tag.
+
+### `proxnix-host gc`
+
+Prune host-side transient state without deleting useful local build cache roots.
+The command removes stale stage directories under `/run/proxnix/`,
+keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
+`<vmid>-desired` roots for CTs still present on this host, and removes
+`<vmid>-desired` roots for CTs that are no longer local/present. It also deletes
+old generations of `/nix/var/nix/profiles/proxnix-host` and then runs
+`nix-store --gc`, so unreachable host tool builds, old golden closures, and old
+container closures can actually leave the store.
+
+```bash
+proxnix-host gc --dry-run
+proxnix-host gc --no-store-gc
+proxnix-host gc --profile-generations 14d
 systemctl start proxnix-gc.service
 ```
 
 On Proxmox hosts, do not run `nix-collect-garbage` against the host store for
-normal proxnix cleanup. `proxnix-gc` understands the deployment GC roots that
+normal proxnix cleanup. `proxnix-host gc` understands the deployment GC roots that
 protect desired closures; direct host store collection should be reserved for
 manual recovery after checking those roots.
 
-### `proxnix-flake-update`
+### `proxnix-host template bootstrap`
 
-Update the host-managed authority flake lock. This installed command is a
-compatibility wrapper for `proxnix-host flake-update`. It renders
+Plan and guard proxnix golden LXC template creation. The bootstrap command is
+cluster-aware: when the target template storage is shared and already contains
+the requested proxnix golden template archive, the node reuses it and skips
+creation. Local template storage is node-local, so each node may create or
+refresh its own copy.
+
+```bash
+proxnix-host template bootstrap --dry-run
+proxnix-host template bootstrap --template-storage mooseFS --source-template-name nixos-golden-25.11.tar.xz --rootfs-storage local-zfs --dry-run
+proxnix-host template bootstrap --template-storage mooseFS --source-template-name nixos-golden-25.11.tar.xz --rootfs-storage local-zfs --force
+```
+
+When run directly, `--force` bypasses the shared-existing-template skip and
+refreshes the requested template under the command's shared lock. The Ansible
+installer also takes a broader storage-wide lock before invoking this command so
+concurrent node installs serialize the whole storage bootstrap path, including
+Hydra template downloads and golden template creation. The command creates a
+temporary stopped CT from the downloaded NixOS LXC template, mounts its rootfs,
+imports the template system closure into the host Nix store, destroys the
+temporary CT, and runs `proxnix-host reconcile build-golden`.
+
+### `proxnix-host flake-update`
+
+Update the host-managed authority flake lock. It renders
 `/var/lib/proxnix/authority`, runs `nix flake update --flake
 /var/lib/proxnix/authority`, copies the resulting
 `/var/lib/proxnix/authority/flake.lock` back to `/var/lib/proxnix/flake.lock`,
@@ -363,17 +465,19 @@ to update only selected inputs. The command shares the reconciler global lock,
 so it does not race a build or activation run.
 
 ```bash
-proxnix-flake-update --force
-proxnix-flake-update --frequency monthly
+proxnix-host flake-update --force
+proxnix-host flake-update --frequency monthly
 systemctl start proxnix-flake-update.service
 systemctl edit proxnix-flake-update.service
 ```
 
 Updating the lock only changes future desired closures. A stopped CT picks up
-the new inputs on its next pre-start build. A running CT picks them up when an
-operator or workstation flow runs `proxnix-reconcile --vmid <id>`.
+the new inputs when an operator or workstation flow runs
+`proxnix-host reconcile --vmid <id>` or `proxnix-host start --vmid <id>`. A
+running CT picks them up when `proxnix-host reconcile --vmid <id>` restarts it
+through the offline seed path, or when `--online` is used for live convergence.
 
-### `proxnix-authority-render`
+### `proxnix-host authority render`
 
 Render the compatibility authority wrapper under `/var/lib/proxnix/authority`.
 The wrapper exposes cluster-level `proxnix.containers` and a node view at
@@ -382,12 +486,12 @@ for generated Proxmox metadata, but runtime locality is decided by the
 reconciler from Proxmox cluster placement with `pct status` as fallback.
 
 ```bash
-proxnix-authority-render
-proxnix-authority-render --print-manifest
-proxnix-authority-render --node-name pve1
+proxnix-host authority render
+proxnix-host authority render --print-manifest
+proxnix-host authority render --node-name pve1
 ```
 
-### `proxnix-create-lxc`
+### `proxnix-host create-lxc`
 
 Create a NixOS LXC on a Proxmox host that is ready for proxnix management.
 
@@ -573,7 +677,7 @@ If the site has a committed `flake.lock`, publish also copies it to
 lock into `/var/lib/proxnix/authority/flake.lock`, making the golden-template
 build and every CT build use the same locked Nix inputs. If no local lock is
 published, publish leaves any host-managed `/var/lib/proxnix/flake.lock` in
-place. The host can advance that durable lock with `proxnix-flake-update` and
+place. The host can advance that durable lock with `proxnix-host flake-update` and
 its timer.
 
 Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.

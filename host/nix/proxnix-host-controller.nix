@@ -3,11 +3,11 @@
 }:
 
 rustPlatform.buildRustPackage rec {
-  pname = "proxnix-host-rust";
+  pname = "proxnix-host-controller";
   version = lib.strings.trim (builtins.readFile ../../VERSION);
 
-  src = ../../host/rust;
-  cargoLock.lockFile = ../../host/rust/Cargo.lock;
+  src = ../..;
+  cargoLock.lockFile = ../../Cargo.lock;
   PROXNIX_VERSION = version;
 
   meta = {

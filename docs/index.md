@@ -45,7 +45,7 @@ There are four main layers:
 1. **Proxmox metadata**: hostname, IP, gateway, DNS, search domain, SSH keys, CT features, rootfs, and lifecycle
 2. **Host-side proxnix config**: install-layer Nix files plus optional site-wide `site.nix` and per-container `dropins/`
 3. **Host authority and build**: the Proxmox node renders a local authority wrapper, evaluates the desired CT system, and builds the NixOS closure
-4. **Seed and activation**: a stopped CT is seeded during the LXC mount hook and boots the exact system path directly; a running CT can be seeded through its Nix daemon and activated explicitly with `proxnix-reconcile`
+4. **Seed and activation**: the default path seeds from host context before LXC starts and boots the exact system path directly; `proxnix-host reconcile --online` keeps the running CT online by seeding through its Nix daemon bridge
 
 ## The guest is not a black box
 
@@ -59,18 +59,18 @@ While the host is the *source of truth* for your declarative config, the guest i
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Proxmox host                                │
 │                                                                 │
-│  pct start <vmid>                                               │
+│  proxnix-host reconcile --vmid <vmid>                           │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────────┐    ┌──────────────────────────────┐    │
-│  │  pre-start hook      │───▶│  /run/proxnix/<vmid>/        │    │
+│  │  host reconciler     │───▶│  /run/proxnix/<vmid>/        │    │
 │  │  render + build      │    │  rendered/ secrets/ runtime/ │    │
 │  └─────────────────────┘    └──────────┬───────────────────┘    │
 │                                         │                       │
 │                                         ▼                       │
 │                              ┌─────────────────────┐            │
-│                              │  mount hook          │            │
-│                              │  seed + set profile  │            │
+│                              │  seed + sync payload │            │
+│                              │  set profile         │            │
 │                              └──────────┬──────────┘            │
 │                                         │                       │
 ├─────────────────────────────────────────┼───────────────────────┤
@@ -83,7 +83,11 @@ While the host is the *source of truth* for your declarative config, the guest i
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> **Important design decision:** proxnix stages build inputs at container startup only, not while the container is running. After changing any host-side file, restart the CT or run an explicit host reconcile for the change to take effect.
+> **Important design decision:** proxnix builds are explicit or timer-driven,
+> not tied to PVE lifecycle hooks. The PVE `start-host` hook only refreshes
+> payload files and copies an already-built desired closure. After changing any
+> host-side file, run `proxnix-host reconcile --vmid <id>` or rely on
+> `nix-auto` timer reconciliation before the next start.
 
 ## Read this first
 
@@ -97,7 +101,7 @@ While the host is the *source of truth* for your declarative config, the guest i
 
 Treat this repository as the **install repo**:
 
-- `host/` owns the Proxmox install/runtime layer: hooks, helpers, installers, and the shared baseline Nix files
+- `host/` owns the Proxmox install/runtime layer: helpers, installers, LXC config snippets, systemd units, and the shared baseline Nix files
 - `workstation/` owns the workstation-authoritative CLI, TUI, app, flake, and packaging files
 - it may ship example workloads and example config shapes
 - it does **not** need to own your live site data

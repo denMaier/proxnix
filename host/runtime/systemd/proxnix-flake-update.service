@@ -7,4 +7,4 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proxnix/flake-update.conf
-ExecStart=/usr/local/sbin/proxnix-flake-update
+ExecStart=/usr/local/sbin/proxnix-host flake-update

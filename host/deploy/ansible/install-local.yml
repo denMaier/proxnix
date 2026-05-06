@@ -1,0 +1,71 @@
+---
+- name: Stage local proxnix checkout on Proxmox nodes
+  hosts: "{{ proxnix_target_hosts | default('proxmox') }}"
+  connection: ssh
+  gather_facts: false
+
+  vars:
+    proxnix_repo_root: "{{ playbook_dir }}/../../.."
+    proxnix_install_source_dir: /var/lib/proxnix/install-source
+    proxnix_local_archive: /tmp/proxnix-install-source.tar.gz
+    proxnix_install_source_paths:
+      - Cargo.lock
+      - Cargo.toml
+      - flake.nix
+      - VERSION
+      - crates/proxnix-host
+      - host/runtime
+      - host/install
+      - host/nix
+
+  pre_tasks:
+    - name: Ensure this playbook targets remote SSH hosts
+      ansible.builtin.assert:
+        that:
+          - ansible_connection == 'ssh'
+          - inventory_hostname not in ['localhost', '127.0.0.1', '::1']
+          - (ansible_host | default(inventory_hostname)) not in ['localhost', '127.0.0.1', '::1']
+        fail_msg: >-
+          host/deploy/ansible/install-local.yml deploys the current checkout to remote Proxmox hosts over SSH.
+          Add the target node to the Ansible inventory and run this playbook from a control machine.
+
+  tasks:
+    - name: Create local proxnix host package archive
+      ansible.builtin.command:
+        argv: "{{ ['tar', '-C', proxnix_repo_root, '-czf', proxnix_local_archive] + proxnix_install_source_paths }}"
+      delegate_to: localhost
+      run_once: true
+      changed_when: true
+
+    - name: Reset remote proxnix host package source
+      ansible.builtin.file:
+        path: "{{ proxnix_install_source_dir }}"
+        state: absent
+
+    - name: Create remote proxnix host package source directory
+      ansible.builtin.file:
+        path: "{{ proxnix_install_source_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy local proxnix host package archive
+      ansible.builtin.copy:
+        src: "{{ proxnix_local_archive }}"
+        dest: "{{ proxnix_local_archive }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Extract local proxnix host package source
+      ansible.builtin.unarchive:
+        src: "{{ proxnix_local_archive }}"
+        dest: "{{ proxnix_install_source_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+
+- import_playbook: install.yml
+  vars:
+    proxnix_host_flake_ref: /var/lib/proxnix/install-source#proxnix-host

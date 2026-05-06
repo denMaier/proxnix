@@ -57,41 +57,32 @@ ensure_dir "$PROXNIX_DATA_DIR/gcroots/deploy" "0755"
 ensure_dir "$PROXNIX_PRIVATE_DIR/shared" "0700"
 ensure_dir "$PROXNIX_PRIVATE_DIR/containers" "0700"
 
+rm -f "$PROXNIX_DATA_DIR/state/proxnix-reconciler.sqlite"
+
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/config/nixos.common.conf" "$LXC_CONFIG_DIR/nixos.common.conf"
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/config/nixos.userns.conf" "$LXC_CONFIG_DIR/nixos.userns.conf"
-link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-prestart" "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
-link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-mount" "$LXC_HOOKS_DIR/nixos-proxnix-mount"
-link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-poststop" "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
+link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-start-host" "$LXC_HOOKS_DIR/nixos-proxnix-start-host"
 
-rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
+rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix"
 rm -f "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
+rm -f /usr/share/lxc/hooks/nixos-proxnix-prestart
+rm -f /usr/share/lxc/hooks/nixos-proxnix-mount
+rm -f /usr/share/lxc/hooks/nixos-proxnix-poststop
 rm -f "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
 rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"
 link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix-secrets-guest" "$PROXNIX_LIB_DIR/proxnix-secrets-guest"
 
 for command in \
-    proxnix-authority-render \
-    proxnix-create-lxc \
     proxnix-doctor \
     proxnix-host \
-    proxnix-flake-update \
-    proxnix-gc \
-    proxnix-reconcile \
-    proxnix-reconcile-build-golden \
-    proxnix-reconcile-build \
-    proxnix-reconcile-seed \
-    proxnix-reconcile-seed-offline \
-    proxnix-reconcile-activate \
-    proxnix-reconciler-state \
     proxnix-host-activate \
-    proxnix-host-uninstall \
-    proxnix-uninstall
+    proxnix-host-uninstall
 do
     link_file "$PROXNIX_PROFILE/bin/$command" "$PROXNIX_SBIN_DIR/$command"
 done
 
-for command in age jq rsync sops; do
+for command in age jq sops; do
     link_file "$PROXNIX_PROFILE/bin/$command" "$PROXNIX_LOCAL_BIN_DIR/$command"
 done
 
@@ -100,6 +91,7 @@ link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-gc.timer" "$SYSTEMD_UNI
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.service" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.service"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.timer" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
+link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile.timer" "$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer"
 link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile@.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service"
 
 link_file "$PROXNIX_PROFILE/share/proxnix/nix/base.nix" "$PROXNIX_DATA_DIR/base.nix"
@@ -110,31 +102,16 @@ link_file "$PROXNIX_PROFILE/share/proxnix/nix/configuration.nix" "$PROXNIX_DATA_
 cat > "$PROXNIX_INSTALL_MANIFEST" <<EOF
 $LXC_CONFIG_DIR/nixos.common.conf
 $LXC_CONFIG_DIR/nixos.userns.conf
-$LXC_HOOKS_DIR/nixos-proxnix-prestart
-$LXC_HOOKS_DIR/nixos-proxnix-mount
-$LXC_HOOKS_DIR/nixos-proxnix-poststop
+$LXC_HOOKS_DIR/nixos-proxnix-start-host
 $PROXNIX_LIB_DIR/proxnix-secrets-guest
 $PROXNIX_INSTALL_MANIFEST
 $PROXNIX_INSTALL_INFO
 $PROXNIX_SBIN_DIR/proxnix-doctor
-$PROXNIX_SBIN_DIR/proxnix-create-lxc
-$PROXNIX_SBIN_DIR/proxnix-authority-render
 $PROXNIX_SBIN_DIR/proxnix-host
-$PROXNIX_SBIN_DIR/proxnix-flake-update
-$PROXNIX_SBIN_DIR/proxnix-gc
-$PROXNIX_SBIN_DIR/proxnix-reconcile
-$PROXNIX_SBIN_DIR/proxnix-reconcile-build-golden
-$PROXNIX_SBIN_DIR/proxnix-reconcile-build
-$PROXNIX_SBIN_DIR/proxnix-reconcile-seed
-$PROXNIX_SBIN_DIR/proxnix-reconcile-seed-offline
-$PROXNIX_SBIN_DIR/proxnix-reconcile-activate
-$PROXNIX_SBIN_DIR/proxnix-reconciler-state
 $PROXNIX_SBIN_DIR/proxnix-host-activate
 $PROXNIX_SBIN_DIR/proxnix-host-uninstall
-$PROXNIX_SBIN_DIR/proxnix-uninstall
 $PROXNIX_LOCAL_BIN_DIR/age
 $PROXNIX_LOCAL_BIN_DIR/jq
-$PROXNIX_LOCAL_BIN_DIR/rsync
 $PROXNIX_LOCAL_BIN_DIR/sops
 $PROXNIX_PROFILE
 $SYSTEMD_UNIT_DIR/proxnix-flake-update.service
@@ -142,6 +119,7 @@ $SYSTEMD_UNIT_DIR/proxnix-flake-update.timer
 $SYSTEMD_UNIT_DIR/proxnix-gc.service
 $SYSTEMD_UNIT_DIR/proxnix-gc.timer
 $SYSTEMD_UNIT_DIR/proxnix-reconcile.service
+$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer
 $SYSTEMD_UNIT_DIR/proxnix-reconcile@.service
 $PROXNIX_DATA_DIR/base.nix
 $PROXNIX_DATA_DIR/common.nix
@@ -157,22 +135,10 @@ This node uses a Nix profile for normal proxnix host operations:
 $PROXNIX_PROFILE
 
 Installed local commands:
-- proxnix-authority-render
-- proxnix-create-lxc
 - proxnix-doctor
 - proxnix-host
-- proxnix-flake-update
-- proxnix-gc
-- proxnix-reconcile
-- proxnix-reconcile-build-golden
-- proxnix-reconcile-build
-- proxnix-reconcile-seed
-- proxnix-reconcile-seed-offline
-- proxnix-reconcile-activate
-- proxnix-reconciler-state
 - proxnix-host-activate
 - proxnix-host-uninstall
-- proxnix-uninstall
 
 Managed local runtime links are listed in:
 $PROXNIX_INSTALL_MANIFEST
@@ -184,13 +150,13 @@ Published relay data remains external:
 To remove only the installed proxnix runtime from this node, run:
   proxnix-host-uninstall
 
-proxnix-uninstall is kept as a compatibility alias. The uninstall command
-removes proxnix host symlinks and the proxnix host profile. It does not remove
-Nix itself.
+The uninstall command removes proxnix host symlinks and the proxnix host
+profile. It does not remove Nix itself.
 EOF
 
 systemctl daemon-reload
 systemctl enable --now proxnix-gc.timer
 systemctl enable --now proxnix-flake-update.timer
+systemctl enable --now proxnix-reconcile.timer
 
 echo "proxnix host runtime activated from $PROXNIX_PROFILE"

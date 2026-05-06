@@ -1,0 +1,49 @@
+---
+- name: Build and set proxnix host profile
+  ansible.builtin.shell: |
+    set -eu
+    profile={{ proxnix_host_profile | quote }}
+    flake_ref={{ (proxnix_host_flake_ref | default(proxnix_host_flake_ref_default)) | quote }}
+    built_path="$({{ proxnix_nix_bin | quote }} build --no-link --print-out-paths --no-write-lock-file "$flake_ref" | tail -n 1)"
+    test -n "$built_path"
+
+    {{ proxnix_nix_env_bin | quote }} --profile "$profile" --set "$built_path"
+  args:
+    executable: /bin/bash
+  register: proxnix_host_profile_install
+  changed_when: proxnix_host_profile_install.stdout != "" or proxnix_host_profile_install.stderr != ""
+
+- name: Activate proxnix host runtime
+  ansible.builtin.command: "{{ proxnix_host_profile }}/bin/proxnix-host-activate"
+  changed_when: true
+
+- name: Verify proxnix host command paths are installed
+  ansible.builtin.stat:
+    path: "/usr/local/sbin/{{ item }}"
+  register: proxnix_host_command_stats
+  loop:
+    - proxnix-doctor
+    - proxnix-host
+    - proxnix-host-activate
+    - proxnix-host-uninstall
+
+- name: Assert proxnix host command paths are executable
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.executable
+    fail_msg: "{{ item.item }} is missing or not executable under /usr/local/sbin"
+  loop: "{{ proxnix_host_command_stats.results }}"
+
+- name: Verify proxnix host controller runs
+  ansible.builtin.command: proxnix-host --help
+  changed_when: false
+
+- name: Verify proxnix host tools are installed
+  ansible.builtin.command: "{{ item }} --version"
+  changed_when: false
+  loop:
+    - age
+    - jq
+    - sops
+

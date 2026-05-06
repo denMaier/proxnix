@@ -9,7 +9,7 @@ boot apply to finish, and then checks the feature surfaces that proxnix owns.
 
 ## What it covers
 
-- `proxnix-create-lxc`
+- `proxnix-host create-lxc`
 - full publish plus `--report-changes`
 - site doctor and remote drift doctor
 - host doctor

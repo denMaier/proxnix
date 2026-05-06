@@ -2,8 +2,9 @@
 Description=Periodically garbage-collect stale proxnix host state
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=15min
+OnBootSec=15min
+OnUnitActiveSec=1d
+Persistent=true
 
 [Install]
 WantedBy=timers.target

@@ -1,15 +1,15 @@
 # Guest-side experimentation entry point. The host does **not** evaluate this
 # file for actual reconciliation — the generated authority flake under
 # /var/lib/proxnix/authority owns the desired closure. This file ships into
-# the guest at /var/lib/proxnix/build-input/configuration.nix via the prestart
-# and mount hooks so you can run a local nixos-rebuild against a clean
+# the guest at /var/lib/proxnix/build-input/configuration.nix during host
+# reconciliation so you can run a local nixos-rebuild against a clean
 # snapshot of what the host evaluated:
 #
 #   1. Drop expressions into /var/lib/proxnix/build-input/local.nix
 #   2. nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix
 #   3. Any activation you produce is reverted on the next host reconcile, and
-#      build-input itself is rewritten on the next container start (rsync
-#      --delete). Save anything you want to keep into your site repo first.
+#      build-input itself is rewritten by the Rust host controller on the next
+#      reconcile. Save anything you want to keep into your site repo first.
 #   4. Once the change works, promote it into a site dropin so the host owns
 #      the durable state.
 let

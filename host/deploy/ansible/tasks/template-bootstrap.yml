@@ -1,0 +1,20 @@
+---
+- name: Plan or run proxnix golden template bootstrap
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['proxnix-host', 'template', 'bootstrap',
+         '--template-storage', proxnix_template_storage,
+         '--template-name', proxnix_template_name,
+         '--rootfs-storage', proxnix_template_rootfs_storage]
+        + (['--source-template-name', proxnix_template_source_name] if proxnix_template_source_name | length > 0 else [])
+        + (['--temp-vmid', proxnix_template_temp_vmid] if proxnix_template_temp_vmid | length > 0 else [])
+        + (['--force'] if proxnix_template_force | bool else [])
+        + (['--dry-run'] if proxnix_template_bootstrap_dry_run | bool else [])
+      }}
+  changed_when:
+    - proxnix_template_bootstrap_result.rc == 0
+    - not (proxnix_template_bootstrap_dry_run | bool)
+    - "'reusing existing proxnix golden template' not in proxnix_template_bootstrap_result.stdout"
+  register: proxnix_template_bootstrap_result
+

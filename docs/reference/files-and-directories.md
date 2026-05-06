@@ -8,7 +8,7 @@ This page maps every important proxnix path by role.
 |------|---------|
 | `flake.nix` | Root host-runtime flake exposing `.#proxnix-host` |
 | `host/nix/proxnix-host.nix` | Nix package for the Proxmox host payload |
-| `host/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-host-uninstall` |
+| `host/install/uninstall.sh` | Repo-local source for the uninstall logic shipped onto hosts as `proxnix-host-uninstall` |
 | `host/deploy/ansible/install.yml` | Idempotent Ansible playbook that installs proxnix on one or more Proxmox nodes |
 | `host/deploy/inventory.proxmox.ini` | Example Ansible inventory for remote Proxmox installs |
 | `VERSION` | Canonical project release version used for tags and packaging checks |
@@ -23,23 +23,15 @@ This page maps every important proxnix path by role.
 | `ci/render-homebrew-cask.sh` | Renders a concrete Homebrew cask for Proxnix Manager from the template |
 | `ci/render-homebrew-formula.sh` | Renders a concrete Homebrew formula for `proxnix-workstation` from the template |
 | `ci/workstation-version.sh` | Prints the workstation package version from `workstation/cli/pyproject.toml` |
-| `host/rust/` | Rust source for the `proxnix-host` controller binary |
-| `host/runtime/bin/proxnix-authority-render` | Host-side command wrapper for authority rendering |
-| `host/runtime/bin/proxnix-create-lxc` | Host-side helper to create a proxnix-ready NixOS CT |
-| `host/runtime/bin/proxnix-doctor` | Host-side health check tool |
-| `host/runtime/bin/proxnix-flake-update` | Host-side flake lock updater |
-| `host/runtime/bin/proxnix-gc` | Host-side stale stage-dir and deployment GC-root pruner |
-| `host/runtime/bin/proxnix-reconcile` | Host-side reconciler entrypoint |
-| `host/runtime/bin/proxnix-reconcile-build-golden` | Host-side golden-template build warmer |
-| `host/runtime/bin/proxnix-reconcile-build` | Wrapper for `proxnix-host reconcile build` |
-| `host/runtime/bin/proxnix-reconcile-seed` | Wrapper for `proxnix-host reconcile seed` |
-| `host/runtime/bin/proxnix-reconcile-seed-offline` | Wrapper for `proxnix-host reconcile seed-offline` |
-| `host/runtime/bin/proxnix-reconcile-activate` | Wrapper for `proxnix-host reconcile activate` |
-| `host/runtime/bin/proxnix-reconciler-state` | CLI wrapper for the reconciler SQLite journal |
+| `Cargo.toml` | Root Cargo workspace for host-side Rust crates |
+| `crates/proxnix-host/` | Rust source for the `proxnix-host` controller binary |
+| `host/runtime/bin/proxnix-doctor` | Host-side shell health check tool |
+| `host/runtime/bin/proxnix-host-activate` | Host activation helper that links profile payloads into host paths |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/systemd/proxnix-flake-update.service` | Host-side flake lock update service |
 | `host/runtime/systemd/proxnix-flake-update.timer` | Daily timer that gates daily, weekly, or monthly flake updates |
-| `host/runtime/systemd/proxnix-reconcile.service` | Explicit all-local-container reconcile service |
+| `host/runtime/systemd/proxnix-reconcile.service` | Timer target for automatic host event reconciliation |
+| `host/runtime/systemd/proxnix-reconcile.timer` | Daily host event sweep: build local managed CTs and apply `nix-stage` / `nix-auto` runtime policy |
 | `host/runtime/systemd/proxnix-reconcile@.service` | Explicit per-VMID running-CT reconcile service |
 | `host/runtime/lib/proxnix-secrets-guest` | Guest-side secret reader and Podman shell driver |
 | `host/runtime/nix/base.nix` | Shared guest baseline: LXC tweaks, age setup, login summary |
@@ -76,7 +68,6 @@ Current top-level layout:
 │   ├── install/
 │   ├── runtime/
 │   │   ├── lxc/config/
-│   │   ├── lxc/hooks/
 │   │   ├── lib/
 │   │   ├── bin/
 │   │   ├── nix/
@@ -104,7 +95,7 @@ Current top-level layout:
 
 These paths are the published host-side state on the Proxmox node. The
 workstation-owned site repo is the source of truth for configuration; the flake
-lock can also be advanced on the host by `proxnix-flake-update`.
+lock can also be advanced on the host by `proxnix-host flake-update`.
 
 ```text
 /var/lib/proxnix/
@@ -117,7 +108,6 @@ lock can also be advanced on the host by `proxnix-flake-update`.
 ├── authority/                         generated host authority flake wrapper
 ├── status/                            reconciler status JSON
 ├── state/
-│   ├── proxnix-reconciler.sqlite      node-local reconciliation journal
 │   └── flake-update.last-success      last successful flake update timestamp
 ├── gcroots/
 │   └── deploy/
@@ -138,12 +128,25 @@ lock can also be advanced on the host by `proxnix-flake-update`.
 └── host_relay_identity                shared host relay private key
 ```
 
+`authority/` is generated state. It is rebuilt from the published host inputs,
+container directories, and observed PVE LXC configs, then evaluated by Nix so
+the host can expose `nixosConfigurations.ct<vmid>` and
+`proxnix.nodes.<node>`. It is not a user-authored database; deleting it should
+only force regeneration.
+
+The host relay identity and `shared_age_identity.sops.yaml` remain host-only.
+Guests receive their own per-container identity at
+`/var/lib/proxnix/secrets/identity` when one is configured, plus the compiled
+runtime secret store.
+
 ## Per-node runtime paths
 
-Ansible stages the host flake source under `/var/lib/proxnix/install-source`,
-installs `/nix/var/nix/profiles/proxnix-host`, and runs
-`proxnix-host-activate`. The paths below are symlinks into that profile, except
-for the local manifest and install metadata.
+Production Ansible installs build the host profile from the configured flake ref
+and run `proxnix-host-activate`. Development installs through
+`host/deploy/ansible/install-local.yml` first stage the current checkout under
+`/var/lib/proxnix/install-source`. The paths below are symlinks into the
+`/nix/var/nix/profiles/proxnix-host` profile, except for the local manifest and
+install metadata.
 
 ```text
 /usr/share/lxc/config/
@@ -151,9 +154,7 @@ for the local manifest and install metadata.
 └── nixos.userns.conf                  auto-included for unprivileged
 
 /usr/share/lxc/hooks/
-├── nixos-proxnix-prestart             thin wrapper for `proxnix-host hook prestart`
-├── nixos-proxnix-mount                thin wrapper for `proxnix-host hook mount`
-└── nixos-proxnix-poststop             thin wrapper for `proxnix-host hook poststop`
+└── nixos-proxnix-start-host           symlink to `proxnix-host`
 
 /usr/local/lib/proxnix/
 ├── proxnix-secrets-guest              helper injected into guests
@@ -162,30 +163,17 @@ for the local manifest and install metadata.
 
 /usr/local/sbin/
 ├── proxnix-host                       Rust host controller
-├── proxnix-authority-render           authority wrapper renderer
-├── proxnix-create-lxc                 CT creation helper
-├── proxnix-doctor                     health check tool
-├── proxnix-flake-update               wrapper for `proxnix-host flake-update`
-├── proxnix-gc                         wrapper for `proxnix-host gc`
-├── proxnix-reconcile                  host-side reconciler
-├── proxnix-reconcile-build-golden     wrapper for `proxnix-host reconcile build-golden`
-├── proxnix-reconcile-build            wrapper for `proxnix-host reconcile build`
-├── proxnix-reconcile-seed             wrapper for `proxnix-host reconcile seed`
-├── proxnix-reconcile-seed-offline     wrapper for `proxnix-host reconcile seed-offline`
-├── proxnix-reconcile-activate         wrapper for `proxnix-host reconcile activate`
-├── proxnix-reconciler-state           compatibility wrapper for `proxnix-host state`
+├── proxnix-doctor                     shell health check tool
 ├── proxnix-host-activate              links the Nix profile payload into host paths
-├── proxnix-host-uninstall             local uninstall helper
-└── proxnix-uninstall                  compatibility alias
+└── proxnix-host-uninstall             local uninstall helper
 ```
 
 ## Stage directory on the host (tmpfs)
 
-Created by the pre-start hook. The mount hook copies the rendered build input
-from here into a guest debug snapshot with `rsync`, binds runtime markers,
-copies guest-visible helper files into place, copies secret files into the
-guest as root-owned regular files, and the post-stop hook removes the tree
-after the container stops:
+Created by the reconciler while rendering a CT payload. The reconciler copies
+the rendered build input from here into a guest debug snapshot, writes runtime
+markers and guest-visible helper files, copies secret files into the guest as
+root-owned regular files, and `proxnix-host gc` removes stale stage trees:
 
 ```text
 /run/proxnix/<vmid>/
@@ -219,7 +207,7 @@ after the container stops:
 └── local.nix                          guest-only escape hatch (unmanaged)
 
 /var/lib/proxnix/
-├── build-input/                       rsync-copied debug snapshot, not activation authority
+├── build-input/                       Rust-mirrored debug snapshot, not activation authority
 │   ├── configuration.nix
 │   └── managed/
 │       ├── base.nix

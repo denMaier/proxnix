@@ -1,0 +1,22 @@
+---
+- name: Release shared proxnix template storage install lock
+  ansible.builtin.shell: |
+    set -eu
+    release_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.release"
+    ready_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.ready"
+    pid_file="/run/proxnix/template-install-{{ proxnix_template_storage_lock_slug }}.pid"
+
+    touch "$release_file"
+    if [ -s "$pid_file" ]; then
+      lock_pid="$(cat "$pid_file")"
+      i=0
+      while kill -0 "$lock_pid" 2>/dev/null && [ "$i" -lt 30 ]; do
+        i=$((i + 1))
+        sleep 1
+      done
+      kill "$lock_pid" 2>/dev/null || true
+    fi
+    rm -f "$release_file" "$ready_file" "$pid_file"
+  args:
+    executable: /bin/bash
+  changed_when: false

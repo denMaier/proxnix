@@ -217,20 +217,20 @@ private/containers/<vmid>/
 
 That means each Proxmox host persistently stores only one plaintext relay key.
 Container identities remain encrypted at rest on the host and are decrypted
-only transiently during pre-start staging.
+only transiently during reconcile staging.
 
 ## How secrets reach the guest
 
 ```text
 Host relay cache                           Guest
 ────────────────                           ─────
-/etc/proxnix/host_relay_identity  (used on host only during pre-start)
+/etc/proxnix/host_relay_identity  (used on host only during reconcile staging)
 /var/lib/proxnix/private/containers/<vmid>/effective.sops.yaml ─► /var/lib/proxnix/secrets/effective.sops.yaml
 /var/lib/proxnix/private/containers/<vmid>/age_identity.sops.yaml ─► /var/lib/proxnix/secrets/identity
 ```
 
-The pre-start hook stages these files on the host. The mount hook then copies
-them into the guest as root-owned regular files with root-only permissions.
+The reconciler stages these files on the host, then copies them into the guest
+as root-owned regular files with root-only permissions.
 
 ## Guest helper
 
@@ -445,9 +445,9 @@ The fetched secret is exposed to the script as `PROXNIX_SECRET_FILE`. Set
 
 For Podman workloads, proxnix uses a shell-based secret driver.
 
-The mount hook reconciles visible proxnix secret names into Podman's
-`secrets.json`, which lets Podman workloads consume proxnix-managed secrets
-without a manual `podman secret create`.
+The guest shell secret driver resolves visible proxnix secret names from
+`/var/lib/proxnix/secrets`, which lets Podman workloads consume
+proxnix-managed secrets without a manual `podman secret create`.
 
 ## Built-in shared secrets
 

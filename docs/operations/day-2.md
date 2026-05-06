@@ -2,19 +2,20 @@
 
 This page covers normal operational tasks after initial bootstrap.
 
-> **Key principle:** proxnix builds and stages desired systems from the host. Every host-side change requires a container restart or explicit host reconcile to take effect. There is no live-reload mechanism — this is by design.
+> **Key principle:** proxnix builds and stages desired systems from the host. Every host-side change requires explicit host reconcile, a publish-triggered build workflow, or the daily `nix-auto` timer reconciliation to take effect. There is no live-reload mechanism — this is by design.
 
 ## Change networking or SSH keys
 
 Use the Proxmox WebUI for the primary container definition.
 
-After making a change, restart the CT:
+After making a change, reconcile the CT:
 
 ```bash
-pct restart <vmid>
+proxnix-host reconcile --vmid <vmid>
 ```
 
-For host-managed config outside the Proxmox CT definition, update `dropins/*.nix` and restart.
+For host-managed config outside the Proxmox CT definition, update
+`dropins/*.nix` and reconcile.
 
 ## Change native service config
 
@@ -23,11 +24,11 @@ Edit one of these on the host:
 - `dropins/*.nix`
 - `dropins/*.{sh,py}`
 
-Then restart the container so proxnix rebuilds if needed, refreshes the debug
-build-input snapshot, seeds the closure, and activates it on boot:
+Then reconcile the container so proxnix rebuilds if needed, refreshes the debug
+build-input snapshot, seeds the closure, and activates it:
 
 ```bash
-pct restart <vmid>
+proxnix-host reconcile --vmid <vmid>
 ```
 
 Watch the booted system:
@@ -43,7 +44,7 @@ Edit guest Nix workload files under:
 - `dropins/*.nix`
 - optional supporting `dropins/*.{sh,py}`
 
-Then restart the container.
+Then reconcile the container.
 
 Inside the guest, useful commands may include:
 
@@ -61,7 +62,7 @@ The most efficient workflow for complex changes is to experiment in the guest fi
 3. **Apply changes**: Run `nixos-rebuild switch`.
 4. **Repeat**: Tweak and apply until the configuration is correct.
 5. **Commit to host**: Move the final configuration from `local.nix` into host-side `dropins/*.nix`.
-6. **Finalize**: Restart the container to apply the host-side config and clear your experiments from the guest.
+6. **Finalize**: Reconcile the container to apply the host-side config and clear your experiments from the guest.
 
 ## Applying temporary guest-only overrides
 
@@ -89,7 +90,8 @@ Sample output for a healthy container:
 ```text
 [host]
   OK    /usr/share/lxc/config/nixos.common.conf present
-  OK    /usr/share/lxc/hooks/nixos-proxnix-prestart present
+  OK    /usr/share/lxc/hooks/nixos-proxnix-start-host present
+  OK    /usr/local/sbin/proxnix-host present
   ...
 
 [ct 100]
@@ -121,11 +123,11 @@ proxnix-secrets rm-shared <name>
 proxnix-secrets rotate-shared
 ```
 
-After changing secrets, publish and restart:
+After changing secrets, publish and reconcile:
 
 ```bash
 proxnix-publish
-pct restart <vmid>
+proxnix-host reconcile --vmid <vmid>
 ```
 
 ## Updating proxnix itself
@@ -133,14 +135,15 @@ pct restart <vmid>
 Typical sequence:
 
 1. Rerun `host/deploy/ansible/install.yml` for every node that should host proxnix-managed containers
-2. Restart managed containers as needed
+2. Reconcile managed containers as needed
 
 Once a node is installed, it does not need to retain that repo checkout for
 normal operations. Use `proxnix-host-uninstall` on the node to remove installed
-host runtime files while keeping relay data. `proxnix-uninstall` remains as a
-compatibility alias.
+host runtime files while keeping relay data.
 
-For routine host cleanup, use `proxnix-gc`. Avoid running
+For routine host cleanup, use `proxnix-host gc`. It removes stale proxnix deploy
+GC roots, prunes old `/nix/var/nix/profiles/proxnix-host` generations, and runs
+`nix-store --gc` after the proxnix roots are in the intended state. Avoid running
 `nix-collect-garbage` directly against the Proxmox host store unless you have
 first checked the proxnix deployment GC roots under
 `/var/lib/proxnix/gcroots/deploy`.
@@ -155,7 +158,7 @@ proxnix-secrets set-shared common_admin_password_hash
 # Paste the new hash when prompted
 ```
 
-Then restart each container so the updated secret is staged on next boot.
+Then reconcile each container so the updated secret is staged.
 
 ## Stage directory cleanup
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 # uninstall.sh — Remove proxnix from a Proxmox node.
 #
-# Removes the per-node files installed by the Ansible playbook. This script is also
-# installed onto the host as /usr/local/sbin/proxnix-uninstall so the original
-# repo checkout is not required for normal uninstall operations.
+# Removes the per-node files installed by the Ansible playbook. This script is
+# installed onto the host as /usr/local/sbin/proxnix-host-uninstall so the
+# original repo checkout is not required for normal uninstall operations.
 # /var/lib/proxnix/ and /etc/proxnix/ are intentionally left untouched — they
 # hold relay-cache config and secret material that the operator publishes from
 # the workstation.
@@ -11,7 +11,7 @@
 # Must be run as root on the Proxmox host.
 #
 # Usage:
-#   proxnix-uninstall [--dry-run]
+#   proxnix-host-uninstall [--dry-run]
 
 set -euo pipefail
 
@@ -86,12 +86,13 @@ do_rm "$LXC_CONFIG_DIR/nixos.common.conf"
 do_rm "$LXC_CONFIG_DIR/nixos.userns.conf"
 
 action "Lifecycle hooks"
+do_rm "$LXC_HOOKS_DIR/nixos-proxnix-start-host"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-prestart"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-mount"
 do_rm "$LXC_HOOKS_DIR/nixos-proxnix-poststop"
 
 action "Local runtime helper"
-do_rm "$PROXNIX_LIB_DIR/pve-conf-to-nix.py"
+do_rm "$PROXNIX_LIB_DIR/pve-conf-to-nix"
 do_rm "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
 do_rm "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
 do_rm "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
@@ -116,6 +117,9 @@ do_rm "$PROXNIX_SBIN_DIR/proxnix-reconciler-state"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-host-activate"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-host-uninstall"
 do_rm "$PROXNIX_SBIN_DIR/proxnix-uninstall"
+
+action "Legacy internal SQLite state"
+do_rm "$PROXNIX_DATA_DIR/state/proxnix-reconciler.sqlite"
 
 action "Nix-managed host runtime"
 do_rm "$PROXNIX_LOCAL_BIN_DIR/age"

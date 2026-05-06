@@ -5,23 +5,25 @@
   gather_facts: false
 
   vars:
-    proxnix_repo_root: "{{ playbook_dir }}/../../.."
-    proxnix_data_dir: /var/lib/proxnix
-    proxnix_install_source_dir: "{{ proxnix_data_dir }}/install-source"
     proxnix_host_profile: /nix/var/nix/profiles/proxnix-host
-    proxnix_host_flake_ref: "{{ proxnix_install_source_dir }}#proxnix-host"
+    proxnix_host_flake_ref_default: github:denMaier/proxnix#proxnix-host
+    proxnix_nix_default_bin: /nix/var/nix/profiles/default/bin/nix
+    proxnix_nix_env_default_bin: /nix/var/nix/profiles/default/bin/nix-env
+    proxnix_template_bootstrap_enabled: false
+    proxnix_template_bootstrap_dry_run: false
+    proxnix_template_storage: local
+    proxnix_template_name: proxnix-nixos-golden.tar.xz
+    proxnix_template_source_name: ""
+    proxnix_template_rootfs_storage: auto
+    proxnix_template_temp_vmid: ""
+    proxnix_template_force: false
+    proxnix_template_install_lock_wait_seconds: 7200
+    proxnix_template_install_lock_ttl_seconds: 7200
     # Valid values:
-    # - require-existing: fail if Nix is absent
     # - determinate: install Nix with the Determinate Systems installer if absent
-    proxnix_nix_install_mode: require-existing
+    # - require-existing: fail if Nix is absent
+    proxnix_nix_install_mode: determinate
     proxnix_determinate_nix_install_url: https://install.determinate.systems/nix
-    proxnix_install_source_files:
-      - flake.nix
-      - VERSION
-    proxnix_install_source_dirs:
-      - host/runtime
-      - host/install
-      - host/nix
 
   pre_tasks:
     - name: Ensure this playbook targets remote SSH hosts
@@ -38,139 +40,24 @@
       ansible.builtin.command: pveversion
       changed_when: false
 
-    - name: Check whether nix is installed
-      ansible.builtin.command: nix --version
-      register: proxnix_nix_check
-      changed_when: false
-      failed_when: false
+    - name: Prepare shared template bootstrap lock when enabled
+      ansible.builtin.import_tasks: tasks/template-bootstrap-lock.yml
+      when: proxnix_template_bootstrap_enabled | bool
 
-    - name: Validate Nix install mode
-      ansible.builtin.assert:
-        that:
-          - proxnix_nix_install_mode in ['require-existing', 'determinate']
-        fail_msg: "proxnix_nix_install_mode must be 'require-existing' or 'determinate'"
-
-    - name: Install Nix with Determinate Systems installer when requested
-      ansible.builtin.shell: |
-        set -eu
-        curl --proto '=https' --tlsv1.2 -sSf -L {{ proxnix_determinate_nix_install_url | quote }} | sh -s -- install --no-confirm
-      args:
-        creates: /nix/nix-installer
-        executable: /bin/bash
-      when:
-        - proxnix_nix_install_mode == 'determinate'
-        - proxnix_nix_check.rc != 0
-
-    - name: Fail when nix is missing
-      ansible.builtin.fail:
-        msg: "nix is not installed; install Nix first or rerun with -e proxnix_nix_install_mode=determinate"
-      when:
-        - proxnix_nix_install_mode == 'require-existing'
-        - proxnix_nix_check.rc != 0
-
-    - name: Verify nix is installed on the target host
-      ansible.builtin.command: nix --version
-      changed_when: false
-
-    - name: Ensure /etc/nix exists
-      ansible.builtin.file:
-        path: /etc/nix
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Configure proxnix Nix settings
-      ansible.builtin.blockinfile:
-        path: /etc/nix/nix.conf
-        create: true
-        owner: root
-        group: root
-        mode: "0644"
-        marker: "# {mark} proxnix managed Nix settings"
-        block: |
-          experimental-features = nix-command flakes
-
-    - name: Restart nix-daemon after nix.conf changes
-      ansible.builtin.systemd:
-        name: nix-daemon.service
-        state: restarted
-        daemon_reload: true
-      failed_when: false
-
-    - name: Verify nix-command and flakes are enabled
-      ansible.builtin.command: nix --extra-experimental-features "nix-command flakes" eval --expr true
-      changed_when: false
+    - name: Ensure Nix is installed and flakes are enabled
+      ansible.builtin.import_tasks: tasks/nix-runtime.yml
 
   tasks:
-    - name: Reset proxnix host package source
-      ansible.builtin.file:
-        path: "{{ proxnix_install_source_dir }}"
-        state: absent
+    - name: Install and activate proxnix host profile
+      ansible.builtin.import_tasks: tasks/proxnix-host-profile.yml
 
-    - name: Create proxnix host package source directories
-      ansible.builtin.file:
-        path: "{{ proxnix_install_source_dir }}/{{ item }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-      loop:
-        - ""
-        - host
+    - name: Bootstrap proxnix golden template when enabled
+      ansible.builtin.import_tasks: tasks/template-bootstrap.yml
+      when: proxnix_template_bootstrap_enabled | bool
 
-    - name: Stage proxnix host flake files
-      ansible.builtin.copy:
-        src: "{{ proxnix_repo_root }}/{{ item }}"
-        dest: "{{ proxnix_install_source_dir }}/{{ item }}"
-        owner: root
-        group: root
-        mode: "0644"
-      loop: "{{ proxnix_install_source_files }}"
-
-    - name: Stage proxnix host flake directories
-      ansible.builtin.copy:
-        src: "{{ proxnix_repo_root }}/{{ item }}"
-        dest: "{{ proxnix_install_source_dir }}/{{ item | dirname }}"
-        owner: root
-        group: root
-        mode: preserve
-      loop: "{{ proxnix_install_source_dirs }}"
-
-    - name: Install or upgrade proxnix host profile
-      ansible.builtin.shell: |
-        set -eu
-        profile={{ proxnix_host_profile | quote }}
-        flake_ref={{ proxnix_host_flake_ref | quote }}
-
-        if [ -e "$profile/manifest.json" ]; then
-          nix profile upgrade --no-write-lock-file --profile "$profile" '.*' || nix profile install --no-write-lock-file --profile "$profile" "$flake_ref"
-        else
-          nix profile install --no-write-lock-file --profile "$profile" "$flake_ref"
-        fi
-      args:
-        executable: /bin/bash
-      register: proxnix_host_profile_install
-      changed_when: proxnix_host_profile_install.stdout != "" or proxnix_host_profile_install.stderr != ""
-
-    - name: Activate proxnix host runtime
-      ansible.builtin.command: "{{ proxnix_host_profile }}/bin/proxnix-host-activate"
-      changed_when: true
-
-    - name: Verify proxnix host commands are installed
-      ansible.builtin.command: "{{ item }} --help"
-      changed_when: false
-      loop:
-        - proxnix-doctor
-        - proxnix-flake-update
-        - proxnix-reconcile
-        - proxnix-host-activate
-
-    - name: Verify proxnix host tools are installed
-      ansible.builtin.command: "{{ item }} --version"
-      changed_when: false
-      loop:
-        - age
-        - jq
-        - rsync
-        - sops
+  post_tasks:
+    - name: Release shared template bootstrap lock when held
+      ansible.builtin.import_tasks: tasks/template-bootstrap-unlock.yml
+      when:
+        - proxnix_template_install_lock_result is defined
+        - not (proxnix_template_install_lock_result.skipped | default(false))

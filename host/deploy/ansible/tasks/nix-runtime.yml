@@ -1,0 +1,123 @@
+---
+- name: Check whether nix is installed
+  ansible.builtin.shell: |
+    set -eu
+    if command -v nix >/dev/null 2>&1; then
+      command -v nix
+    elif [ -x {{ proxnix_nix_default_bin | quote }} ]; then
+      printf '%s\n' {{ proxnix_nix_default_bin | quote }}
+    else
+      exit 127
+    fi
+  register: proxnix_nix_check
+  changed_when: false
+  failed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Validate Nix install mode
+  ansible.builtin.assert:
+    that:
+      - proxnix_nix_install_mode in ['require-existing', 'determinate']
+    fail_msg: "proxnix_nix_install_mode must be 'require-existing' or 'determinate'"
+
+- name: Install Nix with Determinate Systems installer when requested
+  ansible.builtin.shell: |
+    set -eu
+    curl --proto '=https' --tlsv1.2 -sSf -L {{ proxnix_determinate_nix_install_url | quote }} | sh -s -- install --no-confirm
+  args:
+    creates: /nix/nix-installer
+    executable: /bin/bash
+  when:
+    - proxnix_nix_install_mode == 'determinate'
+    - proxnix_nix_check.rc != 0
+
+- name: Fail when nix is missing
+  ansible.builtin.fail:
+    msg: "nix is not installed; rerun with proxnix_nix_install_mode=determinate or install Nix first"
+  when:
+    - proxnix_nix_install_mode == 'require-existing'
+    - proxnix_nix_check.rc != 0
+
+- name: Resolve nix binary path
+  ansible.builtin.shell: |
+    set -eu
+    if command -v nix >/dev/null 2>&1; then
+      command -v nix
+    elif [ -x {{ proxnix_nix_default_bin | quote }} ]; then
+      printf '%s\n' {{ proxnix_nix_default_bin | quote }}
+    else
+      exit 127
+    fi
+  register: proxnix_nix_path
+  changed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Store nix binary path
+  ansible.builtin.set_fact:
+    proxnix_nix_bin: "{{ proxnix_nix_path.stdout | trim }}"
+
+- name: Resolve nix-env binary path
+  ansible.builtin.shell: |
+    set -eu
+    if command -v nix-env >/dev/null 2>&1; then
+      command -v nix-env
+    elif [ -x {{ proxnix_nix_env_default_bin | quote }} ]; then
+      printf '%s\n' {{ proxnix_nix_env_default_bin | quote }}
+    else
+      exit 127
+    fi
+  register: proxnix_nix_env_path
+  changed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Store nix-env binary path
+  ansible.builtin.set_fact:
+    proxnix_nix_env_bin: "{{ proxnix_nix_env_path.stdout | trim }}"
+
+- name: Verify nix is installed on the target host
+  ansible.builtin.command:
+    argv:
+      - "{{ proxnix_nix_bin }}"
+      - --version
+  changed_when: false
+
+- name: Ensure /etc/nix exists
+  ansible.builtin.file:
+    path: /etc/nix
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure proxnix Nix settings
+  ansible.builtin.blockinfile:
+    path: /etc/nix/nix.conf
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    marker: "# {mark} proxnix managed Nix settings"
+    block: |
+      experimental-features = nix-command flakes
+
+- name: Restart nix-daemon after nix.conf changes
+  ansible.builtin.systemd:
+    name: nix-daemon.service
+    state: restarted
+    daemon_reload: true
+  failed_when: false
+
+- name: Verify nix-command and flakes are enabled
+  ansible.builtin.command:
+    argv:
+      - "{{ proxnix_nix_bin }}"
+      - --extra-experimental-features
+      - nix-command flakes
+      - eval
+      - --expr
+      - "true"
+  changed_when: false
+

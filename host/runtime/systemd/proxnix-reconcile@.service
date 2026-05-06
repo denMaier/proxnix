@@ -5,7 +5,4 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# LXC pre-start triggers this asynchronously before the guest can accept
-# pct exec. Give the start path time to reach the running state.
-ExecStartPre=/bin/sleep 10
-ExecStart=/usr/local/sbin/proxnix-reconcile --vmid %i
+ExecStart=/usr/local/sbin/proxnix-host reconcile --vmid %i

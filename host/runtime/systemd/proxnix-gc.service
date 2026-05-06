@@ -4,4 +4,4 @@ Documentation=https://github.com/your-org/proxnix
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/proxnix-gc
+ExecStart=/usr/local/sbin/proxnix-host gc

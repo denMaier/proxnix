@@ -27,10 +27,10 @@
           pkgs = import nixpkgs { inherit system; };
         in
         {
-          proxnix-host-rust = pkgs.callPackage ./host/nix/proxnix-host-rust.nix { };
+          proxnix-host-controller = pkgs.callPackage ./host/nix/proxnix-host-controller.nix { };
         } // lib.optionalAttrs (lib.elem system hostSystems) {
           proxnix-host = pkgs.callPackage ./host/nix/proxnix-host.nix {
-            proxnixHostRust = self.packages.${system}.proxnix-host-rust;
+            proxnixHostController = self.packages.${system}.proxnix-host-controller;
           };
           default = self.packages.${system}.proxnix-host;
         }

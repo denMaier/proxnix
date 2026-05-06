@@ -21,7 +21,6 @@ PROXNIX_AUTHORITY_DIR="/var/lib/proxnix/authority"
 PROXNIX_STATUS_DIR="/var/lib/proxnix/status"
 PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 LXC_CONFIG_DIR="/usr/share/lxc/config"
-LXC_HOOKS_DIR="/usr/share/lxc/hooks"
 PROXNIX_LIB_DIR="/usr/local/lib/proxnix"
 PROXNIX_SBIN_DIR="/usr/local/sbin"
 NIXOS_CURRENT_SYSTEM_BIN="/run/current-system/sw/bin"
@@ -164,15 +163,10 @@ check_host_files() {
   for path in \
     "$LXC_CONFIG_DIR/nixos.common.conf" \
       "$LXC_CONFIG_DIR/nixos.userns.conf" \
-      "$LXC_HOOKS_DIR/nixos-proxnix-prestart" \
-      "$LXC_HOOKS_DIR/nixos-proxnix-mount" \
+      "/usr/share/lxc/hooks/nixos-proxnix-start-host" \
       "$PROXNIX_LIB_DIR/proxnix-secrets-guest" \
       "$PROXNIX_SBIN_DIR/proxnix-doctor" \
-      "$PROXNIX_SBIN_DIR/proxnix-authority-render" \
-      "$PROXNIX_SBIN_DIR/proxnix-reconcile" \
-      "$PROXNIX_SBIN_DIR/proxnix-reconcile-build" \
-      "$PROXNIX_SBIN_DIR/proxnix-reconcile-seed" \
-      "$PROXNIX_SBIN_DIR/proxnix-reconcile-activate" \
+      "$PROXNIX_SBIN_DIR/proxnix-host" \
       "$NIXLXC_DIR/base.nix" \
       "$NIXLXC_DIR/common.nix" \
       "$NIXLXC_DIR/security-policy.nix" \
@@ -230,9 +224,9 @@ check_host_files() {
       fail "proxnix-reconcile@.service missing"
     fi
     if [[ -f /etc/systemd/system/proxnix-reconcile.timer ]]; then
-      fail "legacy proxnix-reconcile.timer still installed"
+      ok "proxnix-reconcile.timer installed"
     else
-      ok "legacy proxnix-reconcile.timer absent"
+      fail "proxnix-reconcile.timer missing"
     fi
   else
     fail "systemctl not found; cannot validate Nix daemon or reconciler services"
@@ -276,7 +270,7 @@ check_container() {
   if [[ "$ostype" == "nixos" ]]; then
     ok "ostype=nixos"
   else
-    fail "ostype is '${ostype:-unset}' — proxnix auto-hooking expects nixos"
+    fail "ostype is '${ostype:-unset}' — proxnix expects nixos CT config snippets"
   fi
 
   if [[ -f "$user_yaml" ]]; then
@@ -330,20 +324,20 @@ check_container() {
 
   if [[ -f "$status_file" ]]; then
     local desired_system current_system
-    desired_system="$("$SED_BIN" -n 's/.*"desiredSystem"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$status_file" | "$HEAD_BIN" -n1)"
+    desired_system="$("$SED_BIN" -n 's/.*"desired_system"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$status_file" | "$HEAD_BIN" -n1)"
     current_system="$(guest_readlink "$vmid" /run/current-system 2>/dev/null | "$TR_BIN" -d '\r\n' || true)"
     if [[ -n "$desired_system" && "$current_system" == "$desired_system" ]]; then
-      ok "reconciler status desiredSystem matches /run/current-system"
+      ok "reconciler status desired_system matches /run/current-system"
     elif [[ -n "$desired_system" ]]; then
-      fail "reconciler status desiredSystem (${desired_system}) does not match /run/current-system (${current_system:-unset})"
+      fail "reconciler status desired_system (${desired_system}) does not match /run/current-system (${current_system:-unset})"
     else
-      warn "reconciler status file exists but desiredSystem is missing: ${status_file}"
+      warn "reconciler status file exists but desired_system is missing: ${status_file}"
     fi
   fi
 
   # The host-side reconciler streams incremental closures into the running guest
   # via socat → /nix/var/nix/daemon-socket/socket. If the daemon socket is not
-  # present, only full offline reseeds (mount hook) work; online deltas fail.
+  # present, only offline reconciliation works; online deltas fail.
   if guest_test "$vmid" -S /nix/var/nix/daemon-socket/socket >/dev/null 2>&1; then
     ok "guest nix-daemon socket reachable at /nix/var/nix/daemon-socket/socket"
   else
@@ -368,7 +362,7 @@ check_container() {
   done
 
   if guest_test "$vmid" -L /var/lib/proxnix/build-input/configuration.nix >/dev/null 2>&1; then
-    fail "/var/lib/proxnix/build-input/configuration.nix is a symlink; expected an rsync-copied regular file"
+    fail "/var/lib/proxnix/build-input/configuration.nix is a symlink; expected a Rust-mirrored regular file"
   else
     ok "/var/lib/proxnix/build-input/configuration.nix is materialized as a regular file"
   fi
@@ -382,7 +376,7 @@ check_container() {
   fi
 
   if guest_test "$vmid" -f /etc/systemd/system.attached/proxnix-apply-config.service >/dev/null 2>&1; then
-    warn "legacy proxnix-apply-config service is still present; restart the CT to let the mount hook remove it"
+    warn "legacy proxnix-apply-config service is still present; reconcile the CT to replace legacy guest files"
   else
     ok "legacy proxnix-apply-config service absent"
   fi
@@ -441,11 +435,7 @@ check_container() {
 
   if [[ -f "${shared_identity}" ]]; then
     ok "host relay encrypted shared identity present: ${shared_identity}"
-    if guest_test "$vmid" -f /var/lib/proxnix/secrets/shared_identity >/dev/null 2>&1; then
-      ok "guest shared age identity present"
-    else
-      warn "host relay has an encrypted shared identity but the guest is missing it; restart the container"
-    fi
+    info "shared identity is host-relay material only; it is not staged into guests"
   else
     info "no host relay encrypted shared identity configured"
   fi

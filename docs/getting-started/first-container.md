@@ -12,14 +12,14 @@ Here's what you'll do and why:
 |------|------|-----|
 | 1 | Create the CT in Proxmox | You need a NixOS LXC container |
 | 2 | Create the workstation-side container directory | proxnix reads published per-container config from here |
-| 3 | Start the container | Triggers the pre-start and mount hooks that seed NixOS config |
+| 3 | Reconcile the container | Builds, seeds, and syncs the desired NixOS system from the host |
 | 4 | Bootstrap the NixOS channel | Fresh templates lack the root `nixos` channel needed for `nixos-rebuild` |
 | 5 | Add the first secret (optional) | Demonstrates the secrets workflow |
 | 6 | Verify health | Confirms everything is wired up correctly |
 
 ## 1. Create the CT in Proxmox
 
-Use a NixOS Proxmox LXC template from Hydra and create the container in the Proxmox WebUI. If you prefer a guided shell flow, run `proxnix-create-lxc` on the Proxmox host; it validates the local proxnix install first, auto-detects the newest local NixOS template and a rootfs storage by default, creates the CT, and starts it for you.
+Use a NixOS Proxmox LXC template from Hydra and create the container in the Proxmox WebUI. If you prefer a guided shell flow, run `proxnix-host create-lxc` on the Proxmox host; it validates the local proxnix install first, auto-detects the newest local NixOS template and a rootfs storage by default, creates the CT, and starts it for you.
 
 **Resource requirements:**
 
@@ -45,7 +45,9 @@ If the CT uses a generic tarball and the type was detected incorrectly, fix it:
 pct set <vmid> --ostype nixos
 ```
 
-> `ostype=nixos` matters because Proxmox automatically includes the proxnix LXC config snippets for NixOS containers. Without it, the hooks won't run.
+> `ostype=nixos` matters because Proxmox automatically includes the proxnix
+> LXC config snippets for NixOS containers. Without it, the guest may miss the
+> expected NixOS/LXC compatibility defaults.
 
 ## 2. Create the workstation-side container directory
 
@@ -135,35 +137,38 @@ disable it only for this one guest, set the same option in this container's
 proxnix-publish
 ```
 
-## 3. Start the container
+## 3. Reconcile and start the container
 
 ```bash
-pct start 100
+proxnix-host start --vmid 100
 ```
 
 At this point proxnix has already:
 
-1. Run the **pre-start hook** — rendered the desired NixOS config into `/run/proxnix/100/` and ran `proxnix-reconcile-build --vmid 100`
-2. Run the **mount hook** — copied the rendered build input into `/var/lib/proxnix/build-input/` with `rsync`, copied root-only secret files into `/var/lib/proxnix/secrets/`, ran `proxnix-reconcile-seed-offline --vmid 100 --rootfs <mounted-rootfs>`, and advanced the rootfs NixOS system profile
-3. Booted the desired system directly and verified `/run/current-system`
-4. Removed any legacy guest-side `proxnix-apply-config` service files
+1. Rendered the desired NixOS config into `/run/proxnix/100/`
+2. Mirrored the rendered build input into `/var/lib/proxnix/build-input/`
+3. Copied root-only secret files into `/var/lib/proxnix/secrets/`
+4. Seeded the desired closure into the stopped rootfs
+5. Started the CT
 
-The Proxmox node owns builds and seeding. A stopped container activates the
-preseeded closure by booting its system profile directly; a running container can still be reconciled
-explicitly from the host.
+The Proxmox node owns builds and seeding, but those phases run from explicit
+host commands, not re-entrantly from the PVE start path.
 
 ## 4. Deploy the desired system
 
 If the CT is already running and you want to force convergence immediately, run
-the host reconciler for the CT:
+the host reconciler for the CT. By default this builds and seeds from host
+context, but a stopped CT stays stopped:
 
 ```bash
-proxnix-reconcile --vmid 100
+proxnix-host reconcile --vmid 100
 ```
 
+Use `proxnix-host start --vmid 100` when a stopped CT should be reconciled and
+then started.
+
 The host evaluates the generated authority, builds the desired NixOS closure,
-copies it into the running CT through a temporary bridge to the CT's Nix daemon,
-activates the exact system path, and records status under
+copies it into the mounted rootfs during offline seed, and records status under
 `/var/lib/proxnix/status/100.json`. The same per-VMID running-CT path is also
 available as `systemctl start
 proxnix-reconcile@100.service`.
@@ -176,8 +181,8 @@ the normal path does not depend on cross-node closure upload.
 
 If activation fails, check:
 
-- Did the host build complete? (`proxnix-reconcile --status --vmid 100`)
-- Did offline seeding complete in the mount hook logs?
+- Did the host build complete? (`proxnix-host reconcile --status --vmid 100`)
+- Did offline seeding complete in the reconcile logs?
 - Does `/nix/var/nix/profiles/system` in the CT point at the desired system?
 
 You can test the copied build input manually inside the guest if needed:
@@ -204,11 +209,12 @@ proxnix-secrets set 100 mysecret
 proxnix-publish
 ```
 
-You'll be prompted to enter and confirm the secret value. Restart the CT so the pre-start hook stages the updated relay cache and the mount hook registers the secret with Podman:
+You'll be prompted to enter and confirm the secret value. Reconcile the CT so
+the host syncs the updated secret payload:
 
 ```bash
 # From the Proxmox host
-pct restart 100
+proxnix-host reconcile --vmid 100
 ```
 
 Verify from inside the guest:
@@ -233,8 +239,8 @@ Expected output for a healthy container:
 [host]
   OK    /usr/share/lxc/config/nixos.common.conf present
   OK    /usr/share/lxc/config/nixos.userns.conf present
-  OK    /usr/share/lxc/hooks/nixos-proxnix-prestart present
-  OK    /usr/share/lxc/hooks/nixos-proxnix-mount present
+  OK    /usr/share/lxc/hooks/nixos-proxnix-start-host present
+  OK    /usr/local/sbin/proxnix-host present
   ...
 
 [ct 100]

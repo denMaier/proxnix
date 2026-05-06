@@ -10,33 +10,32 @@ That gives proxnix these properties:
 
 - the host remains the control plane
 - the guest remains a normal NixOS system
-- container startup can stage secrets, helper scripts, file drop-ins, and debug build inputs in one place
+- reconciliation stages secrets, helper scripts, file drop-ins, and debug build inputs in one place
 - repeated starts are cheap because the guest does not rebuild during normal convergence
 
 ## Lifecycle
 
 ```
-  pct start <vmid>
+  proxnix-host reconcile --vmid <vmid>
        │
        ▼
   ┌─────────────────────────────────────────────┐
-  │  1. pre-start hook (host)                    │
+  │  1. host reconcile                            │
   │     Read PVE conf + Nix drop-ins             │
   │     Run proxnix-host pve-conf-to-nix         │
   │     Stage secrets, scripts                    │
   │     Compute diagnostic config hash            │
   │     Build desired NixOS closure if needed     │
-  │     Output: /run/proxnix/<vmid>/              │
+  │     Sync payload + system closure             │
   └──────────────────────┬──────────────────────┘
                          │
                          ▼
   ┌─────────────────────────────────────────────┐
-  │  2. mount hook (host, writes to guest rootfs)│
-  │     Rsync build-input debug snapshot          │
+  │  2. stopped or running CT sync                │
+  │     Copy build-input debug snapshot           │
   │     Copy root-only secrets into /var/lib/proxnix/secrets/ │
   │     Seed desired closure into stopped rootfs   │
-  │     Remove legacy guest rebuild service       │
-  │     Reconcile Podman secrets.json             │
+  │     Or seed through the running guest Nix daemon│
   └──────────────────────┬──────────────────────┘
                          │
                          ▼
@@ -51,25 +50,16 @@ That gives proxnix these properties:
 
 ### 1. Proxmox starts a NixOS CT
 
-When `ostype=nixos`, Proxmox auto-includes the proxnix LXC config snippets. Those register three thin hook entrypoints:
+When `ostype=nixos`, Proxmox auto-includes the proxnix LXC config snippets.
+Those snippets set NixOS/LXC compatibility defaults and register one narrow
+`start-host` hook. PVE still owns start/stop. Proxnix builds independently
+through explicit host commands and the optional `nix-auto` timer; the hook only
+refreshes cheap payload files and idempotently copies the already-built desired
+closure into the mounted rootfs before init starts.
 
-- `nixos-proxnix-prestart`
-- `nixos-proxnix-mount`
-- `nixos-proxnix-poststop`
+### 2. Reconciliation renders desired state
 
-Local harnesses should invoke those same scripts directly rather than
-reimplementing their behavior. The scripts dispatch to
-`proxnix-host hook prestart`, `proxnix-host hook mount`, and
-`proxnix-host hook poststop`. `nixos-proxnix-prestart` accepts
-`--vmid/--pve-conf`, and `nixos-proxnix-mount` accepts `--vmid/--rootfs`, so
-a test VM can drive the exact render/apply path without drifting from
-production.
-
-### 2. Pre-start hook renders desired state
-
-The pre-start hook runs on the Proxmox host before the container rootfs is handed off.
-
-It builds a stage directory at:
+The reconciler renders a transient host-side stage directory at:
 
 ```text
 /run/proxnix/<vmid>/
@@ -84,21 +74,26 @@ Important stage subtrees:
 | `bind/secrets/` | Compiled encrypted per-container runtime store plus staged identity |
 | `copy/runtime/bin/` | Copied helper scripts from host `dropins/*.{sh,py}` plus `proxnix-secrets` |
 
-`proxnix-host hook prestart` copies the node-local managed Nix files, renders
-the Proxmox CT config, pulls in host-side drop-ins, stages the compiled
-per-container runtime store plus the container identity, and computes a hash of
-the rendered managed tree.
+The stage renderer copies the node-local managed Nix files, renders the
+Proxmox CT config, pulls in host-side drop-ins, stages the compiled
+per-container runtime store plus the container identity, computes a hash of the
+rendered managed tree, and restricts the staged tree for the container's mapped
+root UID. It does not copy Nix closures.
 
-### 3. Mount hook syncs the stage into the guest rootfs
+There is no LXC pre-start build hook. Build freshness is handled by running
+explicit reconciliation before start, or by opting CTs into the timer-driven
+`nix-auto` reconciler.
 
-The mount hook is the only proxnix hook that writes into the guest filesystem.
-It does not install `/etc/nixos/configuration.nix` and does not bind a managed
-Nix tree into the guest. Instead it `rsync`s the rendered host build input into
-`/var/lib/proxnix/build-input/` as a non-authoritative debug snapshot. Runtime
-markers under `/var/lib/proxnix/runtime/` are wired in from the stage read-only.
-Secret files are copied into the guest as root-owned regular files.
+### 3. Reconciliation syncs the stage into the guest
 
-It exposes the staged assets into places such as:
+The Rust host reconciler owns all payload materialization. It does not install
+`/etc/nixos/configuration.nix` and does not bind a managed Nix tree into the
+guest. Instead it mirrors the rendered host build input into
+`/var/lib/proxnix/build-input/` as a non-authoritative debug snapshot, writes
+runtime markers under `/var/lib/proxnix/runtime/`, and copies secret files into
+the guest as root-owned regular files.
+
+It syncs staged assets into places such as:
 
 | Stage source | Guest destination |
 |-------------|-------------------|
@@ -108,12 +103,10 @@ It exposes the staged assets into places such as:
 | `copy/runtime/bin/*` | `/var/lib/proxnix/runtime/bin/` |
 | `bind/secrets/*` | `/var/lib/proxnix/secrets/` |
 
-It also removes legacy `proxnix-apply-config` service files if they are present.
-
 ### 4. Reconciler phases activate the desired system
 
-`proxnix-reconcile` runs on the Proxmox node. It renders the authority wrapper,
-evaluates cluster-level `proxnix.containers` through the node view at
+`proxnix-host reconcile` runs on the Proxmox node. It renders the authority wrapper, evaluates
+cluster-level `proxnix.containers` through the node view at
 `proxnix.nodes.<node>`, skips CTs that are not local according to Proxmox
 cluster placement, observes the live `/run/current-system`, and exits early
 with `noop-current` when the CT is already on the desired system path. Stale
@@ -123,22 +116,32 @@ into the CT, activated by exact system path, verified through
 
 The phases are split into commands:
 
-- `proxnix-reconcile-build-golden` builds a host-local baseline NixOS closure
+- `proxnix-host reconcile build-golden` builds a host-local baseline NixOS closure
   and protects it with a GC root so later CT builds reuse common store paths.
-- `proxnix-reconcile-build` evaluates and builds the desired closure.
-- `proxnix-reconcile-seed` imports the closure into a running CT.
-- `proxnix-reconcile-seed-offline` copies the closure into a mounted stopped CT rootfs, advances `/nix/var/nix/profiles/system`, and writes `/var/lib/proxnix/runtime/next-system` as a compatibility marker.
-- `proxnix-reconcile-activate` switches a running CT to the recorded desired system.
+- `proxnix-host reconcile build` evaluates and builds the desired closure.
+- `proxnix-host reconcile seed` imports the closure into a running CT for
+  explicit online reconciliation.
+- `proxnix-host reconcile seed-offline` copies the closure into a mounted stopped CT rootfs, advances `/nix/var/nix/profiles/system`, and writes `/var/lib/proxnix/runtime/next-system` as a compatibility marker.
+- `proxnix-host reconcile activate` switches a running CT to the recorded desired system.
 
-For a stopped CT, start convergence follows the LXC lifecycle. The pre-start
-hook renders guest inputs, opportunistically warms the golden-template build,
-and runs the CT build phase. The mount hook seeds the closure into the rootfs.
-The rootfs system profile is already pointed at the desired closure before LXC
-starts, so the CT boots the desired system directly. `next-system` remains as a
-compatibility marker for older boot activation flows.
-For a running CT, explicit reconcile commands seed through a short-lived
-host-side Unix socket bridge to the container's Nix daemon, then activate the
-exact system path from the host; there is no guest activation timer.
+For a stopped CT, explicit reconcile builds, syncs config/secrets/runtime files,
+and seeds the mounted rootfs from host context without starting it.
+`proxnix-host start --vmid <id>` runs that same reconcile path and then starts
+the CT. The rootfs system profile is already pointed at the desired closure
+before LXC starts, so the CT boots the desired system directly. `next-system`
+remains as a compatibility marker for older boot activation flows.
+For a running CT, the default explicit reconcile restarts the CT after offline
+seed. Use `--online` when uptime is more important than the simpler offline
+path; that mode seeds through a
+short-lived host-side Unix socket bridge to the container's Nix daemon, then
+activates the exact system path from the host. There is no guest activation
+timer.
+
+Rollback is intentionally outside reconciliation. `proxnix-host ct rollback`
+activates the previous recorded system path as an operational recovery action.
+The PVE start/stop path remains independent. If an operator needs Proxnix to
+leave the CT alone while the desired state is fixed, set the Proxmox `nix-hold`
+tag; normal reconcile refuses held CTs unless `--force` is passed.
 
 Build reuse is optimized per host. Each host should keep a golden-template
 build warm so container-specific builds mostly reuse already-realized store
@@ -148,37 +151,49 @@ workstation does not publish one, the existing host-managed lock is preserved
 and can be advanced by `proxnix-flake-update.timer`. Golden and CT builds
 therefore resolve the same pinned nixpkgs revision until that lock changes.
 Build failures before seeding leave the CT's current generation untouched.
-Local coordination details such as build observations, attempts, and GC
-protection live in
-`/var/lib/proxnix/state/proxnix-reconciler.sqlite`; the JSON status files remain
-the operator-facing status surface.
+The generated authority manifest under `/var/lib/proxnix/authority/generated`
+is different: it is a Nix-facing view over the published container inventory and
+observed PVE config. It can be regenerated and should not be treated as durable
+operator-authored state.
 
 ## Reconciler State Decision
 
-proxnix keeps two state surfaces on purpose:
+proxnix keeps its operational state intentionally simple:
 
 - `/var/lib/proxnix/status/<vmid>.json` is the stable operator-facing status
-  and compatibility surface. Commands such as `proxnix-reconcile --status` and
+  and compatibility surface. Commands such as `proxnix-host reconcile --status` and
   workstation status views should keep reading it.
-- `/var/lib/proxnix/state/proxnix-reconciler.sqlite` is the durable internal
-  journal. It should own attempt history, leases, retry queues, GC decisions,
-  and other cross-run memory.
+- Proxmox tags carry operator intent such as `nix-hold`, `nix-stage`, and
+  `nix-auto`.
+- Host gcroots carry Nix closure retention state.
 
-Do not move operator-facing status exclusively into SQLite. The JSON files are
-easy to inspect, copy, and recover from. Do not use JSON as the only memory for
+Do not move operator-facing status into a hidden local database. The JSON files
+are easy to inspect, copy, and recover from. Do not use JSON as the only memory for
 multi-step orchestration either; it is not the right place for history, locking,
 or retry coordination.
 
-Full host reconciliation is event-driven, not timer-driven. The LXC pre-start
-hook no longer starts a full reconcile service. Operators and workstation
-deploys can trigger explicit reconciliation with `proxnix-reconcile --vmid
-<id>` or `systemctl start proxnix-reconcile@<id>.service` when they want the
-running-CT path. `proxnix-gc.timer` removes copied pre-start stage directories
-from `/run/proxnix`, keeps the `golden-template` root and one `<vmid>-desired`
-root for every CT that is still present on this host, and prunes desired roots
-for CTs that moved away or were deleted. `proxnix-flake-update.timer` advances
-the host flake lock on the configured daily, weekly, or monthly cadence, but it
-does not itself reconcile running CTs.
+Full host reconciliation is opt-in. Operators and workstation deploys can
+trigger explicit reconciliation with `proxnix-host api site-updated`,
+`proxnix-host reconcile --vmid <id>`, or
+`systemctl start proxnix-reconcile@<id>.service`. The installed
+`proxnix-reconcile.timer`
+runs `proxnix-host reconcile --auto-tag` daily as a low-frequency safety net. It
+builds every local managed CT, then applies Proxmox tag policy. CTs without a
+runtime tag are only built. `nix-stage` offline-seeds stopped CTs and leaves
+running CTs untouched. `nix-auto` offline-seeds stopped CTs and reconciles
+running CTs online. `nix-hold` wins over both runtime tags and blocks runtime
+changes after the build.
+
+`proxnix-host api` is the stable host-side API intended for the workstation. It
+hides the host layout and delegates to the reconcile engine, so the workstation
+only needs to publish files, notify the host that the site changed, and query
+status or plans. It does not choose online, offline, build-only, or activation
+policy; those decisions stay on the host side.
+`proxnix-gc.timer` removes stale stage directories from `/run/proxnix`, keeps the `golden-template`
+root and one `<vmid>-desired` root for every CT that is still present on this
+host, and prunes desired roots for CTs that moved away or were deleted.
+`proxnix-flake-update.timer` advances the host flake lock on the configured
+daily, weekly, or monthly cadence, but it does not itself reconcile running CTs.
 
 `current-config-hash` may still appear as diagnostic metadata, but it is not the
 activation source of truth.
@@ -191,7 +206,7 @@ does not touch unrelated parts of the guest rootfs.
 
 - **`/var/lib/`**: Databases and application data stay persistent.
 - **`/etc/nixos/local.nix`**: This is an unmanaged sandbox for debugging. A manual `nixos-rebuild test -I nixos-config=/var/lib/proxnix/build-input/configuration.nix` can use it, but normal proxnix convergence does not evaluate config inside the guest.
-- **Experimental changes**: Commit final configuration to the workstation-owned site repo, publish it, then run `proxnix deploy` or `proxnix-reconcile` on the host.
+- **Experimental changes**: Commit final configuration to the workstation-owned site repo, publish it, then run `proxnix deploy` or `proxnix-host reconcile` on the host.
 
 ## What the build-input snapshot imports
 
