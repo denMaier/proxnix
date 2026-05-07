@@ -311,8 +311,8 @@ def load_secret_provider(
     config: WorkstationConfig,
     site_paths: SitePaths | None = None,
 ) -> SecretProvider:
-    provider_name = config.secret_provider.strip() or "embedded-sops"
-    if provider_name == "embedded-sops":
+    provider_name = config.secret_provider.strip() or "embedded-age"
+    if provider_name in {"embedded-age", "embedded-sops"}:
         paths = SitePaths.from_config(config) if site_paths is None else site_paths
         return EmbeddedSopsProvider(config, paths)
     if provider_name.startswith("exec:"):

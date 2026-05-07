@@ -17,4 +17,3 @@
     - not (proxnix_template_bootstrap_dry_run | bool)
     - "'reusing existing proxnix golden template' not in proxnix_template_bootstrap_result.stdout"
   register: proxnix_template_bootstrap_result
-

@@ -6,18 +6,27 @@ one Proxmox host and writes a report you can inspect afterward.
 It generates an isolated workstation site repo, publishes it through the normal
 relay-cache path, creates one proxnix-managed NixOS LXC, waits for the first
 boot apply to finish, and then checks the feature surfaces that proxnix owns.
+The publish path uses the host API handoff, so the report proves that
+publish reconciliation reaches `proxnix-host api site-updated`.
 
 ## What it covers
 
 - `proxnix-host create-lxc`
+- dry-run publish plus host API plan
 - full publish plus `--report-changes`
+- publish-triggered host API reconciliation
+- publish-triggered build-only reconciliation before runtime tags are enabled
+- explicit `start-host` hook entrypoint against a mounted stopped rootfs
+- Proxmox `pct start` with the installed `start-host` hook
+- publish-triggered online reconciliation for a running `nix-auto` CT
+- publish-triggered offline reconciliation for a stopped `nix-auto` CT
 - site doctor and remote drift doctor
 - host doctor
 - `containers/_template/` imports
 - top-level `dropins/*.nix`
 - attached `dropins/*.sh`
 - Nix-managed guest systemd units declared from `dropins/*.nix`
-- shared, grouped, and container-local secrets
+- shared, grouped, and container-local encrypted age-bundle secrets
 - activation-lifetime secret files and templates
 - service-lifetime secret files and templates
 - `createOnly` secret-backed config seeds
@@ -100,7 +109,7 @@ workstation/cli/bin/proxnix-lxc-exercise \
   matches the expected `proxnix-exercise-*` hostname.
 - NixOS exercise containers are created with `nesting=1,keyctl=1`.
 - The synthetic secrets are test values only, but they still move through the
-  real SOPS and relay-cache flow.
+  real age-bundle and relay-cache flow.
 - The generated site is isolated from your normal proxnix site repo by using a
   dedicated generated config file in the exercise work dir.
 - The host-side Markdown/JSON report is only as good as the harness control

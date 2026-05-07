@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::common::{set_mode, utc_now_isoformat, HostResult};
 use crate::print_usage;
+use crate::secret_bundle::{secret_names_from_bundle, BUNDLE_FILE};
 
 const PODMAN_LABEL_KEY: &str = "proxnix.managed";
 
@@ -55,8 +56,8 @@ pub(crate) fn reconcile_podman_secrets(
     vmid: &str,
     secrets_dir: &Path,
 ) -> io::Result<()> {
-    let live_names = if secrets_dir.is_dir() {
-        top_level_yaml_keys(&secrets_dir.join("effective.sops.yaml"))?
+    let live_names: BTreeSet<String> = if secrets_dir.is_dir() {
+        secret_names_from_bundle(&secrets_dir.join(BUNDLE_FILE))?
     } else {
         BTreeSet::new()
     };
@@ -153,7 +154,7 @@ pub(crate) fn reconcile_podman_secrets(
             .and_then(|name_to_id| name_to_id.get(name))
             != Some(&json!(sid.clone()))
         {
-            object_field_mut(&mut data, "nameToID").insert(name.clone(), json!(sid.clone()));
+            object_field_mut(&mut data, "nameToID").insert(name.to_owned(), json!(sid.clone()));
             changed = true;
         }
         if data
@@ -198,27 +199,6 @@ pub(crate) fn reconcile_podman_secrets(
     }
 
     Ok(())
-}
-
-fn top_level_yaml_keys(path: &Path) -> io::Result<BTreeSet<String>> {
-    if !path.exists() {
-        return Ok(BTreeSet::new());
-    }
-
-    let mut keys = BTreeSet::new();
-    for line in fs::read_to_string(path)?.lines() {
-        if line.is_empty() || line.starts_with(char::is_whitespace) || !line.contains(':') {
-            continue;
-        }
-        let Some((key, _)) = line.split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        if !key.is_empty() && key != "sops" {
-            keys.insert(key.to_owned());
-        }
-    }
-    Ok(keys)
 }
 
 fn podman_secret_id(vmid: &str, name: &str) -> String {

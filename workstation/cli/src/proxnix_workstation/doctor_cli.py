@@ -255,7 +255,7 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
         if isinstance(provider, EmbeddedSopsProvider):
             groups_dir = site_paths.private_dir / "groups"
             if groups_dir.is_dir():
-                for store in sorted(groups_dir.rglob("secrets.sops.yaml")):
+                for store in sorted(groups_dir.rglob("secrets.proxnix.json")):
                     label = f"group store {store.relative_to(groups_dir.parent)}"
                     validate_provider_scope_payload(
                         provider,
@@ -296,16 +296,20 @@ def lint_site_repo(config, site_paths: SitePaths, options: PublishOptions, repor
         stage_relay_identities_into_tree(config, site_paths, options, tree)
 
     if options.target_vmid is not None:
-        check_expected_tree_dir(tree / "containers" / options.target_vmid, f"compiled config tree for container {options.target_vmid}", reporter)
+        check_expected_tree_dir(
+            tree / "authority" / "containers" / options.target_vmid,
+            f"compiled authority tree for container {options.target_vmid}",
+            reporter,
+        )
         if not options.config_only and (tree / "private" / "containers" / options.target_vmid).is_dir():
-            if (tree / "private" / "containers" / options.target_vmid / "effective.sops.yaml").is_file():
-                reporter.ok(f"compiled SOPS payload built for container {options.target_vmid}")
+            if (tree / "private" / "containers" / options.target_vmid / "effective.secrets.json").is_file():
+                reporter.ok(f"compiled secret bundle built for container {options.target_vmid}")
             else:
-                reporter.info(f"no compiled SOPS payload for container {options.target_vmid}")
-            if (tree / "private" / "containers" / options.target_vmid / "age_identity.sops.yaml").is_file():
+                reporter.info(f"no compiled secret bundle for container {options.target_vmid}")
+            if (tree / "private" / "containers" / options.target_vmid / "age_identity.age").is_file():
                 reporter.ok(f"relay-encrypted identity staged for container {options.target_vmid}")
     else:
-        check_expected_tree_dir(tree / "containers", "compiled config tree", reporter)
+        check_expected_tree_dir(tree / "authority" / "containers", "compiled authority tree", reporter)
         if not options.config_only:
             check_expected_tree_dir(tree / "private" / "containers", "compiled private tree", reporter)
             if (tree / "private" / "host_relay_identity").is_file():
@@ -321,24 +325,8 @@ def compare_host_scope(config, options: PublishOptions, session: SSHSession, rep
         return session.run(f"test -e {shlex.quote(str(path))}", check=False).returncode == 0
 
     if options.target_vmid is not None:
-        template_source = tree / "containers" / "_template"
-        template_remote = config.remote_dir / "containers" / "_template"
-        if template_source.is_dir():
-            publish_do_rsync(
-                session,
-                config,
-                template_source,
-                template_remote,
-                directory_contents=True,
-                delete=True,
-                dry_run=True,
-                report=report,
-            )
-        elif test_exists(template_remote):
-            report.append(("delete", template_remote))
-
-        source_dir = tree / "containers" / options.target_vmid
-        remote_dir = config.remote_dir / "containers" / options.target_vmid
+        source_dir = tree / "authority" / "containers" / options.target_vmid
+        remote_dir = config.remote_dir / "authority" / "containers" / options.target_vmid
         if source_dir.is_dir():
             publish_do_rsync(
                 session,
@@ -377,17 +365,25 @@ def compare_host_scope(config, options: PublishOptions, session: SSHSession, rep
                 report.append(("delete", config.remote_host_relay_identity))
         return
 
-    site_nix = tree / "site.nix"
+    site_nix = tree / "authority" / "site.nix"
     if site_nix.is_file():
-        publish_do_rsync(session, config, site_nix, config.remote_dir / "site.nix", delete=False, dry_run=True, report=report)
-    elif test_exists(config.remote_dir / "site.nix"):
-        report.append(("delete", config.remote_dir / "site.nix"))
+        publish_do_rsync(
+            session,
+            config,
+            site_nix,
+            config.remote_dir / "authority" / "site.nix",
+            delete=False,
+            dry_run=True,
+            report=report,
+        )
+    elif test_exists(config.remote_dir / "authority" / "site.nix"):
+        report.append(("delete", config.remote_dir / "authority" / "site.nix"))
 
     publish_do_rsync(
         session,
         config,
-        tree / "containers",
-        config.remote_dir / "containers",
+        tree / "authority" / "containers",
+        config.remote_dir / "authority" / "containers",
         directory_contents=True,
         delete=True,
         dry_run=True,

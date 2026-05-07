@@ -12,14 +12,18 @@ from proxnix_workstation.exercise_cli import (
     NIXOS_BASH,
     RunReport,
     add_status_document_assertions,
+    build_set_container_tags_command,
+    build_start_host_hook_probe_command,
     build_containers,
     build_existing_container_cleanup_command,
     ensure_container_slots_available,
     guest_debug_units,
     parse_pct_config_hostname,
+    publish_args,
     render_site_fixture,
     replace_nixos_shell_placeholder,
     wait_for_apply,
+    write_reconcile_marker_dropin,
 )
 from proxnix_workstation.errors import ProxnixWorkstationError
 
@@ -63,6 +67,46 @@ class ExerciseCliTests(unittest.TestCase):
         self.assertIn('proxnix-exercise-service-reader', baseline_nix)
         self.assertIn('proxnix-exercise-podman', baseline_nix)
         self.assertFalse(attached_service.exists())
+
+    def test_write_reconcile_marker_dropin_adds_marker_module(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_dir = Path(temp_dir) / "site"
+            container = build_containers(940)[0]
+            render_site_fixture(site_dir, [container], "tok123")
+
+            marker = write_reconcile_marker_dropin(site_dir, container, "online", "online-tok123")
+            rendered = marker.read_text(encoding="utf-8")
+
+        self.assertEqual(marker.name, "online-reconcile-marker.nix")
+        self.assertIn('environment.etc."proxnix-exercise/online-marker"', rendered)
+        self.assertIn('"online-tok123\\n"', rendered)
+
+    def test_publish_args_can_trigger_host_api_reconcile(self) -> None:
+        args = publish_args(Path("/tmp/proxnix-config"), "root@node1", dry_run=True, reconcile=True)
+
+        self.assertEqual(
+            args,
+            [
+                "--config",
+                "/tmp/proxnix-config",
+                "--dry-run",
+                "--report-changes",
+                "--reconcile",
+                "root@node1",
+            ],
+        )
+
+    def test_build_set_container_tags_command_uses_semicolon_tags(self) -> None:
+        command = build_set_container_tags_command("940", ("proxnix", "nix-auto"))
+
+        self.assertEqual(command, "pct set 940 --tags 'proxnix;nix-auto'")
+
+    def test_start_host_hook_probe_command_mounts_and_calls_hook(self) -> None:
+        command = build_start_host_hook_probe_command("940")
+
+        self.assertIn("pct mount 940", command)
+        self.assertIn("proxnix-host start-host --vmid 940 --rootfs \"$rootfs\"", command)
+        self.assertIn("pct unmount 940", command)
 
     def test_add_status_document_assertions_tracks_failed_check(self) -> None:
         report = RunReport(started_at="2026-04-18T00:00:00+00:00")

@@ -4,6 +4,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) type HostResult<T> = Result<T, HostError>;
@@ -111,6 +112,91 @@ pub(crate) fn require_pct() -> Result<PathBuf, String> {
 
 pub(crate) fn require_socat() -> Result<PathBuf, String> {
     require_in_path("socat")
+}
+
+pub(crate) fn pick_bin(candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().find_map(|candidate| {
+        if candidate.contains('/') {
+            let path = PathBuf::from(candidate);
+            path.exists().then_some(path)
+        } else {
+            find_in_path(candidate)
+        }
+    })
+}
+
+pub(crate) fn command_stdout(command: &mut Command) -> io::Result<String> {
+    let output = command.stderr(Stdio::null()).output()?;
+    if !output.status.success() {
+        return Err(io::Error::other("command failed"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+pub(crate) fn command_status(command: &mut Command, context: &str) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|err| format!("{context}: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if stderr.is_empty() {
+        Err(context.to_owned())
+    } else {
+        Err(format!("{context}: {stderr}"))
+    }
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    if value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=')
+    }) {
+        return value.to_owned();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(crate) fn parse_pct_mount_rootfs(output: &str) -> Option<PathBuf> {
+    let quote_start = output.find('\'')?;
+    let rest = &output[quote_start + 1..];
+    let quote_end = rest.find('\'')?;
+    Some(PathBuf::from(&rest[..quote_end]))
+}
+
+pub(crate) fn rootfs_path<P: AsRef<Path>>(rootfs: &Path, absolute_path: P) -> PathBuf {
+    let absolute_path = absolute_path.as_ref();
+    rootfs.join(absolute_path.strip_prefix("/").unwrap_or(absolute_path))
+}
+
+pub(crate) fn normalize_template_volid(storage: &str, candidate: &str) -> String {
+    if candidate.contains(':') {
+        return candidate.to_owned();
+    }
+    let name = Path::new(candidate)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(candidate);
+    format!("{storage}:vztmpl/{name}")
+}
+
+pub(crate) fn active_storage_names(status_output: &str) -> Vec<String> {
+    status_output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            (fields.len() > 2 && fields[2] == "active").then(|| fields[0].to_owned())
+        })
+        .collect()
+}
+
+pub(crate) fn preferred_storage(storages: &[String], preferred: &[&str]) -> Option<String> {
+    preferred
+        .iter()
+        .find(|candidate| storages.iter().any(|storage| storage == *candidate))
+        .map(|storage| (*storage).to_owned())
+        .or_else(|| storages.first().cloned())
 }
 
 pub(crate) fn set_mode(path: &Path, mode: u32) -> io::Result<()> {

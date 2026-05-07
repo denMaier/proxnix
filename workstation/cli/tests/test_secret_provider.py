@@ -41,9 +41,9 @@ def _test_config(*, site_dir: Path | None = None) -> WorkstationConfig:
         remote_dir=PurePosixPath("/var/lib/proxnix"),
         remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
-        secret_provider="embedded-sops",
+        secret_provider="embedded-age",
         secret_provider_command=None,
-        provider_environment=(("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),),
+        provider_environment=(("PROXNIX_AGE_MASTER_IDENTITY", "/tmp/id_master"),),
     )
 
 
@@ -1028,7 +1028,7 @@ class ConfigProviderEnvironmentTests(unittest.TestCase):
             secret_provider="passhole",
             secret_provider_command=None,
             provider_environment=(
-                ("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),
+                ("PROXNIX_AGE_MASTER_IDENTITY", "/tmp/id_master"),
                 ("PROXNIX_PASSHOLE_DATABASE", "/tmp/proxnix.kdbx"),
                 ("VAULT_ADDR", "https://vault.example.test"),
             ),
@@ -1054,7 +1054,7 @@ class PublishSecretProviderTests(unittest.TestCase):
             private_dir.mkdir(parents=True, exist_ok=True)
             (site_dir / "containers" / "120").mkdir(parents=True, exist_ok=True)
             (site_dir / "containers" / "120" / "secret-groups.list").write_text("app\n", encoding="utf-8")
-            (private_dir / "age_identity.sops.yaml").write_text("identity: value\n", encoding="utf-8")
+            (private_dir / "age_identity.age").write_text("identity: value\n", encoding="utf-8")
             config = _test_config(site_dir=site_dir)
             site_paths = SitePaths.from_config(config)
             provider = _FakeProvider(
@@ -1065,10 +1065,10 @@ class PublishSecretProviderTests(unittest.TestCase):
                 }
             )
             out_dir = Path(temp_dir) / "out"
-            captured: dict[str, str] = {}
+            captured: dict[str, dict[str, str]] = {}
 
-            def fake_encrypt_json_to_file(config, source_json, recipients, destination, **kwargs):
-                captured["json"] = source_json.read_text(encoding="utf-8")
+            def fake_write_secret_bundle_map(destination, recipients, data):
+                captured["data"] = dict(data)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("encrypted\n", encoding="utf-8")
 
@@ -1077,15 +1077,15 @@ class PublishSecretProviderTests(unittest.TestCase):
                     with patch("proxnix_workstation.publish_cli.master_private_key_text", return_value="master-private-key"):
                         with patch("proxnix_workstation.publish_cli.master_recipient", return_value="ssh-ed25519 BBBB"):
                             with patch(
-                                "proxnix_workstation.publish_cli.sops_encrypt_json_to_file",
-                                side_effect=fake_encrypt_json_to_file,
+                                "proxnix_workstation.publish_cli.write_secret_bundle_map",
+                                side_effect=fake_write_secret_bundle_map,
                             ):
                                 build_compiled_secret_store(config, site_paths, provider, "120", out_dir)
 
-        self.assertIn('"a": "shared-a"', captured["json"])
-        self.assertIn('"b": "group-b"', captured["json"])
-        self.assertIn('"c": "container-c"', captured["json"])
-        self.assertIn('"override": "container"', captured["json"])
+        self.assertEqual(captured["data"]["a"], "shared-a")
+        self.assertEqual(captured["data"]["b"], "group-b")
+        self.assertEqual(captured["data"]["c"], "container-c")
+        self.assertEqual(captured["data"]["override"], "container")
 
     def test_build_compiled_secret_store_rejects_ambiguous_group_secret_names(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1094,7 +1094,7 @@ class PublishSecretProviderTests(unittest.TestCase):
             private_dir.mkdir(parents=True, exist_ok=True)
             (site_dir / "containers" / "120").mkdir(parents=True, exist_ok=True)
             (site_dir / "containers" / "120" / "secret-groups.list").write_text("app\nops\n", encoding="utf-8")
-            (private_dir / "age_identity.sops.yaml").write_text("identity: value\n", encoding="utf-8")
+            (private_dir / "age_identity.age").write_text("identity: value\n", encoding="utf-8")
             config = _test_config(site_dir=site_dir)
             site_paths = SitePaths.from_config(config)
             provider = _FakeProvider(

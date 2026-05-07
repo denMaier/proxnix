@@ -6,17 +6,27 @@
 
 Install proxnix onto one or more Proxmox nodes from a control machine over SSH.
 This is the production host deployment path. It verifies Proxmox, checks
-whether Nix is installed, installs Nix with the Determinate Systems installer
-when missing, enables flakes, installs or upgrades
+whether Nix is installed, enables flakes, installs or upgrades
 `/nix/var/nix/profiles/proxnix-host`, and runs `proxnix-host-activate`. The
 activation command links the Nix-profile payload into the mutable Proxmox paths
 that LXC and systemd expect. It is not meant to run against `localhost`. By
 default it installs `github:denMaier/proxnix#proxnix-host`; override
 `proxnix_host_flake_ref` to pin a release, branch, or local flake ref.
+By default the target must already have Nix installed; pass
+`-e proxnix_nix_install_mode=determinate` to bootstrap Nix with the Determinate
+Systems installer as a convenience option. After the requested package builds
+successfully, the playbook switches the Nix profile and activates the new
+runtime idempotently. Deployment GC roots under
+`/var/lib/proxnix/gcroots/deploy` are preserved; prune them with
+`proxnix-host gc` instead of the installer. Relay data and host secrets under
+`/var/lib/proxnix/authority`, `/var/lib/proxnix/containers`,
+`/var/lib/proxnix/private`, and `/etc/proxnix` are preserved. Use
+`-e proxnix_install_clean_slate=true` only as an explicit repair/reset path.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_target_hosts=proxmox_cluster
+ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_nix_install_mode=determinate
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml -e proxnix_host_flake_ref='github:denMaier/proxnix?ref=v0.6.1#proxnix-host'
 ```
 
@@ -45,6 +55,8 @@ time.
 Development-only installer for the current checkout. It archives the host-side
 flake inputs, stages them under `/var/lib/proxnix/install-source` on each target,
 then imports `install.yml` with `/var/lib/proxnix/install-source#proxnix-host`.
+The imported production installer runs the same stale-runtime cleanup before
+switching the host profile, while preserving the freshly staged install source.
 Use this for testing unpushed changes; use `install.yml` for production.
 
 ```bash
@@ -259,7 +271,7 @@ Sample output for a healthy relay-backed container:
   OK    ostype=nixos
   INFO  state: running
   OK    guest file present: /var/lib/proxnix/build-input/configuration.nix
-  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.age
   OK    guest container age identity present
   INFO  legacy managed config hash is informational because reconciler status exists
 ```
@@ -397,8 +409,9 @@ Proxmox `nix-hold` tag.
 ### `proxnix-host gc`
 
 Prune host-side transient state without deleting useful local build cache roots.
-The command removes stale stage directories under `/run/proxnix/`,
-keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
+The command takes the global reconcile lock first and exits without cleanup when
+another host mutation is active. It removes stale stage directories under
+`/run/proxnix/`, keeps `/var/lib/proxnix/gcroots/deploy/golden-template`, keeps
 `<vmid>-desired` roots for CTs still present on this host, and removes
 `<vmid>-desired` roots for CTs that are no longer local/present. It also deletes
 old generations of `/nix/var/nix/profiles/proxnix-host` and then runs
@@ -658,6 +671,8 @@ proxnix-publish --dry-run
 proxnix-publish --config-only
 proxnix-publish --vmid 100
 proxnix-publish --config-only --vmid 100
+proxnix-publish --reconcile
+proxnix-publish --no-reconcile
 ```
 
 It pushes config and per-container runtime secret stores into
@@ -668,25 +683,33 @@ under `/var/lib/proxnix/private/containers/<vmid>/`.
 
 When the site directory is a git worktree, publish uses the committed `HEAD`
 snapshot rather than the live worktree. It writes the deployed revision to
-`/var/lib/proxnix/publish-revision.json` on the host. If staged, unstaged, or
-untracked local changes exist, publish prints a warning because those changes
-are ignored.
+`/var/lib/proxnix/authority/publish-revision.json` on the host. If staged,
+unstaged, or untracked local changes exist, publish prints a warning because
+those changes are ignored.
 
 If the site has a committed `flake.lock`, publish also copies it to
-`/var/lib/proxnix/flake.lock`. The host authority renderer then carries that
-lock into `/var/lib/proxnix/authority/flake.lock`, making the golden-template
-build and every CT build use the same locked Nix inputs. If no local lock is
-published, publish leaves any host-managed `/var/lib/proxnix/flake.lock` in
-place. The host can advance that durable lock with `proxnix-host flake-update` and
-its timer.
+`/var/lib/proxnix/authority/flake.lock`, making the golden-template build and
+every CT build use the same locked Nix inputs. If no local lock is published,
+publish leaves the host-managed authority lock in place. The host can advance
+that durable lock with `proxnix-host flake-update` and its timer.
 
-Use `--config-only` to sync only `site.nix` and `containers/`, skipping all secret stores and identities.
+Use `--config-only` to sync only the authority side repo, skipping all secret
+stores and identities.
 
-Use `--vmid <vmid>` to sync only `/var/lib/proxnix/containers/<vmid>/` plus the shared `/var/lib/proxnix/containers/_template/` tree and, unless `--config-only` is also set, `/var/lib/proxnix/private/containers/<vmid>/`.
+Use `--vmid <vmid>` to sync only
+`/var/lib/proxnix/authority/containers/<vmid>/` and, unless `--config-only` is
+also set, `/var/lib/proxnix/private/containers/<vmid>/`.
 
-`--config-only --vmid <vmid>` syncs only `/var/lib/proxnix/containers/<vmid>/` plus `/var/lib/proxnix/containers/_template/`.
+`--config-only --vmid <vmid>` syncs only
+`/var/lib/proxnix/authority/containers/<vmid>/`.
 
 `--container-config <vmid>` remains as a compatibility alias for `--config-only --vmid <vmid>`.
+
+Successful non-dry-run publishes notify the host by default with
+`proxnix-host api site-updated`. Use `--no-reconcile` when you only want to
+copy the relay tree. Dry-run publishes remain side-effect free unless
+`--reconcile` is passed; then they call `proxnix-host api plan --all-ct` or
+`proxnix-host api plan --vmid <vmid>`.
 
 ### `workstation/cli/bin/proxnix-doctor`
 
@@ -732,9 +755,11 @@ workstation/cli/bin/proxnix-lxc-exercise --host root@node1 --base-vmid 950 --cle
 It:
 
 - generates an isolated workstation-side site repo under `.codex-staging/lxc-exercise/`
-- seeds synthetic shared, grouped, and container-local secrets through the normal SOPS flow
-- publishes that site through the normal relay-cache path
+- seeds synthetic shared, grouped, and container-local secrets through the normal age-bundle flow
+- publishes that site through the normal relay-cache path and host API handoff
 - creates one proxnix-managed NixOS LXC with a combined exercise workload
+- verifies publish-triggered build-only, online, and offline reconciliation
+- probes the `start-host` hook entrypoint and starts the CT through Proxmox
 - waits for the first boot apply to finish
 - runs host, workstation, and in-guest assertions
 - writes Markdown and JSON reports plus raw command logs

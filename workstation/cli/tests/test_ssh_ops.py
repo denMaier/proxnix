@@ -32,9 +32,9 @@ def _test_config() -> WorkstationConfig:
         remote_dir=PurePosixPath("/var/lib/proxnix"),
         remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
-        secret_provider="embedded-sops",
+        secret_provider="embedded-age",
         secret_provider_command=None,
-        provider_environment=(("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),),
+        provider_environment=(("PROXNIX_AGE_MASTER_IDENTITY", "/tmp/id_master"),),
     )
 
 

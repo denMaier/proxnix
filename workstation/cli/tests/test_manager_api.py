@@ -65,7 +65,7 @@ class ManagerApiTests(unittest.TestCase):
             (container / "secret-groups.list").write_text("db\n", encoding="utf-8")
             (site / "private" / "groups" / "db").mkdir(parents=True)
             (site / "private" / "containers" / "120").mkdir(parents=True)
-            (site / "private" / "containers" / "120" / "age_identity.sops.yaml").write_text("x\n", encoding="utf-8")
+            (site / "private" / "containers" / "120" / "age_identity.age").write_text("x\n", encoding="utf-8")
             (site / "site.nix").write_text("{ ... }: {}\n", encoding="utf-8")
             config = root / "config"
             sidebar_state = root / "manager-sidebar-state.json"
@@ -74,8 +74,8 @@ class ManagerApiTests(unittest.TestCase):
                     [
                         f"PROXNIX_SITE_DIR='{site}'",
                         "PROXNIX_HOSTS='root@node1 root@node2'",
-                        "PROXNIX_SECRET_PROVIDER='embedded-sops'",
-                        "PROXNIX_SOPS_MASTER_IDENTITY='~/.ssh/proxnix-master'",
+                        "PROXNIX_SECRET_PROVIDER='embedded-age'",
+                        "PROXNIX_AGE_MASTER_IDENTITY='~/.ssh/proxnix-master'",
                     ]
                 )
                 + "\n",
@@ -107,7 +107,7 @@ class ManagerApiTests(unittest.TestCase):
             self.assertEqual(status["definedSecretGroups"], ["db"])
             self.assertEqual(status["attachedSecretGroups"], ["db"])
             self.assertEqual(status["siteNixContent"], "{ ... }: {}\n")
-            self.assertEqual(status["preservedConfigKeys"], ["PROXNIX_SOPS_MASTER_IDENTITY"])
+            self.assertEqual(status["preservedConfigKeys"], [])
             self.assertEqual(status["config"]["hosts"], "root@node1 root@node2")
             self.assertEqual(status["containers"][0]["vmid"], "120")
             self.assertEqual(status["containers"][0]["dropins"], ["web.nix"])

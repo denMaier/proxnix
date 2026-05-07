@@ -12,10 +12,10 @@ use serde_json::{json, Map, Value};
 
 use crate::authority::render_authority;
 use crate::common::{
-    default_node_name, env_bool, env_path, find_in_path, remove_file_if_exists,
-    remove_path_if_exists, require_nix, require_nix_store, require_pct, require_socat, set_mode,
-    take_arg, utc_now_seconds_z, valid_vmid, HostError, HostResult, DEFAULT_PROXNIX_DIR,
-    DEFAULT_PVE_LXC_DIR, GUEST_PROXNIX_DIR,
+    default_node_name, env_bool, env_path, find_in_path, parse_pct_mount_rootfs,
+    remove_file_if_exists, remove_path_if_exists, require_nix, require_nix_store, require_pct,
+    require_socat, rootfs_path, set_mode, shell_quote, take_arg, utc_now_seconds_z, valid_vmid,
+    HostError, HostResult, DEFAULT_PROXNIX_DIR, DEFAULT_PVE_LXC_DIR, GUEST_PROXNIX_DIR,
 };
 use crate::create_lxc;
 use crate::payload_stage::{self, StagedPayload};
@@ -425,7 +425,7 @@ the running guest Nix daemon bridge.
 fn take_global_lock(config: &ReconcileConfig) -> Result<LockGuard, String> {
     take_lock(
         &config.run_dir.join("reconcile.lock"),
-        "another proxnix-host reconcile run is active",
+        "another proxnix-host mutation run is active",
     )
 }
 
@@ -590,9 +590,17 @@ fn pve_field(container: &Value, field: &str) -> String {
     };
     match value {
         Value::String(value) => value.clone(),
-        Value::Bool(value) => value.to_string(),
+        Value::Bool(value) => bool_int_string(*value),
         Value::Number(value) => value.to_string(),
         _ => String::new(),
+    }
+}
+
+fn bool_int_string(value: bool) -> String {
+    if value {
+        "1".to_owned()
+    } else {
+        "0".to_owned()
     }
 }
 
@@ -603,6 +611,20 @@ fn placement_field(container: &Value, field: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+fn placement_bool(container: &Value, field: &str) -> bool {
+    container
+        .get("placement")
+        .and_then(|placement| placement.get(field))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn manifest_declares_local(node_name: &str, container: &Value) -> bool {
+    placement_bool(container, "local")
+        || placement_field(container, "node") == node_name
+        || placement_field(container, "targetNode") == node_name
 }
 
 fn sorted_vmids(manifest: &Value) -> Vec<String> {
@@ -674,6 +696,27 @@ fn container_state(vmid: &str) -> String {
 
 fn selected_container_is_local_or_skip(config: &ReconcileConfig, vmid: &str) -> bool {
     if is_local_container(config, vmid) {
+        true
+    } else {
+        println!("{vmid} skip not-local");
+        false
+    }
+}
+
+fn manifest_container_is_local_or_planned(
+    config: &ReconcileConfig,
+    vmid: &str,
+    container: &Value,
+) -> bool {
+    is_local_container(config, vmid) || manifest_declares_local(&config.node_name, container)
+}
+
+fn manifest_container_is_local_or_skip(
+    config: &ReconcileConfig,
+    vmid: &str,
+    container: &Value,
+) -> bool {
+    if manifest_container_is_local_or_planned(config, vmid, container) {
         true
     } else {
         println!("{vmid} skip not-local");
@@ -768,10 +811,6 @@ fn dry_run(config: &ReconcileConfig, selected_vmid: Option<&str>) -> HostResult<
         return Ok(());
     }
     for vmid in vmids {
-        if !is_local_container(config, &vmid) {
-            println!("{vmid} skip not-local");
-            continue;
-        }
         let container = if selected_vmid.is_some() {
             selected_container
                 .as_ref()
@@ -780,6 +819,9 @@ fn dry_run(config: &ReconcileConfig, selected_vmid: Option<&str>) -> HostResult<
         } else {
             manifest_container(manifest.as_ref().expect("manifest is loaded"), &vmid)?.clone()
         };
+        if !manifest_container_is_local_or_skip(config, &vmid, &container) {
+            continue;
+        }
         let desired_system = manifest_string(&container, "system");
         let status = read_optional_status(config, &vmid);
         let last_desired = status_desired_system(&status);
@@ -1131,7 +1173,7 @@ fn build_only(config: &ReconcileConfig, selected_vmid: Option<&str>) -> HostResu
     let _container = take_container_lock(config, vmid)?;
     render_reconcile_authority(config)?;
     let container = eval_manifest_container(config, vmid)?;
-    if !selected_container_is_local_or_skip(config, vmid) {
+    if !manifest_container_is_local_or_skip(config, vmid, &container) {
         return Ok(());
     }
     build_selected_without_locks(config, vmid, &container)
@@ -1292,10 +1334,6 @@ fn container_nix_daemon_connect_command(
         shell_quote(vmid),
         shell_quote(&config.container_nix_daemon_socket)
     )
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn wait_for_bridge(
@@ -1600,6 +1638,17 @@ fn require_local_container(config: &ReconcileConfig, vmid: &str, phase: &str) ->
     Err(HostError::silent_exit(2))
 }
 
+fn fail_deploy(
+    config: &ReconcileConfig,
+    vmid: &str,
+    reason: &str,
+    log_message: &str,
+) -> HostResult<()> {
+    update_deploy_status(config, vmid, "failed", reason)?;
+    eprintln!("{vmid} {log_message}");
+    Err(HostError::silent_exit(2))
+}
+
 fn reconcile_seed_phase(
     config: &ReconcileConfig,
     vmid: &str,
@@ -1607,14 +1656,12 @@ fn reconcile_seed_phase(
 ) -> HostResult<()> {
     require_local_container(config, vmid, "seed")?;
     if let Err(err) = seed_closure(config, vmid, desired_system) {
-        update_deploy_status(
+        return fail_deploy(
             config,
             vmid,
-            "failed",
             &format!("closure seed failed: {err}"),
-        )?;
-        eprintln!("{vmid} seed failed");
-        return Err(HostError::silent_exit(2));
+            "seed failed",
+        );
     }
     Ok(update_deploy_status(config, vmid, "seeded", "")?)
 }
@@ -1627,16 +1674,12 @@ fn reconcile_offline_seed_phase(
     require_local_container(config, vmid, "offline-seed")?;
     match seed_closure_offline(config, vmid) {
         Ok(()) => Ok(()),
-        Err(err) => {
-            update_deploy_status(
-                config,
-                vmid,
-                "failed",
-                &format!("offline closure seed failed for {desired_system}: {err}"),
-            )?;
-            eprintln!("{vmid} seed failed");
-            Err(HostError::silent_exit(2))
-        }
+        Err(err) => fail_deploy(
+            config,
+            vmid,
+            &format!("offline closure seed failed for {desired_system}: {err}"),
+            "seed failed",
+        ),
     }
 }
 
@@ -1645,27 +1688,23 @@ fn reconcile_payload_online_phase(config: &ReconcileConfig, vmid: &str) -> HostR
     let payload = match payload_stage::stage_payload_for_reconcile(vmid) {
         Ok(payload) => payload,
         Err(err) => {
-            update_deploy_status(
+            return fail_deploy(
                 config,
                 vmid,
-                "failed",
                 &format!("payload staging failed: {err}"),
-            )?;
-            eprintln!("{vmid} payload staging failed");
-            return Err(HostError::silent_exit(2));
+                "payload staging failed",
+            )
         }
     };
     let sync_result = sync_payload_to_running_ct(vmid, &payload);
     let _ = remove_path_if_exists(&payload.stage_dir);
     if let Err(err) = sync_result {
-        update_deploy_status(
+        return fail_deploy(
             config,
             vmid,
-            "failed",
             &format!("online payload sync failed: {err}"),
-        )?;
-        eprintln!("{vmid} payload sync failed");
-        return Err(HostError::silent_exit(2));
+            "payload sync failed",
+        );
     }
     Ok(update_deploy_status(config, vmid, "payload-synced", "")?)
 }
@@ -1772,27 +1811,86 @@ fn sync_staged_payload_to_rootfs(rootfs: &Path, payload: &StagedPayload) -> Resu
     let runtime_bin_dir = runtime_dir.join("bin");
     let secrets_dir = proxnix_dir.join("secrets");
 
-    remove_path_if_exists(&build_input_dir)
-        .map_err(|err| format!("failed to remove {}: {err}", build_input_dir.display()))?;
-    remove_path_if_exists(&runtime_bin_dir)
-        .map_err(|err| format!("failed to remove {}: {err}", runtime_bin_dir.display()))?;
-    remove_path_if_exists(&secrets_dir)
-        .map_err(|err| format!("failed to remove {}: {err}", secrets_dir.display()))?;
-
-    copy_tree_preserving_metadata(&payload.bind_config_dir, &build_input_dir)?;
     fs::create_dir_all(&runtime_dir)
         .map_err(|err| format!("failed to create {}: {err}", runtime_dir.display()))?;
-    copy_file_preserving_metadata(
+
+    replace_tree_preserving_metadata(&payload.bind_config_dir, &build_input_dir)?;
+    replace_file_preserving_metadata(
         &payload.bind_runtime_dir.join("current-config-hash"),
         &runtime_dir.join("current-config-hash"),
     )?;
-    copy_file_preserving_metadata(
+    replace_file_preserving_metadata(
         &payload.bind_runtime_dir.join("vmid"),
         &runtime_dir.join("vmid"),
     )?;
-    copy_tree_preserving_metadata(&payload.copy_runtime_bin_dir, &runtime_bin_dir)?;
-    copy_tree_preserving_metadata(&payload.bind_secrets_dir, &secrets_dir)?;
+    replace_tree_preserving_metadata(&payload.copy_runtime_bin_dir, &runtime_bin_dir)?;
+    replace_tree_preserving_metadata(&payload.bind_secrets_dir, &secrets_dir)?;
     Ok(())
+}
+
+fn replace_tree_preserving_metadata(source: &Path, dest: &Path) -> Result<(), String> {
+    let temp = replacement_path(dest, "new");
+    let backup = replacement_path(dest, "old");
+    remove_path_if_exists(&temp)
+        .map_err(|err| format!("failed to remove {}: {err}", temp.display()))?;
+    remove_path_if_exists(&backup)
+        .map_err(|err| format!("failed to remove {}: {err}", backup.display()))?;
+    copy_tree_preserving_metadata(source, &temp)?;
+    replace_path_with_prepared(&temp, dest, &backup)
+}
+
+fn replace_file_preserving_metadata(source: &Path, dest: &Path) -> Result<(), String> {
+    let temp = replacement_path(dest, "new");
+    if temp.exists() || temp.is_symlink() {
+        fs::remove_file(&temp)
+            .map_err(|err| format!("failed to remove {}: {err}", temp.display()))?;
+    }
+    copy_file_preserving_metadata(source, &temp)?;
+    fs::rename(&temp, dest).map_err(|err| {
+        let _ = fs::remove_file(&temp);
+        format!(
+            "failed to replace {} with {}: {err}",
+            dest.display(),
+            temp.display()
+        )
+    })
+}
+
+fn replace_path_with_prepared(temp: &Path, dest: &Path, backup: &Path) -> Result<(), String> {
+    if dest.exists() || dest.is_symlink() {
+        fs::rename(dest, backup).map_err(|err| {
+            format!(
+                "failed to move {} aside as {}: {err}",
+                dest.display(),
+                backup.display()
+            )
+        })?;
+    }
+    match fs::rename(temp, dest) {
+        Ok(()) => {
+            let _ = remove_path_if_exists(backup);
+            Ok(())
+        }
+        Err(err) => {
+            if backup.exists() || backup.is_symlink() {
+                let _ = fs::rename(backup, dest);
+            }
+            let _ = remove_path_if_exists(temp);
+            Err(format!(
+                "failed to replace {} with {}: {err}",
+                dest.display(),
+                temp.display()
+            ))
+        }
+    }
+}
+
+fn replacement_path(dest: &Path, label: &str) -> PathBuf {
+    let name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("payload");
+    dest.with_file_name(format!(".{name}.proxnix-{label}-{}", std::process::id()))
 }
 
 fn copy_tree_preserving_metadata(source: &Path, dest: &Path) -> Result<(), String> {
@@ -1871,39 +1969,116 @@ fn sync_payload_to_running_ct(vmid: &str, payload: &StagedPayload) -> Result<(),
     let current_config_hash = guest_proxnix_path("runtime/current-config-hash");
     let runtime_vmid = guest_proxnix_path("runtime/vmid");
     let secrets = guest_proxnix_path("secrets");
+    let build_input_tmp = guest_replacement_path("build-input", "new");
+    let runtime_bin_tmp = guest_replacement_path("runtime/bin", "new");
+    let current_config_hash_tmp = guest_replacement_path("runtime/current-config-hash", "new");
+    let runtime_vmid_tmp = guest_replacement_path("runtime/vmid", "new");
+    let secrets_tmp = guest_replacement_path("secrets", "new");
 
     pct_exec(
         vmid,
-        &["/run/current-system/sw/bin/rm", "-rf", &build_input],
+        &["/run/current-system/sw/bin/rm", "-rf", &build_input_tmp],
     )?;
     pct_exec(
         vmid,
-        &["/run/current-system/sw/bin/rm", "-rf", &runtime_bin],
+        &["/run/current-system/sw/bin/rm", "-rf", &runtime_bin_tmp],
     )?;
-    pct_exec(vmid, &["/run/current-system/sw/bin/rm", "-rf", &secrets])?;
+    pct_exec(
+        vmid,
+        &[
+            "/run/current-system/sw/bin/rm",
+            "-f",
+            &current_config_hash_tmp,
+        ],
+    )?;
+    pct_exec(
+        vmid,
+        &["/run/current-system/sw/bin/rm", "-f", &runtime_vmid_tmp],
+    )?;
+    pct_exec(
+        vmid,
+        &["/run/current-system/sw/bin/rm", "-rf", &secrets_tmp],
+    )?;
 
-    push_tree_to_ct(vmid, &payload.bind_config_dir, &build_input, 0o644)?;
+    push_tree_to_ct(vmid, &payload.bind_config_dir, &build_input_tmp, 0o644)?;
     pct_exec(vmid, &["/run/current-system/sw/bin/mkdir", "-p", &runtime])?;
     push_file_to_ct(
         vmid,
         &payload.bind_runtime_dir.join("current-config-hash"),
-        &current_config_hash,
+        &current_config_hash_tmp,
         0o644,
     )?;
     push_file_to_ct(
         vmid,
         &payload.bind_runtime_dir.join("vmid"),
-        &runtime_vmid,
+        &runtime_vmid_tmp,
         0o644,
     )?;
-    push_tree_to_ct(vmid, &payload.copy_runtime_bin_dir, &runtime_bin, 0o555)?;
-    push_tree_to_ct(vmid, &payload.bind_secrets_dir, &secrets, 0o600)?;
-    pct_exec(vmid, &["/run/current-system/sw/bin/chmod", "700", &secrets])?;
+    push_tree_to_ct(vmid, &payload.copy_runtime_bin_dir, &runtime_bin_tmp, 0o555)?;
+    push_tree_to_ct(vmid, &payload.bind_secrets_dir, &secrets_tmp, 0o600)?;
+    pct_exec(
+        vmid,
+        &["/run/current-system/sw/bin/chmod", "700", &secrets_tmp],
+    )?;
+
+    pct_exec(
+        vmid,
+        &[
+            "/run/current-system/sw/bin/sh",
+            "-c",
+            &guest_commit_payload_script(
+                &[
+                    (&build_input, &build_input_tmp),
+                    (&runtime_bin, &runtime_bin_tmp),
+                    (&secrets, &secrets_tmp),
+                ],
+                &[
+                    (&current_config_hash, &current_config_hash_tmp),
+                    (&runtime_vmid, &runtime_vmid_tmp),
+                ],
+            ),
+        ],
+    )?;
     Ok(())
 }
 
 fn guest_proxnix_path(suffix: &str) -> String {
     format!("/{GUEST_PROXNIX_DIR}/{suffix}")
+}
+
+fn guest_replacement_path(dest_suffix: &str, label: &str) -> String {
+    let dest = guest_proxnix_path(dest_suffix);
+    let (parent, name) = dest.rsplit_once('/').unwrap_or(("", dest.as_str()));
+    format!("{parent}/.{name}.proxnix-{label}")
+}
+
+fn guest_commit_payload_script(dir_swaps: &[(&str, &str)], file_swaps: &[(&str, &str)]) -> String {
+    let mut script = String::from(
+        "set -eu\n\
+         swap_dir() {\n\
+         dest=\"$1\"\n\
+         src=\"$2\"\n\
+         old=\"${dest}.proxnix-old-$$\"\n\
+         rm -rf \"$old\"\n\
+         if [ -e \"$dest\" ] || [ -L \"$dest\" ]; then mv \"$dest\" \"$old\"; fi\n\
+         if mv \"$src\" \"$dest\"; then rm -rf \"$old\"; else if [ -e \"$old\" ] || [ -L \"$old\" ]; then mv \"$old\" \"$dest\"; fi; exit 1; fi\n\
+         }\n",
+    );
+    for (dest, source) in dir_swaps {
+        script.push_str(&format!(
+            "swap_dir {} {}\n",
+            shell_quote(dest),
+            shell_quote(source)
+        ));
+    }
+    for (dest, source) in file_swaps {
+        script.push_str(&format!(
+            "mv -f {} {}\n",
+            shell_quote(source),
+            shell_quote(dest)
+        ));
+    }
+    script
 }
 
 fn push_tree_to_ct(vmid: &str, source: &Path, dest: &str, file_mode: u32) -> Result<(), String> {
@@ -1965,13 +2140,6 @@ fn pct_exec(vmid: &str, args: &[&str]) -> Result<(), String> {
     } else {
         Err(format!("pct exec {} failed", args.join(" ")))
     }
-}
-
-fn parse_pct_mount_rootfs(output: &str) -> Option<PathBuf> {
-    let quote_start = output.find('\'')?;
-    let rest = &output[quote_start + 1..];
-    let quote_end = rest.find('\'')?;
-    Some(PathBuf::from(&rest[..quote_end]))
 }
 
 struct MountedCt {
@@ -2073,14 +2241,20 @@ fn reconcile_activate_phase(
 ) -> HostResult<()> {
     require_local_container(config, vmid, "activation")?;
     if let Err(err) = activate_system(vmid, desired_system) {
-        update_deploy_status(config, vmid, "failed", &format!("activation failed: {err}"))?;
-        eprintln!("{vmid} activation failed");
-        return Err(HostError::silent_exit(2));
+        return fail_deploy(
+            config,
+            vmid,
+            &format!("activation failed: {err}"),
+            "activation failed",
+        );
     }
     if !verify_system(vmid, desired_system) {
-        update_deploy_status(config, vmid, "failed", "activation verification failed")?;
-        eprintln!("{vmid} activation verification failed");
-        return Err(HostError::silent_exit(2));
+        return fail_deploy(
+            config,
+            vmid,
+            "activation verification failed",
+            "activation verification failed",
+        );
     }
     require_local_container(config, vmid, "current status update")?;
     Ok(write_activation_status(
@@ -2246,39 +2420,37 @@ fn reconcile_selected_offline_without_locks(
     reconcile_build_phase(config, container, &status_context)?;
     reconcile_offline_seed_phase(config, vmid, &desired_system)?;
 
-    if was_running {
-        restart_container_for_offline_seed(vmid)?;
-        ensure_container_running_for_exec(vmid, false)?;
-        if !verify_system(vmid, &desired_system) {
-            update_deploy_status(
-                config,
-                vmid,
-                "failed",
-                "offline activation verification failed",
-            )?;
-            eprintln!("{vmid} activation verification failed");
-            return Err(HostError::silent_exit(2));
-        }
-        write_activation_status(config, vmid, &desired_system, &previous_system)?;
-        println!("{vmid} activated {desired_system}");
-    } else if start_stopped {
-        start_container_for_offline_seed(vmid)?;
-        ensure_container_running_for_exec(vmid, false)?;
-        if !verify_system(vmid, &desired_system) {
-            update_deploy_status(
-                config,
-                vmid,
-                "failed",
-                "offline activation verification failed",
-            )?;
-            eprintln!("{vmid} activation verification failed");
-            return Err(HostError::silent_exit(2));
-        }
-        write_activation_status(config, vmid, &desired_system, &previous_system)?;
-        println!("{vmid} activated {desired_system}");
+    if was_running || start_stopped {
+        boot_seeded_container(config, vmid, &desired_system, &previous_system, was_running)?;
     } else {
         println!("{vmid} offline-seeded {desired_system}");
     }
+    Ok(())
+}
+
+fn boot_seeded_container(
+    config: &ReconcileConfig,
+    vmid: &str,
+    desired_system: &str,
+    previous_system: &str,
+    restart: bool,
+) -> HostResult<()> {
+    if restart {
+        restart_container_for_offline_seed(vmid)?;
+    } else {
+        start_container_for_offline_seed(vmid)?;
+    }
+    ensure_container_running_for_exec(vmid, false)?;
+    if !verify_system(vmid, desired_system) {
+        return fail_deploy(
+            config,
+            vmid,
+            "offline activation verification failed",
+            "activation verification failed",
+        );
+    }
+    write_activation_status(config, vmid, desired_system, previous_system)?;
+    println!("{vmid} activated {desired_system}");
     Ok(())
 }
 
@@ -2301,12 +2473,12 @@ fn reconcile_all_running(
         return Ok(());
     }
     for vmid in vmids {
-        if !is_local_container(config, &vmid) {
-            println!("{vmid} skip not-local");
+        let container = manifest_container(&manifest, &vmid)?;
+        if !manifest_container_is_local_or_skip(config, &vmid, container) {
             continue;
         }
         let state = container_state(&vmid);
-        if state != "running" {
+        if state != "running" && !(recreate_missing && state.is_empty()) {
             println!(
                 "{vmid} skip {}",
                 if state.is_empty() {
@@ -2318,7 +2490,6 @@ fn reconcile_all_running(
             continue;
         }
         let _container = take_container_lock(config, &vmid)?;
-        let container = manifest_container(&manifest, &vmid)?;
         reconcile_selected_without_locks(
             config,
             &vmid,
@@ -2345,12 +2516,11 @@ fn reconcile_auto_tag(config: &ReconcileConfig, force: bool) -> HostResult<()> {
         return Ok(());
     }
     for vmid in vmids {
-        if !is_local_container(config, &vmid) {
-            println!("{vmid} skip not-local");
+        let container = manifest_container(&manifest, &vmid)?;
+        if !manifest_container_is_local_or_skip(config, &vmid, container) {
             continue;
         }
         let _container = take_container_lock(config, &vmid)?;
-        let container = manifest_container(&manifest, &vmid)?;
         let pve_conf = config.pve_lxc_dir.join(format!("{vmid}.conf"));
         let nix_hold = pve_conf_has_tag(&pve_conf, "nix-hold").unwrap_or(false);
         let nix_stage = pve_conf_has_tag(&pve_conf, "nix-stage").unwrap_or(false);
@@ -2428,15 +2598,22 @@ fn ensure_container_exists(
     if is_local_container(config, vmid) {
         return Ok(true);
     }
-    if !recreate_missing {
+    if !manifest_declares_local(&config.node_name, container) {
         println!("{vmid} skip not-local");
+        return Ok(false);
+    }
+    if !recreate_missing {
+        println!("{vmid} skip missing-local");
         return Ok(false);
     }
     let placement_node = placement_field(container, "node");
     let target_node = placement_field(container, "targetNode");
-    if placement_node != config.node_name && target_node != config.node_name {
+    if placement_node != config.node_name
+        && target_node != config.node_name
+        && !placement_bool(container, "local")
+    {
         return Err(format!(
-            "VMID {vmid} is not local to {}; --recreate-missing requires placement.node or placement.targetNode to match this node",
+            "VMID {vmid} is not local to {}; --recreate-missing requires placement.local=true or placement.node/placement.targetNode to match this node",
             config.node_name
         ));
     }
@@ -3147,10 +3324,6 @@ fn nix_copy_to_rootfs(rootfs: &Path, desired_system: &str) -> io::Result<()> {
     }
 }
 
-fn rootfs_path(rootfs: &Path, absolute_path: &str) -> PathBuf {
-    rootfs.join(absolute_path.strip_prefix('/').unwrap_or(absolute_path))
-}
-
 fn is_executable(path: &Path) -> bool {
     fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
@@ -3178,6 +3351,95 @@ mod tests {
 
     fn fake_authority_render() -> &'static str {
         "#!/bin/sh\nset -eu\nroot=\"\"\nauthority=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --root) root=\"$2\"; shift 2;;\n    --authority) authority=\"$2\"; shift 2;;\n    *) shift;;\n  esac\ndone\n[ -n \"$authority\" ] || exit 3\nmkdir -p \"$authority\"\nif [ -n \"$root\" ] && [ -f \"$root/flake.lock\" ]; then cp \"$root/flake.lock\" \"$authority/flake.lock\"; fi\n"
+    }
+
+    #[test]
+    fn pve_field_normalizes_manifest_bools_for_pct_cli() {
+        let container = json!({
+            "pve": {
+                "unprivileged": true,
+                "onboot": false,
+                "memory": 2048,
+                "rootfs": "local-lvm:vm-101-disk-0,size=8G"
+            }
+        });
+
+        assert_eq!(pve_field(&container, "unprivileged"), "1");
+        assert_eq!(pve_field(&container, "onboot"), "0");
+        assert_eq!(pve_field(&container, "memory"), "2048");
+        assert_eq!(
+            pve_field(&container, "rootfs"),
+            "local-lvm:vm-101-disk-0,size=8G"
+        );
+    }
+
+    #[test]
+    fn manifest_placement_can_declare_planned_local_container() {
+        let container = json!({
+            "placement": {
+                "local": true,
+                "node": null,
+                "targetNode": "pve1",
+                "observedPveConfig": false,
+            }
+        });
+
+        assert!(manifest_declares_local("pve1", &container));
+    }
+
+    #[test]
+    fn manifest_placement_rejects_other_target_node() {
+        let container = json!({
+            "placement": {
+                "local": false,
+                "node": null,
+                "targetNode": "pve2",
+                "observedPveConfig": false,
+            }
+        });
+
+        assert!(!manifest_declares_local("pve1", &container));
+    }
+
+    #[test]
+    fn replace_tree_removes_stale_destination_entries_after_copy_succeeds() {
+        let tmp = TestTemp::new();
+        let source = tmp.path().join("source");
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(source.join("current.txt"), "new\n").unwrap();
+        fs::write(dest.join("stale.txt"), "old\n").unwrap();
+
+        replace_tree_preserving_metadata(&source, &dest).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dest.join("current.txt")).unwrap(),
+            "new\n"
+        );
+        assert!(!dest.join("stale.txt").exists());
+    }
+
+    #[test]
+    fn guest_payload_commit_script_swaps_temp_paths_into_live_paths() {
+        let script = guest_commit_payload_script(
+            &[(
+                "/var/lib/proxnix/build-input",
+                "/var/lib/proxnix/.build-input.proxnix-new",
+            )],
+            &[(
+                "/var/lib/proxnix/runtime/vmid",
+                "/var/lib/proxnix/runtime/.vmid.proxnix-new",
+            )],
+        );
+
+        assert!(script.contains(
+            "swap_dir /var/lib/proxnix/build-input /var/lib/proxnix/.build-input.proxnix-new"
+        ));
+        assert!(script.contains(
+            "mv -f /var/lib/proxnix/runtime/.vmid.proxnix-new /var/lib/proxnix/runtime/vmid"
+        ));
+        assert!(script.contains("proxnix-old-$$"));
     }
 
     #[test]

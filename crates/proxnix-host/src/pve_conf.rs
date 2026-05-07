@@ -197,9 +197,14 @@ pub(crate) fn parse_pve_conf_raw(path: &Path) -> io::Result<HashMap<String, Stri
 
 pub(crate) fn parse_pve_conf_raw_content(content: &str) -> HashMap<String, String> {
     let mut raw = HashMap::new();
+    let mut in_top_level = true;
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+        if line.starts_with('[') {
+            in_top_level = false;
+            continue;
+        }
+        if !in_top_level || line.is_empty() || line.starts_with('#') {
             continue;
         }
         let Some((key, value)) = line.split_once(": ") else {
@@ -231,7 +236,7 @@ pub(crate) fn pve_conf_has_tag(path: &Path, tag: &str) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pve_tags;
+    use super::{parse_pve_conf_content, parse_pve_conf_raw_content, parse_pve_tags};
 
     #[test]
     fn parses_proxmox_tag_lists() {
@@ -240,5 +245,45 @@ mod tests {
         assert!(tags.contains("nix-auto"));
         assert!(tags.contains("nix-hold"));
         assert!(tags.contains("nix-stage"));
+    }
+
+    #[test]
+    fn raw_parser_ignores_pending_and_snapshot_sections() {
+        let raw = parse_pve_conf_raw_content(
+            "\
+hostname: live
+tags: proxnix;nix-auto
+
+[pending]
+hostname: pending
+tags: nix-hold
+
+[snapshot-before-upgrade]
+hostname: snapshot
+",
+        );
+
+        assert_eq!(raw.get("hostname").map(String::as_str), Some("live"));
+        assert_eq!(
+            raw.get("tags").map(String::as_str),
+            Some("proxnix;nix-auto")
+        );
+    }
+
+    #[test]
+    fn proxmox_nix_data_uses_only_live_section() {
+        let data = parse_pve_conf_content(
+            "\
+hostname: live
+nameserver: 1.1.1.1 9.9.9.9
+
+[pending]
+hostname: pending
+nameserver: 10.0.0.1
+",
+        );
+
+        assert_eq!(data.hostname.as_deref(), Some("live"));
+        assert_eq!(data.nameservers, vec!["1.1.1.1", "9.9.9.9"]);
     }
 }

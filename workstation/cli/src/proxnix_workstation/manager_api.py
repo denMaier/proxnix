@@ -16,7 +16,7 @@ from .site import collect_site_vmids, read_container_secret_groups, valid_secret
 
 CONFIG_FIELDS = {
     "siteDir": "PROXNIX_SITE_DIR",
-    "sopsMasterIdentity": "PROXNIX_SOPS_MASTER_IDENTITY",
+    "ageMasterIdentity": "PROXNIX_AGE_MASTER_IDENTITY",
     "hosts": "PROXNIX_HOSTS",
     "sshIdentity": "PROXNIX_SSH_IDENTITY",
     "remoteDir": "PROXNIX_REMOTE_DIR",
@@ -32,16 +32,17 @@ CONFIG_FIELDS = {
     "proxmoxApiTokenSecret": "PROXNIX_PROXMOX_API_TOKEN_SECRET",
     "proxmoxVerifyTls": "PROXNIX_PROXMOX_VERIFY_TLS",
 }
+LEGACY_MANAGED_CONFIG_KEYS = {"PROXNIX_SOPS_MASTER_IDENTITY", "PROXNIX_MASTER_IDENTITY"}
 
 DEFAULT_CONFIG = {
     "siteDir": "",
-    "sopsMasterIdentity": "",
+    "ageMasterIdentity": "",
     "hosts": "",
     "sshIdentity": "",
     "remoteDir": "/var/lib/proxnix",
     "remotePrivDir": "/var/lib/proxnix/private",
     "remoteHostRelayIdentity": "/etc/proxnix/host_relay_identity",
-    "secretProvider": "embedded-sops",
+    "secretProvider": "embedded-age",
     "secretProviderCommand": "",
     "scriptsDir": "",
     "managerPythonPath": "",
@@ -66,7 +67,7 @@ def _preserved_config_lines(config_path: Path) -> list[str]:
     if not config_path.is_file():
         return []
 
-    managed_keys = set(CONFIG_FIELDS.values())
+    managed_keys = set(CONFIG_FIELDS.values()) | LEGACY_MANAGED_CONFIG_KEYS
     preserved: list[str] = []
     for raw_line in config_path.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
@@ -80,14 +81,15 @@ def _preserved_config_lines(config_path: Path) -> list[str]:
 
 def _config_payload(config: WorkstationConfig) -> dict[str, object]:
     provider_env = config.provider_environment_map()
-    sops_master_identity = (
-        provider_env.get("PROXNIX_SOPS_MASTER_IDENTITY")
+    age_master_identity = (
+        provider_env.get("PROXNIX_AGE_MASTER_IDENTITY")
+        or provider_env.get("PROXNIX_SOPS_MASTER_IDENTITY")
         or provider_env.get("PROXNIX_MASTER_IDENTITY")
         or ""
     )
     return {
         "siteDir": "" if config.site_dir is None else str(config.site_dir),
-        "sopsMasterIdentity": sops_master_identity,
+        "ageMasterIdentity": age_master_identity,
         "hosts": " ".join(config.hosts),
         "sshIdentity": "" if config.ssh_identity is None else str(config.ssh_identity),
         "remoteDir": str(config.remote_dir),
@@ -108,7 +110,7 @@ def _config_payload(config: WorkstationConfig) -> dict[str, object]:
 def build_config_state(config_file: Path | None = None) -> dict[str, object]:
     config = load_workstation_config(config_file)
     provider_env = config.provider_environment_map()
-    managed_keys = set(CONFIG_FIELDS.values())
+    managed_keys = set(CONFIG_FIELDS.values()) | LEGACY_MANAGED_CONFIG_KEYS
     return {
         "path": str(config.config_file),
         "exists": config.config_file.is_file(),
@@ -284,7 +286,7 @@ def create_secret_group(config_file: Path | None, group: str) -> dict[str, objec
     config = load_workstation_config(config_file)
     site_paths = _require_site_paths(config)
     group = _require_group(group)
-    if config.secret_provider == "embedded-sops":
+    if config.secret_provider in {"embedded-age", "embedded-sops"}:
         (site_paths.private_dir / "groups" / group).mkdir(parents=True, exist_ok=True)
     return build_status(config.config_file)
 
@@ -453,7 +455,7 @@ def _scan_site(config: WorkstationConfig) -> tuple[bool, list[dict[str, object]]
                 "privateContainerPath": str(private_container_dir),
                 "dropins": dropins,
                 "hasConfig": public_dir.is_dir(),
-                "hasIdentity": (private_container_dir / "age_identity.sops.yaml").is_file(),
+                "hasIdentity": (private_container_dir / "age_identity.age").is_file(),
                 "secretGroups": secret_groups,
             }
         )
@@ -472,6 +474,7 @@ def build_status(config_file: Path | None = None) -> dict[str, object]:
     site_dir_exists, containers, defined_groups, attached_groups, warnings = _scan_site(config)
     site_nix = _site_nix_path(config)
     provider_env = config.provider_environment_map()
+    managed_keys = set(CONFIG_FIELDS.values()) | LEGACY_MANAGED_CONFIG_KEYS
 
     return {
         "configPath": str(config.config_file),
@@ -480,7 +483,7 @@ def build_status(config_file: Path | None = None) -> dict[str, object]:
         "siteNixPath": str(site_nix),
         "siteNixExists": site_nix.is_file(),
         "siteNixContent": site_nix.read_text(encoding="utf-8", errors="replace") if site_nix.is_file() else "",
-        "preservedConfigKeys": sorted(provider_env),
+        "preservedConfigKeys": sorted(key for key in provider_env if key not in managed_keys),
         "warnings": warnings,
         "config": _config_payload(config),
         "containers": containers,

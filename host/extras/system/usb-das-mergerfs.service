@@ -1,11 +1,11 @@
 [Unit]
-Description=Assemble /mnt/VAULT from mounted USB-DAS members
+Description=Assemble USB-DAS mergerfs mount from mounted members
 After=usb-das-discover.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Environment=USB_DAS_MERGE_MOUNT=/mnt/VAULT
+Environment=USB_DAS_MERGE_MOUNT=/mnt/usb-das-merged
 Environment=USB_DAS_MERGE_OPTIONS=defaults,allow_other,use_ino,category.create=mfs
 ExecStart=/usr/bin/bash -c '
 set -euo pipefail

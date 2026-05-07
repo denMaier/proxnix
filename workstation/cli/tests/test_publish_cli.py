@@ -18,10 +18,13 @@ from proxnix_workstation.publish_cli import (
     PublishSource,
     build_publish_tree,
     do_rsync,
+    host_api_after_publish_command,
     host_report_data,
     materialize_head_site,
     publish_host,
     reconcile_remote_command,
+    resolve_publish_reconcile,
+    run_remote_host_api_after_publish,
     run_remote_reconcile,
     should_report_change,
     write_publish_revision,
@@ -50,9 +53,9 @@ def _test_config() -> WorkstationConfig:
         remote_dir=PurePosixPath("/var/lib/proxnix"),
         remote_priv_dir=PurePosixPath("/var/lib/proxnix/private"),
         remote_host_relay_identity=PurePosixPath("/etc/proxnix/host_relay_identity"),
-        secret_provider="embedded-sops",
+        secret_provider="embedded-age",
         secret_provider_command=None,
-        provider_environment=(("PROXNIX_SOPS_MASTER_IDENTITY", "/tmp/id_master"),),
+        provider_environment=(("PROXNIX_AGE_MASTER_IDENTITY", "/tmp/id_master"),),
     )
 
 
@@ -117,8 +120,8 @@ class PublishCliTests(unittest.TestCase):
             (site / "private" / "containers" / "200").mkdir(parents=True)
             (site / "containers" / "100" / "config.nix").write_text("target\n", encoding="utf-8")
             (site / "containers" / "200" / "config.nix").write_text("other\n", encoding="utf-8")
-            (site / "private" / "containers" / "100" / "secrets.sops.yaml").write_text("target\n", encoding="utf-8")
-            (site / "private" / "containers" / "200" / "secrets.sops.yaml").write_text("other\n", encoding="utf-8")
+            (site / "private" / "containers" / "100" / "secrets.proxnix.json").write_text("target\n", encoding="utf-8")
+            (site / "private" / "containers" / "200" / "secrets.proxnix.json").write_text("other\n", encoding="utf-8")
             (site / "site.nix").write_text("site\n", encoding="utf-8")
             (site / "flake.lock").write_text('{"nodes":{"nixpkgs":{}}}\n', encoding="utf-8")
 
@@ -152,7 +155,7 @@ class PublishCliTests(unittest.TestCase):
                 )
 
             self.assertTrue((source.site_paths.container_dir("100") / "config.nix").is_file())
-            self.assertTrue((source.site_paths.container_identity_store("100").parent / "secrets.sops.yaml").is_file())
+            self.assertTrue((source.site_paths.container_identity_store("100").parent / "secrets.proxnix.json").is_file())
             self.assertFalse(source.site_paths.container_dir("200").exists())
             self.assertFalse(source.site_paths.container_identity_store("200").parent.exists())
             self.assertFalse(source.site_paths.site_nix.exists())
@@ -163,22 +166,49 @@ class PublishCliTests(unittest.TestCase):
             root = Path(temp)
             site = root / "site"
             output = root / "relay"
-            (site / "containers" / "100").mkdir(parents=True)
-            (site / "containers" / "100" / "config.nix").write_text("target\n", encoding="utf-8")
+            (site / "containers" / "100" / "dropins").mkdir(parents=True)
+            (site / "containers" / "100" / "dropins" / "workload.nix").write_text("{ ... }: {}\n", encoding="utf-8")
             (site / "flake.lock").write_text('{"nodes":{"nixpkgs":{}}}\n', encoding="utf-8")
 
             config = replace(_test_config(), site_dir=site, secret_provider="pass")
             build_publish_tree(config, SitePaths(site), PublishOptions(config_only=True, target_vmid="100"), output)
 
-            self.assertEqual((output / "flake.lock").read_text(encoding="utf-8"), '{"nodes":{"nixpkgs":{}}}\n')
-            self.assertTrue((output / "containers" / "100" / "config.nix").is_file())
+            self.assertEqual(
+                (output / "authority" / "flake.lock").read_text(encoding="utf-8"),
+                '{"nodes":{"nixpkgs":{}}}\n',
+            )
+            self.assertTrue((output / "authority" / "containers" / "100" / "dropins" / "workload.nix").is_file())
+            self.assertTrue((output / "authority" / "containers" / "100" / "modules.nix").is_file())
+
+    def test_build_publish_tree_flattens_authority_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            site = root / "site"
+            output = root / "relay"
+            (site / "containers" / "_template" / "base").mkdir(parents=True)
+            (site / "containers" / "_template" / "base" / "default.nix").write_text("{ ... }: {}\n", encoding="utf-8")
+            (site / "containers" / "100" / "dropins").mkdir(parents=True)
+            (site / "containers" / "100" / "templates").mkdir(parents=True)
+            (site / "containers" / "100" / "dropins" / "workload.nix").write_text("{ ... }: {}\n", encoding="utf-8")
+            (site / "containers" / "100" / "dropins" / "helper.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (site / "containers" / "100" / "templates" / "base.template").write_text("", encoding="utf-8")
+            (site / "site.nix").write_text("{ ... }: {}\n", encoding="utf-8")
+
+            config = replace(_test_config(), site_dir=site, secret_provider="pass")
+            build_publish_tree(config, SitePaths(site), PublishOptions(config_only=True), output)
+
+            self.assertTrue((output / "authority" / "site.nix").is_file())
+            self.assertTrue((output / "authority" / "containers" / "100" / "dropins" / "workload.nix").is_file())
+            self.assertTrue((output / "authority" / "containers" / "100" / "runtime-bin" / "helper.sh").is_file())
+            self.assertTrue((output / "authority" / "containers" / "100" / "_template" / "base" / "default.nix").is_file())
+            self.assertFalse((output / "containers").exists())
 
     def test_publish_host_syncs_flake_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tree = Path(temp)
-            (tree / "containers").mkdir()
-            (tree / "publish-revision.json").write_text("{}\n", encoding="utf-8")
-            (tree / "flake.lock").write_text('{"nodes":{}}\n', encoding="utf-8")
+            (tree / "authority" / "containers").mkdir(parents=True)
+            (tree / "authority" / "publish-revision.json").write_text("{}\n", encoding="utf-8")
+            (tree / "authority" / "flake.lock").write_text('{"nodes":{}}\n', encoding="utf-8")
             session = _FakeSession()
             calls: list[PurePosixPath] = []
 
@@ -187,16 +217,17 @@ class PublishCliTests(unittest.TestCase):
 
             with patch("proxnix_workstation.publish_cli.sync_file", side_effect=fake_sync_file), \
                 patch("proxnix_workstation.publish_cli.sync_path"), \
+                patch("proxnix_workstation.publish_cli.remove_remote_file"), \
                 patch("proxnix_workstation.publish_cli.ensure_remote_dirs"):
                 publish_host(session, _test_config(), PublishOptions(config_only=True), tree)
 
-            self.assertIn(PurePosixPath("/var/lib/proxnix/flake.lock"), calls)
+            self.assertIn(PurePosixPath("/var/lib/proxnix/authority/flake.lock"), calls)
 
     def test_publish_host_preserves_remote_flake_lock_when_local_lock_is_absent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tree = Path(temp)
-            (tree / "containers").mkdir()
-            (tree / "publish-revision.json").write_text("{}\n", encoding="utf-8")
+            (tree / "authority" / "containers").mkdir(parents=True)
+            (tree / "authority" / "publish-revision.json").write_text("{}\n", encoding="utf-8")
             session = _FakeSession()
             removals: list[PurePosixPath] = []
 
@@ -209,7 +240,7 @@ class PublishCliTests(unittest.TestCase):
                 patch("proxnix_workstation.publish_cli.ensure_remote_dirs"):
                 publish_host(session, _test_config(), PublishOptions(config_only=True), tree)
 
-            self.assertNotIn(PurePosixPath("/var/lib/proxnix/flake.lock"), removals)
+            self.assertNotIn(PurePosixPath("/var/lib/proxnix/authority/flake.lock"), removals)
 
     def test_materialize_head_site_omits_private_for_external_secret_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -218,7 +249,7 @@ class PublishCliTests(unittest.TestCase):
             (site / "containers" / "100").mkdir(parents=True)
             (site / "private" / "containers" / "100").mkdir(parents=True)
             (site / "containers" / "100" / "config.nix").write_text("target\n", encoding="utf-8")
-            (site / "private" / "containers" / "100" / "secrets.sops.yaml").write_text("embedded\n", encoding="utf-8")
+            (site / "private" / "containers" / "100" / "secrets.proxnix.json").write_text("embedded\n", encoding="utf-8")
 
             subprocess.run(["git", "-C", str(site), "init"], check=True, capture_output=True, text=True)
             subprocess.run(
@@ -272,8 +303,8 @@ class PublishCliTests(unittest.TestCase):
     def test_revision_marker_is_reported_as_publish_change(self) -> None:
         config = _test_config()
 
-        self.assertTrue(should_report_change(config, PurePosixPath("/var/lib/proxnix/publish-revision.json")))
-        self.assertTrue(should_report_change(config, PurePosixPath("/var/lib/proxnix/flake.lock")))
+        self.assertTrue(should_report_change(config, PurePosixPath("/var/lib/proxnix/authority/publish-revision.json")))
+        self.assertTrue(should_report_change(config, PurePosixPath("/var/lib/proxnix/authority/flake.lock")))
 
     def test_host_report_data_summarizes_changes(self) -> None:
         report = [
@@ -300,6 +331,29 @@ class PublishCliTests(unittest.TestCase):
 
         self.assertEqual(command, "proxnix-reconcile --dry-run")
 
+    def test_host_api_after_publish_command_notifies_site_updated(self) -> None:
+        command = host_api_after_publish_command(PublishOptions(reconcile=True, target_vmid="101"))
+
+        self.assertEqual(command, "proxnix-host api site-updated")
+
+    def test_host_api_after_publish_command_uses_dry_run_plan(self) -> None:
+        command = host_api_after_publish_command(PublishOptions(dry_run=True, reconcile=True))
+
+        self.assertEqual(command, "proxnix-host api plan --all-ct")
+
+    def test_host_api_after_publish_command_uses_targeted_dry_run_plan(self) -> None:
+        command = host_api_after_publish_command(PublishOptions(dry_run=True, reconcile=True, target_vmid="101"))
+
+        self.assertEqual(command, "proxnix-host api plan --vmid 101")
+
+    def test_resolve_publish_reconcile_defaults_to_real_publish_only(self) -> None:
+        self.assertTrue(resolve_publish_reconcile(dry_run=False, requested=None))
+        self.assertFalse(resolve_publish_reconcile(dry_run=True, requested=None))
+
+    def test_resolve_publish_reconcile_honors_explicit_flags(self) -> None:
+        self.assertFalse(resolve_publish_reconcile(dry_run=False, requested=False))
+        self.assertTrue(resolve_publish_reconcile(dry_run=True, requested=True))
+
     def test_run_remote_reconcile_reports_exit_code_and_output(self) -> None:
         session = _FakeSession()
 
@@ -307,6 +361,16 @@ class PublishCliTests(unittest.TestCase):
             result = run_remote_reconcile(session, PublishOptions(reconcile=True, target_vmid="101"))
 
         self.assertEqual(session.commands, ["proxnix-reconcile --vmid 101"])
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(result["stdout"], "ok\n")
+
+    def test_run_remote_host_api_after_publish_reports_exit_code_and_output(self) -> None:
+        session = _FakeSession()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = run_remote_host_api_after_publish(session, PublishOptions(reconcile=True, target_vmid="101"))
+
+        self.assertEqual(session.commands, ["proxnix-host api site-updated"])
         self.assertEqual(result["exitCode"], 0)
         self.assertEqual(result["stdout"], "ok\n")
 

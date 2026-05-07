@@ -143,9 +143,10 @@ host runtime files while keeping relay data.
 
 For routine host cleanup, use `proxnix-host gc`. It removes stale proxnix deploy
 GC roots, prunes old `/nix/var/nix/profiles/proxnix-host` generations, and runs
-`nix-store --gc` after the proxnix roots are in the intended state. Avoid running
-`nix-collect-garbage` directly against the Proxmox host store unless you have
-first checked the proxnix deployment GC roots under
+`nix-store --gc` after the proxnix roots are in the intended state. GC takes the
+same global host mutation lock as reconcile and skips cleanup if a deployment is
+active. Avoid running `nix-collect-garbage` directly against the Proxmox host
+store unless you have first checked the proxnix deployment GC roots under
 `/var/lib/proxnix/gcroots/deploy`.
 
 ## Updating the admin password

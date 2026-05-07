@@ -51,7 +51,10 @@ pct set <vmid> --ostype nixos
 
 ## 2. Create the workstation-side container directory
 
-proxnix looks for published per-container configuration under `/var/lib/proxnix/containers/<vmid>/`, but the source of truth now lives in your workstation-owned site repo. Creating this directory is optional for a baseline container, but you'll need it for any customization.
+proxnix publishes per-container configuration under
+`/var/lib/proxnix/authority/containers/<vmid>/`, but the source of truth now
+lives in your workstation-owned site repo. Creating the site-side directory is
+optional for a baseline container, but you'll need it for any customization.
 
 For VMID `100`:
 
@@ -247,7 +250,7 @@ Expected output for a healthy container:
   OK    PVE config present: /etc/pve/lxc/100.conf
   OK    ostype=nixos
   OK    container config dir present: /var/lib/proxnix/containers/100
-  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.sops.yaml
+  OK    host relay encrypted container identity present: /var/lib/proxnix/private/containers/100/age_identity.age
   OK    guest container age identity present
   OK    guest container age identity is a root-owned 0600 regular file
   ...

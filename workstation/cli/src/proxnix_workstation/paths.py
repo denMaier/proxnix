@@ -32,11 +32,11 @@ class SitePaths:
 
     @property
     def shared_store(self) -> Path:
-        return self.private_dir / "shared" / "secrets.sops.yaml"
+        return self.private_dir / "shared" / "secrets.proxnix.json"
 
     @property
     def host_relay_identity_store(self) -> Path:
-        return self.private_dir / "host_relay_identity.sops.yaml"
+        return self.private_dir / "host_relay_identity.age"
 
     @property
     def relay_cache_dir(self) -> Path:
@@ -44,26 +44,26 @@ class SitePaths:
 
     @property
     def relay_cache_shared_identity(self) -> Path:
-        return self.relay_cache_dir / "shared_age_identity.sops.yaml"
+        return self.relay_cache_dir / "shared_age_identity.age"
 
     @property
     def shared_identity_store(self) -> Path:
-        return self.private_dir / "shared_age_identity.sops.yaml"
+        return self.private_dir / "shared_age_identity.age"
 
     def container_dir(self, vmid: str) -> Path:
         return self.containers_dir / vmid
 
     def container_store(self, vmid: str) -> Path:
-        return self.private_dir / "containers" / vmid / "secrets.sops.yaml"
+        return self.private_dir / "containers" / vmid / "secrets.proxnix.json"
 
     def container_identity_store(self, vmid: str) -> Path:
-        return self.private_dir / "containers" / vmid / "age_identity.sops.yaml"
+        return self.private_dir / "containers" / vmid / "age_identity.age"
 
     def relay_cache_container_identity(self, vmid: str) -> Path:
-        return self.relay_cache_dir / "containers" / vmid / "age_identity.sops.yaml"
+        return self.relay_cache_dir / "containers" / vmid / "age_identity.age"
 
     def group_store(self, group: str) -> Path:
-        return self.private_dir / "groups" / group / "secrets.sops.yaml"
+        return self.private_dir / "groups" / group / "secrets.proxnix.json"
 
     def container_secret_groups_file(self, vmid: str) -> Path:
         return self.container_dir(vmid) / "secret-groups.list"

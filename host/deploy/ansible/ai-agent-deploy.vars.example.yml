@@ -28,7 +28,7 @@ proxnix_ai_publish_mode: full
 # Create a minimal workstation site repo layout when the directory is empty.
 proxnix_ai_create_site_repo: true
 
-# Initialize private/host_relay_identity.sops.yaml when it is missing.
+# Initialize private/host_relay_identity.age when it is missing.
 proxnix_ai_init_host_relay: true
 
 # Optional shared admin password hash.

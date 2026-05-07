@@ -605,7 +605,7 @@ PY
 in {
   imports = [ ../_template/exercise-base ];
 
-  proxnix.secrets.files = {
+  proxnix._internal.secrets.files = {
     shared-secret = {
       secret = "shared_secret";
       path = "/var/lib/proxnix-exercise/shared-secret.txt";
@@ -645,7 +645,7 @@ in {
     };
   };
 
-  proxnix.secrets.templates.baseline-report = {
+  proxnix._internal.secrets.templates.baseline-report = {
     source = pkgs.writeText "baseline-report.txt" ''
       shared=__SHARED__
       group=__GROUP__
@@ -664,7 +664,7 @@ in {
     };
   };
 
-  proxnix.secrets.templates.service-template = {
+  proxnix._internal.secrets.templates.service-template = {
     lifecycle = "service";
     service = "proxnix-exercise-service-reader.service";
     source = pkgs.writeText "service-template.txt" ''
@@ -679,7 +679,7 @@ in {
     };
   };
 
-  proxnix.secrets.templates.create-only = {
+  proxnix._internal.secrets.templates.create-only = {
     source = pkgs.writeText "create-only.txt" ''
       create-only=__CREATE_ONLY__
     '';
@@ -694,7 +694,7 @@ in {
     };
   };
 
-  proxnix.secrets.oneshot.baseline-oneshot = {
+  proxnix._internal.secrets.oneshot.baseline-oneshot = {
     secret = "oneshot_secret";
     wantedBy = [ "multi-user.target" ];
     runtimeInputs = [ pkgs.coreutils ];
@@ -765,6 +765,13 @@ printf 'baseline-script-ok\\n'
 """
 
 
+RECONCILE_MARKER_NIX = """\
+{ ... }: {
+  environment.etc."proxnix-exercise/__NAME__-marker".text = "__VALUE__\\n";
+}
+"""
+
+
 def render_site_fixture(site_dir: Path, containers: Sequence[ExerciseContainer], token: str) -> None:
     if site_dir.exists():
         shutil.rmtree(site_dir)
@@ -792,6 +799,13 @@ def render_site_fixture(site_dir: Path, containers: Sequence[ExerciseContainer],
         replace_nixos_shell_placeholder(BASELINE_SCRIPT),
         mode=0o755,
     )
+
+
+def write_reconcile_marker_dropin(site_dir: Path, item: ExerciseContainer, name: str, value: str) -> Path:
+    rendered = RECONCILE_MARKER_NIX.replace("__NAME__", name).replace("__VALUE__", value)
+    path = site_dir / "containers" / item.vmid / "dropins" / f"{name}-reconcile-marker.nix"
+    write_text(path, rendered)
+    return path
 
 
 def seed_site_secrets(config: WorkstationConfig, containers: Sequence[ExerciseContainer], token: str) -> None:
@@ -1019,6 +1033,182 @@ def start_guest_assertion_services(
         "exercise services started",
         completed.returncode == 0,
         f"returncode={completed.returncode}",
+    )
+
+
+def build_set_container_tags_command(vmid: str, tags: Sequence[str]) -> str:
+    tag_value = ";".join(tags)
+    return shell_join(["pct", "set", vmid, "--tags", tag_value])
+
+
+def set_container_tags(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    item: ExerciseContainer,
+    tags: Sequence[str],
+) -> None:
+    run_logged_remote_command(
+        report,
+        artifacts_dir,
+        session,
+        f"set-tags-{item.key}",
+        build_set_container_tags_command(item.vmid, tags),
+    )
+
+
+def build_start_host_hook_probe_command(vmid: str) -> str:
+    quoted_vmid = shlex.quote(vmid)
+    return textwrap.dedent(
+        f"""
+        set -eu
+        mount_output="$(pct mount {quoted_vmid})"
+        rootfs="$(printf '%s\\n' "$mount_output" | sed -n "s/.*'\\([^']*\\)'.*/\\1/p" | head -n 1)"
+        if [ -z "$rootfs" ]; then
+          rootfs="$(printf '%s\\n' "$mount_output" | awk '{{print $NF}}' | tail -n 1)"
+        fi
+        if [ -z "$rootfs" ] || [ ! -d "$rootfs/nix" ]; then
+          printf '%s\\n' "$mount_output" >&2
+          exit 1
+        fi
+        cleanup() {{
+          pct unmount {quoted_vmid} >/dev/null 2>&1 || true
+        }}
+        trap cleanup EXIT
+        proxnix-host start-host --vmid {quoted_vmid} --rootfs "$rootfs"
+        test -r "$rootfs/var/lib/proxnix/runtime/next-system"
+        """
+    ).strip()
+
+
+def run_start_host_hook_probe(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    item: ExerciseContainer,
+) -> None:
+    completed = run_logged_remote_command(
+        report,
+        artifacts_dir,
+        session,
+        f"start-host-hook-probe-{item.key}",
+        build_start_host_hook_probe_command(item.vmid),
+        check=False,
+    )
+    report.add_assertion(
+        item.key,
+        "start-host hook entrypoint",
+        completed.returncode == 0,
+        f"returncode={completed.returncode}",
+    )
+    if completed.returncode != 0:
+        raise_for_completed(f"proxnix-host start-host --vmid {item.vmid}", completed)
+
+
+def start_containers_with_pct(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    containers: Sequence[ExerciseContainer],
+) -> None:
+    for item in containers:
+        run_logged_remote_command(
+            report,
+            artifacts_dir,
+            session,
+            f"pct-start-{item.key}",
+            f"pct start {shlex.quote(item.vmid)}",
+        )
+
+
+def stop_container_with_pct(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    item: ExerciseContainer,
+) -> None:
+    run_logged_remote_command(
+        report,
+        artifacts_dir,
+        session,
+        f"pct-stop-{item.key}",
+        f"pct stop {shlex.quote(item.vmid)}",
+    )
+
+
+def fetch_reconcile_status(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    item: ExerciseContainer,
+    label: str,
+) -> dict[str, Any]:
+    completed = run_logged_remote_command(
+        report,
+        artifacts_dir,
+        session,
+        f"reconcile-status-{label}-{item.key}",
+        f"proxnix-host reconcile --status --vmid {shlex.quote(item.vmid)}",
+    )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProxnixWorkstationError(
+            f"reconcile status for container {item.vmid} was not JSON"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ProxnixWorkstationError(
+            f"reconcile status for container {item.vmid} was not an object"
+        )
+    return value
+
+
+def assert_reconcile_status(
+    report: RunReport,
+    scope: str,
+    status: dict[str, Any],
+    *,
+    name: str,
+    field: str,
+    expected: str,
+) -> None:
+    actual = status.get(field)
+    report.add_assertion(
+        scope,
+        name,
+        actual == expected,
+        f"{field}: expected={expected!r} actual={actual!r}",
+    )
+
+
+def assert_guest_file_equals(
+    report: RunReport,
+    artifacts_dir: Path,
+    session: SSHSession,
+    item: ExerciseContainer,
+    *,
+    label: str,
+    path: str,
+    expected: str,
+) -> None:
+    script = f"test -r {shlex.quote(path)} && cat {shlex.quote(path)}"
+    completed = run_logged_remote_command(
+        report,
+        artifacts_dir,
+        session,
+        f"guest-file-{label}-{item.key}",
+        (
+            f"pct exec {shlex.quote(item.vmid)} -- {shlex.quote(NIXOS_BASH)} "
+            f"-lc {shlex.quote(script)}"
+        ),
+        check=False,
+    )
+    actual = completed.stdout.strip()
+    report.add_assertion(
+        item.key,
+        label,
+        completed.returncode == 0 and actual == expected,
+        f"returncode={completed.returncode} expected={expected!r} actual={actual!r}",
     )
 
 
@@ -1327,6 +1517,31 @@ def run_python_module(
     )
 
 
+def publish_args(
+    config_path: Path,
+    host: str,
+    *,
+    dry_run: bool = False,
+    reconcile: bool = False,
+    report_changes: bool = True,
+    config_only: bool = False,
+    vmid: str | None = None,
+) -> list[str]:
+    args = ["--config", str(config_path)]
+    if dry_run:
+        args.append("--dry-run")
+    if report_changes:
+        args.append("--report-changes")
+    if reconcile:
+        args.append("--reconcile")
+    if config_only:
+        args.append("--config-only")
+    if vmid is not None:
+        args.extend(["--vmid", vmid])
+    args.append(host)
+    return args
+
+
 def create_containers(
     report: RunReport,
     artifacts_dir: Path,
@@ -1400,15 +1615,6 @@ def create_containers(
                     ]
                 ),
             )
-
-    for item in containers:
-        run_logged_remote_command(
-            report,
-            artifacts_dir,
-            session,
-            f"start-{item.key}",
-            f"pct start {shlex.quote(item.vmid)}",
-        )
 
 
 def build_parser(*, prog: str = "proxnix-lxc-exercise") -> argparse.ArgumentParser:
@@ -1505,6 +1711,15 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
             "oneshot-secret-consumers": True,
             "podman-secret-driver": True,
             "publish-reporting": True,
+            "publish-dry-run": True,
+            "publish-apply": True,
+            "publish-host-api-plan": True,
+            "publish-host-api-site-updated": True,
+            "publish-triggered-build": True,
+            "publish-triggered-online-reconcile": True,
+            "publish-triggered-offline-reconcile": True,
+            "start-host-hook-entrypoint": True,
+            "proxmox-start-host-hook": True,
             "site-doctor": True,
             "host-doctor": True,
             "vmid-scoped-config-only-dry-run": True,
@@ -1532,14 +1747,14 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
             artifacts_dir,
             "publish-dry-run",
             "proxnix_workstation.publish_cli",
-            ["--config", str(config_path), "--dry-run", "--report-changes", host],
+            publish_args(config_path, host, dry_run=True, reconcile=True),
         )
         run_python_module(
             report,
             artifacts_dir,
             "publish-apply",
             "proxnix_workstation.publish_cli",
-            ["--config", str(config_path), "--report-changes", host],
+            publish_args(config_path, host, reconcile=True),
         )
 
         if source_config.ssh_identity is not None:
@@ -1568,9 +1783,50 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
                     check=False,
                 )
 
+            run_python_module(
+                report,
+                artifacts_dir,
+                "publish-reconcile-build-only",
+                "proxnix_workstation.publish_cli",
+                publish_args(config_path, host, reconcile=True),
+            )
+
+            for item in containers:
+                build_status = fetch_reconcile_status(
+                    report,
+                    artifacts_dir,
+                    session,
+                    item,
+                    "after-publish-build",
+                )
+                assert_reconcile_status(
+                    report,
+                    item.key,
+                    build_status,
+                    name="publish reconciliation built host closure",
+                    field="lastBuildStatus",
+                    expected="ok",
+                )
+                assert_reconcile_status(
+                    report,
+                    item.key,
+                    build_status,
+                    name="publish reconciliation stayed build-only without runtime tag",
+                    field="lastDeployStatus",
+                    expected="not-run",
+                )
+                run_start_host_hook_probe(report, artifacts_dir, session, item)
+
+            start_containers_with_pct(report, artifacts_dir, session, containers)
+
             for item in containers:
                 wait_for_apply(session, item.vmid, args.timeout_seconds)
-                report.add_assertion(item.key, "managed config applied", True, "current hash matches applied hash")
+                report.add_assertion(
+                    item.key,
+                    "managed config applied",
+                    True,
+                    "current hash matches applied hash",
+                )
                 start_guest_assertion_services(report, artifacts_dir, session, item)
 
             if args.settle_seconds > 0:
@@ -1587,6 +1843,83 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
 
             run_guest_assertions(report, artifacts_dir, session, containers, args.timeout_seconds)
 
+            baseline = next(item for item in containers if item.key == "baseline")
+            set_container_tags(report, artifacts_dir, session, baseline, ("proxnix", "nix-auto"))
+
+        online_token = f"online-{token}"
+        write_reconcile_marker_dropin(site_dir, baseline, "online", online_token)
+        run_python_module(
+            report,
+            artifacts_dir,
+            "publish-reconcile-online",
+            "proxnix_workstation.publish_cli",
+            publish_args(config_path, host, reconcile=True),
+        )
+        with SSHSession(generated_config, host) as session:
+            online_status = fetch_reconcile_status(
+                report,
+                artifacts_dir,
+                session,
+                baseline,
+                "after-online",
+            )
+            assert_reconcile_status(
+                report,
+                baseline.key,
+                online_status,
+                name="online reconcile activated desired system",
+                field="lastDeployStatus",
+                expected="ok",
+            )
+            assert_guest_file_equals(
+                report,
+                artifacts_dir,
+                session,
+                baseline,
+                label="online reconcile marker",
+                path="/etc/proxnix-exercise/online-marker",
+                expected=online_token,
+            )
+
+            offline_token = f"offline-{token}"
+            write_reconcile_marker_dropin(site_dir, baseline, "offline", offline_token)
+            stop_container_with_pct(report, artifacts_dir, session, baseline)
+
+        run_python_module(
+            report,
+            artifacts_dir,
+            "publish-reconcile-offline",
+            "proxnix_workstation.publish_cli",
+            publish_args(config_path, host, reconcile=True),
+        )
+        with SSHSession(generated_config, host) as session:
+            offline_status = fetch_reconcile_status(
+                report,
+                artifacts_dir,
+                session,
+                baseline,
+                "after-offline",
+            )
+            assert_reconcile_status(
+                report,
+                baseline.key,
+                offline_status,
+                name="offline reconcile seeded stopped container",
+                field="lastDeployStatus",
+                expected="offline-seeded",
+            )
+            start_containers_with_pct(report, artifacts_dir, session, [baseline])
+            wait_for_apply(session, baseline.vmid, args.timeout_seconds)
+            assert_guest_file_equals(
+                report,
+                artifacts_dir,
+                session,
+                baseline,
+                label="offline reconcile marker",
+                path="/etc/proxnix-exercise/offline-marker",
+                expected=offline_token,
+            )
+
         run_python_module(
             report,
             artifacts_dir,
@@ -1599,16 +1932,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix-lxc-exercise") -
             artifacts_dir,
             "publish-vmid-config-only-dry-run",
             "proxnix_workstation.publish_cli",
-            [
-                "--config",
-                str(config_path),
-                "--dry-run",
-                "--report-changes",
-                "--config-only",
-                "--vmid",
-                containers[0].vmid,
-                host,
-            ],
+            publish_args(config_path, host, dry_run=True, config_only=True, vmid=containers[0].vmid),
         )
 
         if report.status == "running":

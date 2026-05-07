@@ -76,7 +76,7 @@ class DoctorCliTests(unittest.TestCase):
             )
 
             def fake_build_tree(_config, _site_paths, _options, root: Path) -> None:
-                (root / "containers").mkdir(parents=True)
+                (root / "authority" / "containers").mkdir(parents=True)
 
             output = StringIO()
             with patch(

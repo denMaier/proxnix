@@ -1,13 +1,31 @@
 { lib
 , rustPlatform
+, age
+, openssh
 }:
 
 rustPlatform.buildRustPackage rec {
   pname = "proxnix-host-controller";
   version = lib.strings.trim (builtins.readFile ../../VERSION);
 
-  src = ../..;
+  src =
+    let
+      root = ../..;
+      fs = lib.fileset;
+    in
+    fs.toSource {
+      inherit root;
+      fileset = fs.intersection (fs.gitTracked root) (fs.unions [
+        ../../Cargo.toml
+        ../../Cargo.lock
+        ../../crates/proxnix-host
+      ]);
+  };
   cargoLock.lockFile = ../../Cargo.lock;
+  nativeCheckInputs = [
+    age
+    openssh
+  ];
   PROXNIX_VERSION = version;
 
   meta = {

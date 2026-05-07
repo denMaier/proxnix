@@ -73,9 +73,9 @@ class Config:
     remote_dir: str = "/var/lib/proxnix"
     remote_priv_dir: str = "/var/lib/proxnix/private"
     remote_host_relay_identity: str = "/etc/proxnix/host_relay_identity"
-    secret_provider: str = "embedded-sops"
+    secret_provider: str = "embedded-age"
     secret_provider_command: str = ""
-    sops_master_identity: str = ""
+    age_master_identity: str = ""
     scripts_dir: str = ""
     manager_python_path: str = ""
 
@@ -182,9 +182,9 @@ def load_config() -> Config:
             remote_host_relay_identity=str(
                 raw.get("remoteHostRelayIdentity", "/etc/proxnix/host_relay_identity")
             ),
-            secret_provider=str(raw.get("secretProvider", "embedded-sops") or "embedded-sops"),
+            secret_provider=str(raw.get("secretProvider", "embedded-age") or "embedded-age"),
             secret_provider_command=str(raw.get("secretProviderCommand", "")),
-            sops_master_identity=str(raw.get("sopsMasterIdentity", "")),
+            age_master_identity=str(raw.get("ageMasterIdentity", raw.get("sopsMasterIdentity", ""))),
             scripts_dir=str(raw.get("scriptsDir", "")),
             manager_python_path=str(raw.get("managerPythonPath", "")),
         )
@@ -1971,7 +1971,7 @@ def _settings_fields(app: AppState) -> list[tuple[str, list[tuple[str, str]]]]:
         ]),
         ("Secrets", [
             ("Provider", c.secret_provider),
-            ("SOPS identity", c.sops_master_identity),
+            ("Age master identity", c.age_master_identity),
             ("Provider command", c.secret_provider_command),
         ]),
     ]
@@ -1987,7 +1987,7 @@ def activate_settings(stdscr: curses.window, app: AppState) -> None:
         ("Remote priv dir", "remote_priv_dir"),
         ("Relay identity", "remote_host_relay_identity"),
         ("Secret provider", "secret_provider"),
-        ("SOPS identity", "sops_master_identity"),
+        ("Age master identity", "age_master_identity"),
         ("Provider command", "secret_provider_command"),
         ("\u25b6 Save to config file", "save"),
     ]
@@ -2072,7 +2072,7 @@ def _save_config(stdscr: curses.window, app: AppState) -> None:
                 "remoteHostRelayIdentity": app.config.remote_host_relay_identity,
                 "secretProvider": app.config.secret_provider,
                 "secretProviderCommand": app.config.secret_provider_command,
-                "sopsMasterIdentity": app.config.sops_master_identity,
+                "ageMasterIdentity": app.config.age_master_identity,
                 "scriptsDir": app.config.scripts_dir,
                 "managerPythonPath": app.config.manager_python_path,
             },

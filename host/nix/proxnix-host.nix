@@ -1,16 +1,24 @@
 { lib
 , stdenvNoCC
-, age
-, jq
 , proxnixHostController
-, sops
 }:
 
 stdenvNoCC.mkDerivation {
   pname = "proxnix-host";
   version = lib.strings.trim (builtins.readFile ../../VERSION);
 
-  src = ../..;
+  src =
+    let
+      root = ../..;
+      fs = lib.fileset;
+    in
+    fs.toSource {
+      inherit root;
+      fileset = fs.intersection (fs.gitTracked root) (fs.unions [
+        ../../host/install
+        ../../host/runtime
+      ]);
+    };
 
   dontConfigure = true;
   dontBuild = true;
@@ -22,11 +30,10 @@ stdenvNoCC.mkDerivation {
 
     cp -R host/runtime/bin/. "$out/bin/"
     cp ${proxnixHostController}/bin/proxnix-host "$out/bin/proxnix-host"
+    cp ${proxnixHostController}/bin/proxnix-secrets-guest "$out/lib/proxnix/proxnix-secrets-guest"
     cp host/install/uninstall.sh "$out/bin/proxnix-host-uninstall"
     chmod +x "$out"/bin/*
-
-    cp -R host/runtime/lib/. "$out/lib/proxnix/"
-    chmod +x "$out/lib/proxnix/proxnix-secrets-guest"
+    chmod 755 "$out/lib/proxnix/proxnix-secrets-guest"
 
     mkdir -p "$out/share/proxnix/lxc/config" "$out/share/proxnix/lxc/hooks" "$out/share/proxnix/nix"
     cp -R host/runtime/lxc/config/. "$out/share/proxnix/lxc/config/"
@@ -34,10 +41,6 @@ stdenvNoCC.mkDerivation {
 
     cp -R host/runtime/nix/. "$out/share/proxnix/nix/"
     cp -R host/runtime/systemd/. "$out/share/systemd/system/"
-
-    ln -s ${age}/bin/age "$out/bin/age"
-    ln -s ${jq}/bin/jq "$out/bin/jq"
-    ln -s ${sops}/bin/sops "$out/bin/sops"
 
     runHook postInstall
   '';

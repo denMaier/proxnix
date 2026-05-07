@@ -151,10 +151,11 @@ workstation does not publish one, the existing host-managed lock is preserved
 and can be advanced by `proxnix-flake-update.timer`. Golden and CT builds
 therefore resolve the same pinned nixpkgs revision until that lock changes.
 Build failures before seeding leave the CT's current generation untouched.
-The generated authority manifest under `/var/lib/proxnix/authority/generated`
-is different: it is a Nix-facing view over the published container inventory and
-observed PVE config. It can be regenerated and should not be treated as durable
-operator-authored state.
+The authority side repo under `/var/lib/proxnix/authority` is different: the
+workstation publishes it already partially rendered, and the host completes the
+PVE-derived modules, common modules, flake wrapper, and node manifest before
+evaluation. The authoritative operator inputs are `site.nix`,
+`containers/<vmid>/`, and the encrypted stores under `/var/lib/proxnix/private`.
 
 ## Reconciler State Decision
 
@@ -189,9 +190,10 @@ hides the host layout and delegates to the reconcile engine, so the workstation
 only needs to publish files, notify the host that the site changed, and query
 status or plans. It does not choose online, offline, build-only, or activation
 policy; those decisions stay on the host side.
-`proxnix-gc.timer` removes stale stage directories from `/run/proxnix`, keeps the `golden-template`
-root and one `<vmid>-desired` root for every CT that is still present on this
-host, and prunes desired roots for CTs that moved away or were deleted.
+`proxnix-gc.timer` takes the global reconcile lock, removes stale stage
+directories from `/run/proxnix`, keeps the `golden-template` root and one
+`<vmid>-desired` root for every CT that is still present on this host, and
+prunes desired roots for CTs that moved away or were deleted.
 `proxnix-flake-update.timer` advances the host flake lock on the configured
 daily, weekly, or monthly cadence, but it does not itself reconcile running CTs.
 

@@ -24,7 +24,7 @@ class SecretsCliJsonTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             payload = json.loads(output.getvalue())
             self.assertTrue(payload["ok"])
-            self.assertEqual(payload["data"]["provider"], "embedded-sops")
+            self.assertEqual(payload["data"]["provider"], "embedded-age")
             self.assertEqual(payload["data"]["warnings"], ["Set PROXNIX_SITE_DIR to scan your site repo."])
 
     def test_scope_status_json_reports_missing_site_without_failing(self) -> None:

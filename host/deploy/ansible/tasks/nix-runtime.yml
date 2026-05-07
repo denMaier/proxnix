@@ -23,7 +23,7 @@
 
 - name: Install Nix with Determinate Systems installer when requested
   ansible.builtin.shell: |
-    set -eu
+    set -euo pipefail
     curl --proto '=https' --tlsv1.2 -sSf -L {{ proxnix_determinate_nix_install_url | quote }} | sh -s -- install --no-confirm
   args:
     creates: /nix/nix-installer
@@ -120,4 +120,3 @@
       - --expr
       - "true"
   changed_when: false
-

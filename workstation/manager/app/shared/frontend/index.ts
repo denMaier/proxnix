@@ -31,7 +31,7 @@ type ViewSelection =
   | `container:${string}`;
 
 const SECRET_PROVIDER_OPTIONS = [
-  "embedded-sops",
+  "embedded-age",
   "pass",
   "gopass",
   "passhole",
@@ -187,13 +187,13 @@ function sleep(ms: number): Promise<void> {
 function defaultConfig(): ProxnixConfig {
   return {
     siteDir: "",
-    sopsMasterIdentity: "",
+    ageMasterIdentity: "",
     hosts: "",
     sshIdentity: "",
     remoteDir: "/var/lib/proxnix",
     remotePrivDir: "/var/lib/proxnix/private",
     remoteHostRelayIdentity: "/etc/proxnix/host_relay_identity",
-    secretProvider: "embedded-sops",
+    secretProvider: "embedded-age",
     secretProviderCommand: "",
     scriptsDir: "",
     managerPythonPath: "",
@@ -253,9 +253,10 @@ function normalizeStringList(value: unknown): string[] {
 
 function normalizeConfig(config: Partial<ProxnixConfig> | null | undefined): ProxnixConfig {
   const base = defaultConfig();
+  const legacy = config as (Partial<ProxnixConfig> & { sopsMasterIdentity?: unknown }) | null | undefined;
   return {
     siteDir: normalizeString(config?.siteDir ?? base.siteDir),
-    sopsMasterIdentity: normalizeString(config?.sopsMasterIdentity ?? base.sopsMasterIdentity),
+    ageMasterIdentity: normalizeString(config?.ageMasterIdentity ?? legacy?.sopsMasterIdentity ?? base.ageMasterIdentity),
     hosts: normalizeString(config?.hosts ?? base.hosts),
     sshIdentity: normalizeString(config?.sshIdentity ?? base.sshIdentity),
     remoteDir: normalizeString(config?.remoteDir ?? base.remoteDir),
@@ -283,8 +284,8 @@ function normalizeSidebarMetadata(metadata: Partial<SidebarMetadata> | null | un
   };
 }
 
-function usesEmbeddedSops(provider: string): boolean {
-  return provider.trim() === "embedded-sops";
+function usesEmbeddedAge(provider: string): boolean {
+  return ["embedded-age", "embedded-sops"].includes(provider.trim());
 }
 
 function usesExecProvider(provider: string): boolean {
@@ -301,8 +302,8 @@ function defaultMasterIdentityPath(): string {
 
 function onboardingConfig(): ProxnixConfig {
   const draft = normalizeConfig(state.draft ?? state.snapshot?.config ?? defaultConfig());
-  if (usesEmbeddedSops(draft.secretProvider) && !draft.sopsMasterIdentity.trim()) {
-    draft.sopsMasterIdentity = defaultMasterIdentityPath();
+  if (usesEmbeddedAge(draft.secretProvider) && !draft.ageMasterIdentity.trim()) {
+    draft.ageMasterIdentity = defaultMasterIdentityPath();
   }
   return draft;
 }
@@ -311,7 +312,7 @@ function canRunOnboarding(config: ProxnixConfig): boolean {
   if (!config.siteDir.trim() || state.onboardingRunning) {
     return false;
   }
-  if (usesEmbeddedSops(config.secretProvider) && !config.sopsMasterIdentity.trim()) {
+  if (usesEmbeddedAge(config.secretProvider) && !config.ageMasterIdentity.trim()) {
     return false;
   }
   if (usesExecProvider(config.secretProvider) && !config.secretProviderCommand.trim()) {
@@ -1215,12 +1216,12 @@ function renderOnboarding(snapshot: AppSnapshot): string {
   const draft = onboardingConfig();
   const running = state.onboardingRunning;
   const canStart = canRunOnboarding(draft);
-  const backendNeeds = usesEmbeddedSops(draft.secretProvider)
+  const backendNeeds = usesEmbeddedAge(draft.secretProvider)
     ? renderSettingsField(
         "Master identity",
-        "sopsMasterIdentity",
-        draft.sopsMasterIdentity,
-        "Recovery key for embedded-sops. Created automatically if absent.",
+        "ageMasterIdentity",
+        draft.ageMasterIdentity,
+        "Recovery key for embedded age bundles. Created automatically if absent.",
         undefined,
         true,
       )
@@ -1507,12 +1508,12 @@ function renderSettingsForm(snapshot: AppSnapshot): string {
         ${renderSettingsField("Remote private dir", "remotePrivDir", draft.remotePrivDir, "Private proxnix path on remote hosts.")}
         ${renderSettingsField("Host relay identity", "remoteHostRelayIdentity", draft.remoteHostRelayIdentity, "Age identity path on remote hosts.")}
         ${renderSettingsField("Secret backend", "secretProvider", draft.secretProvider, "Storage backend for secrets and identities.", SECRET_PROVIDER_OPTIONS)}
-        ${usesEmbeddedSops(draft.secretProvider)
+        ${usesEmbeddedAge(draft.secretProvider)
           ? renderSettingsField(
-              "SOPS master identity",
-              "sopsMasterIdentity",
-              draft.sopsMasterIdentity,
-              "SSH private key used as the embedded-sops master identity.",
+              "Age master identity",
+              "ageMasterIdentity",
+              draft.ageMasterIdentity,
+              "SSH private key used as the embedded age master identity.",
               undefined,
               true,
             )
@@ -1889,7 +1890,7 @@ function renderLabelPicker(
 
 function renderContainerPage(container: ContainerSummary): string {
   const snapshot = state.snapshot;
-  const isEmbeddedSops = usesEmbeddedSops(snapshot?.config.secretProvider ?? "");
+  const isEmbeddedAge = usesEmbeddedAge(snapshot?.config.secretProvider ?? "");
   const confirmingDelete = state.pendingDeleteContainerBundleVmid === container.vmid;
 
   return `
@@ -1900,7 +1901,7 @@ function renderContainerPage(container: ContainerSummary): string {
         <div class="container-config-actions">
           ${renderOpenDropdown(
             container.containerPath,
-            isEmbeddedSops
+            isEmbeddedAge
               ? [{ label: "Private Directory", action: "open-path", path: container.privateContainerPath }]
               : undefined,
           )}
@@ -2607,7 +2608,7 @@ function renderSecretScopePage(snapshot: AppSnapshot): string {
         </div>
         <div class="controls-end">
           ${isContainer ? `<button class="secondary-button" data-action="init-container-identity" ${state.secretScopeRunning ? "disabled" : ""}>${icon("key")}<span>Init Identity</span></button>` : ""}
-          <button class="secondary-button" data-action="rotate-secret-scope" ${state.secretScopeRunning || !(status?.canRotate ?? usesEmbeddedSops(snapshot.config.secretProvider)) ? "disabled" : ""}>
+          <button class="secondary-button" data-action="rotate-secret-scope" ${state.secretScopeRunning || !(status?.canRotate ?? usesEmbeddedAge(snapshot.config.secretProvider)) ? "disabled" : ""}>
             ${icon("refresh")}
             <span>Rotate</span>
           </button>

@@ -15,6 +15,7 @@ PROXNIX_PRIVATE_DIR="${PROXNIX_DATA_DIR}/private"
 PROXNIX_HOST_STATE_DIR="/etc/proxnix"
 PROXNIX_INSTALL_MANIFEST="${PROXNIX_LIB_DIR}/install-manifest.txt"
 PROXNIX_INSTALL_INFO="${PROXNIX_LIB_DIR}/install-info.txt"
+MANIFEST_ENTRIES=()
 
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "  $*"; }
@@ -32,6 +33,7 @@ link_file() {
     local src="$1" dest="$2"
     [[ -e "$src" || -L "$src" ]] || die "missing source: $src"
     ln -sfn "$src" "$dest"
+    MANIFEST_ENTRIES+=("$dest")
     log "linked $dest -> $src"
 }
 
@@ -39,23 +41,32 @@ need_root
 command -v pveversion >/dev/null 2>&1 || die "pveversion not found; is this a Proxmox host?"
 [[ -d "$PROXNIX_PROFILE" ]] || die "missing proxnix profile: $PROXNIX_PROFILE"
 
-ensure_dir "$LXC_CONFIG_DIR" "0755"
-ensure_dir "$LXC_HOOKS_DIR" "0755"
-ensure_dir "$PROXNIX_LIB_DIR" "0755"
-ensure_dir "$PROXNIX_SBIN_DIR" "0755"
-ensure_dir "$PROXNIX_LOCAL_BIN_DIR" "0755"
-ensure_dir "$SYSTEMD_UNIT_DIR" "0755"
-ensure_dir "$PROXNIX_DATA_DIR" "0755"
-ensure_dir "$PROXNIX_PRIVATE_DIR" "0700"
-ensure_dir "$PROXNIX_HOST_STATE_DIR" "0700"
-ensure_dir "$PROXNIX_DATA_DIR/containers" "0755"
-ensure_dir "$PROXNIX_DATA_DIR/authority" "0755"
-ensure_dir "$PROXNIX_DATA_DIR/status" "0755"
-ensure_dir "$PROXNIX_DATA_DIR/state" "0755"
-ensure_dir "$PROXNIX_DATA_DIR/gcroots" "0755"
-ensure_dir "$PROXNIX_DATA_DIR/gcroots/deploy" "0755"
-ensure_dir "$PROXNIX_PRIVATE_DIR/shared" "0700"
-ensure_dir "$PROXNIX_PRIVATE_DIR/containers" "0700"
+for path in \
+    "$LXC_CONFIG_DIR" \
+    "$LXC_HOOKS_DIR" \
+    "$PROXNIX_LIB_DIR" \
+    "$PROXNIX_SBIN_DIR" \
+    "$PROXNIX_LOCAL_BIN_DIR" \
+    "$SYSTEMD_UNIT_DIR" \
+    "$PROXNIX_DATA_DIR" \
+    "$PROXNIX_DATA_DIR/containers" \
+    "$PROXNIX_DATA_DIR/authority" \
+    "$PROXNIX_DATA_DIR/status" \
+    "$PROXNIX_DATA_DIR/state" \
+    "$PROXNIX_DATA_DIR/gcroots" \
+    "$PROXNIX_DATA_DIR/gcroots/deploy"
+do
+    ensure_dir "$path" "0755"
+done
+
+for path in \
+    "$PROXNIX_PRIVATE_DIR" \
+    "$PROXNIX_HOST_STATE_DIR" \
+    "$PROXNIX_PRIVATE_DIR/shared" \
+    "$PROXNIX_PRIVATE_DIR/containers"
+do
+    ensure_dir "$path" "0700"
+done
 
 rm -f "$PROXNIX_DATA_DIR/state/proxnix-reconciler.sqlite"
 
@@ -63,14 +74,18 @@ link_file "$PROXNIX_PROFILE/share/proxnix/lxc/config/nixos.common.conf" "$LXC_CO
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/config/nixos.userns.conf" "$LXC_CONFIG_DIR/nixos.userns.conf"
 link_file "$PROXNIX_PROFILE/share/proxnix/lxc/hooks/nixos-proxnix-start-host" "$LXC_HOOKS_DIR/nixos-proxnix-start-host"
 
-rm -f "$PROXNIX_LIB_DIR/pve-conf-to-nix"
-rm -f "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh"
-rm -f /usr/share/lxc/hooks/nixos-proxnix-prestart
-rm -f /usr/share/lxc/hooks/nixos-proxnix-mount
-rm -f /usr/share/lxc/hooks/nixos-proxnix-poststop
-rm -f "$PROXNIX_LIB_DIR/proxnix_authority_render.py"
-rm -f "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py"
-rm -f "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"
+for path in \
+    "$PROXNIX_LIB_DIR/pve-conf-to-nix" \
+    "$PROXNIX_LIB_DIR/nixos-proxnix-common.sh" \
+    /usr/share/lxc/hooks/nixos-proxnix-prestart \
+    /usr/share/lxc/hooks/nixos-proxnix-mount \
+    /usr/share/lxc/hooks/nixos-proxnix-poststop \
+    "$PROXNIX_LIB_DIR/proxnix_authority_render.py" \
+    "$PROXNIX_LIB_DIR/proxnix_reconciler_state.py" \
+    "$PROXNIX_LIB_DIR/proxnix_reconcile_podman_secrets.py"
+do
+    rm -f "$path"
+done
 link_file "$PROXNIX_PROFILE/lib/proxnix/proxnix-secrets-guest" "$PROXNIX_LIB_DIR/proxnix-secrets-guest"
 
 for command in \
@@ -82,50 +97,26 @@ do
     link_file "$PROXNIX_PROFILE/bin/$command" "$PROXNIX_SBIN_DIR/$command"
 done
 
-for command in age jq sops; do
-    link_file "$PROXNIX_PROFILE/bin/$command" "$PROXNIX_LOCAL_BIN_DIR/$command"
+for unit in \
+    proxnix-gc.service \
+    proxnix-gc.timer \
+    proxnix-flake-update.service \
+    proxnix-flake-update.timer \
+    proxnix-reconcile.service \
+    proxnix-reconcile.timer \
+    proxnix-reconcile@.service
+do
+    link_file "$PROXNIX_PROFILE/share/systemd/system/$unit" "$SYSTEMD_UNIT_DIR/$unit"
 done
 
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-gc.service" "$SYSTEMD_UNIT_DIR/proxnix-gc.service"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-gc.timer" "$SYSTEMD_UNIT_DIR/proxnix-gc.timer"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.service" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.service"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-flake-update.timer" "$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile.service"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile.timer" "$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer"
-link_file "$PROXNIX_PROFILE/share/systemd/system/proxnix-reconcile@.service" "$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service"
+for module in base.nix common.nix security-policy.nix configuration.nix; do
+    link_file "$PROXNIX_PROFILE/share/proxnix/nix/$module" "$PROXNIX_DATA_DIR/$module"
+done
 
-link_file "$PROXNIX_PROFILE/share/proxnix/nix/base.nix" "$PROXNIX_DATA_DIR/base.nix"
-link_file "$PROXNIX_PROFILE/share/proxnix/nix/common.nix" "$PROXNIX_DATA_DIR/common.nix"
-link_file "$PROXNIX_PROFILE/share/proxnix/nix/security-policy.nix" "$PROXNIX_DATA_DIR/security-policy.nix"
-link_file "$PROXNIX_PROFILE/share/proxnix/nix/configuration.nix" "$PROXNIX_DATA_DIR/configuration.nix"
-
-cat > "$PROXNIX_INSTALL_MANIFEST" <<EOF
-$LXC_CONFIG_DIR/nixos.common.conf
-$LXC_CONFIG_DIR/nixos.userns.conf
-$LXC_HOOKS_DIR/nixos-proxnix-start-host
-$PROXNIX_LIB_DIR/proxnix-secrets-guest
-$PROXNIX_INSTALL_MANIFEST
-$PROXNIX_INSTALL_INFO
-$PROXNIX_SBIN_DIR/proxnix-doctor
-$PROXNIX_SBIN_DIR/proxnix-host
-$PROXNIX_SBIN_DIR/proxnix-host-activate
-$PROXNIX_SBIN_DIR/proxnix-host-uninstall
-$PROXNIX_LOCAL_BIN_DIR/age
-$PROXNIX_LOCAL_BIN_DIR/jq
-$PROXNIX_LOCAL_BIN_DIR/sops
-$PROXNIX_PROFILE
-$SYSTEMD_UNIT_DIR/proxnix-flake-update.service
-$SYSTEMD_UNIT_DIR/proxnix-flake-update.timer
-$SYSTEMD_UNIT_DIR/proxnix-gc.service
-$SYSTEMD_UNIT_DIR/proxnix-gc.timer
-$SYSTEMD_UNIT_DIR/proxnix-reconcile.service
-$SYSTEMD_UNIT_DIR/proxnix-reconcile.timer
-$SYSTEMD_UNIT_DIR/proxnix-reconcile@.service
-$PROXNIX_DATA_DIR/base.nix
-$PROXNIX_DATA_DIR/common.nix
-$PROXNIX_DATA_DIR/security-policy.nix
-$PROXNIX_DATA_DIR/configuration.nix
-EOF
+{
+    printf '%s\n' "${MANIFEST_ENTRIES[@]}"
+    printf '%s\n' "$PROXNIX_INSTALL_MANIFEST" "$PROXNIX_INSTALL_INFO" "$PROXNIX_PROFILE"
+} > "$PROXNIX_INSTALL_MANIFEST"
 
 cat > "$PROXNIX_INSTALL_INFO" <<EOF
 proxnix host install
@@ -155,8 +146,8 @@ profile. It does not remove Nix itself.
 EOF
 
 systemctl daemon-reload
-systemctl enable --now proxnix-gc.timer
-systemctl enable --now proxnix-flake-update.timer
-systemctl enable --now proxnix-reconcile.timer
+for timer in proxnix-gc.timer proxnix-flake-update.timer proxnix-reconcile.timer; do
+    systemctl enable --now "$timer"
+done
 
 echo "proxnix host runtime activated from $PROXNIX_PROFILE"

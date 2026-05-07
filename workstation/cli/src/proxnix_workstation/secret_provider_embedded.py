@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .config import WorkstationConfig
 from .errors import ProxnixWorkstationError
 from .paths import SitePaths
 from .sops_ops import (
-    ensure_flat_secret_map,
+    age_encrypt_text,
     ensure_private_permissions,
     generate_identity_keypair,
     identity_public_key_from_store,
     master_recipient,
-    sops_decrypt_json,
-    sops_encrypt_json_text,
-    sops_encrypt_yaml_text,
-    write_identity_payload,
+    read_secret_bundle_map,
+    write_secret_bundle_map,
 )
 from .secret_provider_types import SecretProvider, SecretScopeRef
 
@@ -40,8 +37,7 @@ def create_identity_store(config: WorkstationConfig, site_paths: SitePaths, stor
 
     ensure_secret_parent_dir(site_paths, store)
     private_text, pubkey = generate_identity_keypair()
-    payload = write_identity_payload(private_text.rstrip("\n"))
-    encrypted = sops_encrypt_yaml_text(config, payload, master_recipient(config))
+    encrypted = age_encrypt_text(private_text, master_recipient(config))
     write_store_atomic(store, encrypted)
     return label, pubkey
 
@@ -92,14 +88,11 @@ def ensure_sops_store(config: WorkstationConfig, site_paths: SitePaths, path: Pa
     if path.exists():
         return
     ensure_secret_parent_dir(site_paths, path)
-    encrypted = sops_encrypt_json_text(config, "{}\n", recipients)
-    write_store_atomic(path, encrypted)
+    write_secret_bundle_map(path, recipients, {})
 
 
 def read_sops_store_map(config: WorkstationConfig, path: Path) -> dict[str, str] | None:
-    if not path.exists():
-        return None
-    return ensure_flat_secret_map(sops_decrypt_json(config, path), source=str(path))
+    return read_secret_bundle_map(config, path)
 
 
 def write_sops_store_map(
@@ -108,9 +101,7 @@ def write_sops_store_map(
     recipients: str,
     data: dict[str, str],
 ) -> None:
-    plaintext = json.dumps(data, indent=2, sort_keys=True) + "\n"
-    encrypted = sops_encrypt_json_text(config, plaintext, recipients)
-    write_store_atomic(path, encrypted)
+    write_secret_bundle_map(path, recipients, data)
 
 
 def sops_set_local(
@@ -152,7 +143,7 @@ def reencrypt_local(config: WorkstationConfig, path: Path, recipients: str) -> N
 
 
 class EmbeddedSopsProvider(SecretProvider):
-    name = "embedded-sops"
+    name = "embedded-age"
 
     def __init__(self, config: WorkstationConfig, site_paths: SitePaths) -> None:
         self.config = config
@@ -162,7 +153,7 @@ class EmbeddedSopsProvider(SecretProvider):
         return capability in {"list", "get", "set", "remove", "export-scope", "rotate"}
 
     def describe(self) -> str:
-        return "embedded-sops"
+        return "embedded-age"
 
     def list_names(self, ref: SecretScopeRef) -> list[str]:
         return sorted(self.export_scope(ref))

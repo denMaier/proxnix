@@ -2,11 +2,13 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::UNIX_EPOCH;
 
 use crate::common::{
-    effective_uid, find_in_path, remove_path_if_exists, take_arg, valid_vmid, HostResult,
+    active_storage_names, command_stdout as command_output, effective_uid,
+    normalize_template_volid, pick_bin, preferred_storage, remove_path_if_exists, shell_quote,
+    take_arg, valid_vmid, HostResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,21 +139,6 @@ impl Bins {
     }
 }
 
-fn pick_bin(candidates: &[&str]) -> Option<PathBuf> {
-    for candidate in candidates {
-        let path = if candidate.contains('/') {
-            let path = PathBuf::from(candidate);
-            path.exists().then_some(path)
-        } else {
-            find_in_path(candidate)
-        };
-        if let Some(path) = path {
-            return Some(path);
-        }
-    }
-    None
-}
-
 fn usage() {
     println!(
         "\
@@ -236,27 +223,15 @@ fn auto_detect_storage_if_needed(options: &mut Options, bins: &Bins) -> Result<(
 fn detect_rootfs_storage(bins: &Bins) -> Result<String, String> {
     let output = command_output(Command::new(&bins.pvesm).args(["status", "--content", "rootdir"]))
         .map_err(|err| format!("failed to inspect Proxmox storage: {err}"))?;
-    let storages = output
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            (fields.len() > 2 && fields[2] == "active").then(|| fields[0].to_owned())
-        })
-        .collect::<Vec<_>>();
-
+    let storages = active_storage_names(&output);
     if storages.is_empty() {
         return Err(
             "could not auto-detect a rootdir-capable active storage; pass --storage explicitly"
                 .to_owned(),
         );
     }
-    for preferred in ["local-lvm", "local-zfs"] {
-        if storages.iter().any(|storage| storage == preferred) {
-            return Ok(preferred.to_owned());
-        }
-    }
-    Ok(storages[0].clone())
+    preferred_storage(&storages, &["local-lvm", "local-zfs"])
+        .ok_or_else(|| "could not auto-detect rootfs storage".to_owned())
 }
 
 fn auto_detect_template_if_needed(options: &mut Options, bins: &Bins) -> Result<(), String> {
@@ -303,17 +278,6 @@ fn detect_latest_template(bins: &Bins) -> Result<String, String> {
     best.map(|(volid, _)| volid).ok_or_else(|| {
         "could not auto-detect a local NixOS template; pass --template explicitly or download one first with pveam".to_owned()
     })
-}
-
-fn normalize_template_volid(storage: &str, candidate: &str) -> String {
-    if candidate.contains(':') {
-        return candidate.to_owned();
-    }
-    let name = Path::new(candidate)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(candidate);
-    format!("{storage}:vztmpl/{name}")
 }
 
 fn template_mtime(bins: &Bins, volid: &str) -> i64 {
@@ -752,35 +716,34 @@ fn print_next_steps(options: &Options) {
     println!("Done.");
     println!();
     println!("Next steps:");
-    println!("  1. Watch the automatic first-boot apply finish:");
-    println!(
-        "       pct exec {} -- /run/current-system/sw/bin/journalctl -u proxnix-apply-config.service -b -f",
-        options.vmid
-    );
-    println!(
-        "       # If it ever needs a manual retry: pct enter {}",
-        options.vmid
-    );
-    println!("       # then run /root/proxnix-bootstrap.sh");
+    if options.start_after_create {
+        println!("  1. Publish any site-side config or secrets for this VMID, then reconcile:");
+        println!("       proxnix-publish");
+        println!("       proxnix-host reconcile --vmid {}", options.vmid);
+    } else {
+        println!(
+            "  1. Publish any site-side config or secrets for this VMID, then reconcile and start:"
+        );
+        println!("       proxnix-publish");
+        println!("       proxnix-host start --vmid {}", options.vmid);
+    }
     println!();
-    println!("  2. Add or update secrets for this container at any time:");
+    println!(
+        "  2. Add or update secrets for this container at any time, then publish and reconcile:"
+    );
     println!("       proxnix-secrets set {} mysecret", options.vmid);
     println!("       proxnix-publish");
-    println!("       # restart the CT after publishing updated relay state");
+    println!("       proxnix-host reconcile --vmid {}", options.vmid);
     println!();
-    println!("  3. Re-run health checks:");
+    println!("  3. Check reconciler status:");
+    println!(
+        "       proxnix-host reconcile --status --vmid {}",
+        options.vmid
+    );
     match resolve_doctor() {
-        Ok(doctor) => println!("       {} {}", doctor.display(), options.vmid),
-        Err(_) => println!("       proxnix-doctor {}", options.vmid),
+        Ok(doctor) => println!("       {} --host-only", doctor.display()),
+        Err(_) => println!("       proxnix-doctor --host-only"),
     }
-}
-
-fn command_output(command: &mut Command) -> io::Result<String> {
-    let output = command.stderr(Stdio::null()).output()?;
-    if !output.status.success() {
-        return Err(io::Error::other("command failed"));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn create_host_dir(options: &Options, path: &Path) -> Result<(), String> {
@@ -832,15 +795,6 @@ where
         print!(" {}", shell_quote(&arg.as_ref().to_string_lossy()));
     }
     println!();
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=')
-    }) {
-        return value.to_owned();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn msg_info(message: &str) {

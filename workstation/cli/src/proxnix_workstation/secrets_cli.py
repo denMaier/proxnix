@@ -71,7 +71,7 @@ def _provider_environment(provider_env: dict[str, str]):
 
 def need_tools(config: WorkstationConfig) -> SitePaths:
     site_paths = SitePaths.from_config(config)
-    ensure_commands(["sops"])
+    ensure_commands(["age", "ssh-keygen"])
     return site_paths
 
 
@@ -134,7 +134,7 @@ def secret_scope_status_data(config: WorkstationConfig, scope: SecretScope) -> d
         "scopeType": scope.scope_type,
         "scopeId": scope.scope_id,
         "entries": entries,
-        "canRotate": config.secret_provider == "embedded-sops",
+        "canRotate": config.secret_provider in {"embedded-age", "embedded-sops"},
         "warnings": warnings,
     }
 
@@ -393,7 +393,7 @@ def cmd_rotate(config: WorkstationConfig, vmid: str) -> int:
     site_paths = need_tools(config)
     provider = load_secret_provider(config, site_paths)
     if not isinstance(provider, EmbeddedSopsProvider):
-        raise ProxnixWorkstationError("rotate is only supported by the embedded-sops secret provider")
+        raise ProxnixWorkstationError("rotate is only supported by the embedded-age secret provider")
     provider.rotate_scope(container_scope(vmid))
     print(f"Rotated store: vmid={vmid}")
     return 0
@@ -403,7 +403,7 @@ def cmd_rotate_shared(config: WorkstationConfig) -> int:
     site_paths = need_tools(config)
     provider = load_secret_provider(config, site_paths)
     if not isinstance(provider, EmbeddedSopsProvider):
-        raise ProxnixWorkstationError("rotate-shared is only supported by the embedded-sops secret provider")
+        raise ProxnixWorkstationError("rotate-shared is only supported by the embedded-age secret provider")
     provider.rotate_scope(shared_scope())
     print("Rotated shared store")
     return 0
@@ -415,7 +415,7 @@ def cmd_rotate_group(config: WorkstationConfig, group: str) -> int:
     if not valid_secret_group_name(group):
         raise ProxnixWorkstationError(f"invalid group name: {group}")
     if not isinstance(provider, EmbeddedSopsProvider):
-        raise ProxnixWorkstationError("rotate-group is only supported by the embedded-sops secret provider")
+        raise ProxnixWorkstationError("rotate-group is only supported by the embedded-age secret provider")
     provider.rotate_scope(group_scope(group))
     print(f"Rotated group store: group={group}")
     return 0

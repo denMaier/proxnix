@@ -16,6 +16,7 @@ SECRET_GROUP_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 KNOWN_KEYS = (
     "PROXNIX_SITE_DIR",
+    "PROXNIX_AGE_MASTER_IDENTITY",
     "PROXNIX_SOPS_MASTER_IDENTITY",
     "PROXNIX_MASTER_IDENTITY",
     "PROXNIX_HOSTS",
@@ -36,13 +37,13 @@ KNOWN_KEYS = (
 
 DEFAULT_CONFIG = {
     "siteDir": "",
-    "sopsMasterIdentity": "",
+    "ageMasterIdentity": "",
     "hosts": "",
     "sshIdentity": "",
     "remoteDir": "/var/lib/proxnix",
     "remotePrivDir": "/var/lib/proxnix/private",
     "remoteHostRelayIdentity": "/etc/proxnix/host_relay_identity",
-    "secretProvider": "embedded-sops",
+    "secretProvider": "embedded-age",
     "secretProviderCommand": "",
     "scriptsDir": "",
     "managerPythonPath": "",
@@ -477,8 +478,9 @@ def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
 
     payload = {
         "siteDir": _expand_home_string(value_for("PROXNIX_SITE_DIR"), home).strip(),
-        "sopsMasterIdentity": _expand_home_string(
+        "ageMasterIdentity": _expand_home_string(
             value_for(
+                "PROXNIX_AGE_MASTER_IDENTITY",
                 "PROXNIX_SOPS_MASTER_IDENTITY",
                 "PROXNIX_MASTER_IDENTITY",
             ),
@@ -493,8 +495,8 @@ def read_config_payload() -> tuple[dict[str, str], list[str], Path]:
         "remoteHostRelayIdentity": value_for(
             "PROXNIX_REMOTE_HOST_RELAY_IDENTITY", default="/etc/proxnix/host_relay_identity"
         ).strip(),
-        "secretProvider": value_for("PROXNIX_SECRET_PROVIDER", default="embedded-sops").strip()
-        or "embedded-sops",
+        "secretProvider": value_for("PROXNIX_SECRET_PROVIDER", default="embedded-age").strip()
+        or "embedded-age",
         "secretProviderCommand": value_for("PROXNIX_SECRET_PROVIDER_COMMAND").strip(),
         "scriptsDir": _expand_home_string(value_for("PROXNIX_SCRIPTS_DIR"), home).strip(),
         "managerPythonPath": value_for("PROXNIX_MANAGER_PYTHONPATH").strip(),
@@ -650,14 +652,14 @@ def _ensure_master_key(config: object, provider: object, site_paths: object) -> 
         MASTER_KEY_NAME,
         _provider_get_key,
         _provider_set_key,
+        age_master_identity_path,
         master_private_key_text,
-        sops_master_identity_path,
     )
     from proxnix_workstation.secret_provider_embedded import EmbeddedSopsProvider
     from proxnix_workstation.sops_ops import generate_identity_keypair
 
     if isinstance(provider, EmbeddedSopsProvider):
-        identity_path = sops_master_identity_path(config)
+        identity_path = age_master_identity_path(config)
         if identity_path.exists():
             master_private_key_text(config, provider)
             return f"Using existing master identity: {identity_path}"
@@ -683,8 +685,8 @@ def run_onboarding(payload: dict[str, object]) -> dict[str, object]:
     site_dir = Path(config["siteDir"]).expanduser()
     if not str(config["siteDir"]).strip():
         raise ValueError("Choose a site directory first.")
-    if config["secretProvider"] == "embedded-sops" and not config["sopsMasterIdentity"].strip():
-        config["sopsMasterIdentity"] = str(Path.home() / ".ssh" / "proxnix-master")
+    if config["secretProvider"] in {"embedded-age", "embedded-sops"} and not config["ageMasterIdentity"].strip():
+        config["ageMasterIdentity"] = str(Path.home() / ".ssh" / "proxnix-master")
     if config["secretProvider"] == "exec" and not config["secretProviderCommand"].strip():
         raise ValueError("Exec secret backend requires a provider command.")
 

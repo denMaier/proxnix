@@ -3,7 +3,7 @@ import type { ProxmoxNodesResult } from "./proxmoxTypes";
 
 export interface ProxnixConfig {
   siteDir: string;
-  sopsMasterIdentity: string;
+  ageMasterIdentity: string;
   hosts: string;
   sshIdentity: string;
   remoteDir: string;

@@ -101,22 +101,19 @@ vmid = sys.argv[2]
 secrets_dir = Path(sys.argv[3])
 
 
-def top_level_keys(path: Path):
+def bundle_keys(path: Path):
     if not path.exists():
         return set()
-    keys = set()
-    for line in path.read_text().splitlines():
-        if not line or line[0].isspace() or ":" not in line:
-            continue
-        key = line.split(":", 1)[0].strip()
-        if key and key != "sops":
-            keys.add(key)
-    return keys
+    payload = json.loads(path.read_text())
+    if payload.get("schema") != "proxnix.secrets.v1":
+        return set()
+    secrets = payload.get("secrets")
+    return set(secrets) if isinstance(secrets, dict) else set()
 
 
 live_names = set()
 if secrets_dir.is_dir():
-    live_names.update(top_level_keys(secrets_dir / "effective.sops.yaml"))
+    live_names.update(bundle_keys(secrets_dir / "effective.secrets.json"))
 
 secrets_json = rootfs / "var/lib/containers/storage/secrets/secrets.json"
 ids_dir = rootfs / "etc/secrets/.ids"

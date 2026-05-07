@@ -4,7 +4,7 @@
 , callPackage
 , bun
 , python3
-, sops
+, age
 , openssh
 , rsync
 , git
@@ -19,7 +19,7 @@ let
   runtimeInputs = [
     workstationCli
     pythonEnv
-    sops
+    age
     openssh
     rsync
     git

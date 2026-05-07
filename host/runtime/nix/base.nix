@@ -146,7 +146,7 @@ in {
     (modulesPath + "/virtualisation/proxmox-lxc.nix")
   ];
 
-  nixpkgs.overlays = lib.optional (nixpkgs-unstable != null) (final: prev: {
+  nixpkgs.overlays = lib.optional (nixpkgs-unstable != null) (_: prev: {
     unstable = import nixpkgs-unstable {
       inherit (prev) config;
       inherit (prev.stdenv.hostPlatform) system;
@@ -228,13 +228,8 @@ in {
     options = lib.mkDefault "--delete-older-than 7d";
   };
 
-  # sops decrypts the staged YAML secret stores. age still provides the
-  # per-container identity used by SOPS.
   environment.systemPackages = [
-    pkgs.age
-    pkgs.sops
     pkgs.socat
-    pkgs.jq
     proxnixBootActivate
     proxnixHelp
   ];

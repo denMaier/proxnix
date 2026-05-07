@@ -6,8 +6,17 @@ license = "MIT"
 description = "Host-side proxnix control binary"
 
 [dependencies]
+age = { version = "0.11.3", features = ["ssh", "armor"] }
 serde_json = "1"
 sha2 = "0.10"
 syslog = "7"
 unix = { package = "nix", version = "0.30", features = ["fs", "hostname", "mount", "user"] }
 uuid = { version = "1", default-features = false, features = ["v5"] }
+
+[[bin]]
+name = "proxnix-host"
+path = "src/main.rs"
+
+[[bin]]
+name = "proxnix-secrets-guest"
+path = "src/bin/proxnix-secrets-guest.rs"

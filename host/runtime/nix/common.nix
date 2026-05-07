@@ -380,7 +380,7 @@ let
     };
   };
 
-  mkPublicSecretFileType = secretName: lib.types.submodule ({ ... }: {
+  mkPublicSecretFileType = secretName: lib.types.submodule (_: {
     options = {
       lifecycle = lib.mkOption {
         type = lib.types.enum [ "container" ];
@@ -950,7 +950,7 @@ let
       description = lib.mdDoc ''
         Optional shared proxnix secret name containing a shadow-compatible
         password hash for the shared operator account. The value is read from
-        the staged SOPS-backed proxnix secret store on boot before being
+        the staged proxnix secret bundle on boot before being
         applied.
       '';
     };
@@ -1140,12 +1140,20 @@ let
 
   serviceFileOpScript = opId: secretCfg: ''
     dest=${lib.escapeShellArg secretCfg.path}
-    mkdir -p "$(dirname "$dest")"
-    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
+    dest_dir="$(dirname "$dest")"
+    base_name="$(basename "$dest")"
+    mkdir -p "$dest_dir"
+    tmp="$dest_dir/.''${base_name}.proxnix-${sanitizeUnitName opId}.$$"
+    rm -f "$tmp"
 
-    ${secretFetchCommand secretCfg} > "$tmp"
-    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
-    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    if ! {
+      ${secretFetchCommand secretCfg} > "$tmp" &&
+      chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp" &&
+      chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    }; then
+      rm -f "$tmp"
+      exit 1
+    fi
     mv "$tmp" "$dest"
   '';
 
@@ -1175,11 +1183,19 @@ let
 
       ${pkgs.gomplate}/bin/gomplate "''${datasource_args[@]}" -i ${gomplateExpression} > "$template_workdir/rendered"
 
-      mkdir -p "$(dirname "$dest")"
-      tmp="$template_workdir/output"
-      cat "$template_workdir/rendered" > "$tmp"
-      chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
-      chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+      dest_dir="$(dirname "$dest")"
+      base_name="$(basename "$dest")"
+      mkdir -p "$dest_dir"
+      tmp="$dest_dir/.''${base_name}.proxnix-${sanitizeUnitName opId}.$$"
+      rm -f "$tmp"
+      if ! {
+        cat "$template_workdir/rendered" > "$tmp" &&
+        chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp" &&
+        chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+      }; then
+        rm -f "$tmp"
+        exit 1
+      fi
       mv "$tmp" "$dest"
     '';
 
@@ -1445,12 +1461,20 @@ let
 
   mkFileOpScript = opId: secretCfg: ''
     dest=${lib.escapeShellArg secretCfg.path}
-    mkdir -p "$(dirname "$dest")"
-    tmp="$workdir/file-${sanitizeUnitName opId}.tmp"
+    dest_dir="$(dirname "$dest")"
+    base_name="$(basename "$dest")"
+    mkdir -p "$dest_dir"
+    tmp="$dest_dir/.''${base_name}.proxnix-${sanitizeUnitName opId}.$$"
+    rm -f "$tmp"
 
-    ${secretFetchCommand secretCfg} > "$tmp"
-    chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp"
-    chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    if ! {
+      ${secretFetchCommand secretCfg} > "$tmp" &&
+      chown ${lib.escapeShellArg secretCfg.owner}:${lib.escapeShellArg secretCfg.group} "$tmp" &&
+      chmod ${lib.escapeShellArg secretCfg.mode} "$tmp"
+    }; then
+      rm -f "$tmp"
+      exit 1
+    fi
     mv "$tmp" "$dest"
   '';
 
@@ -1510,10 +1534,16 @@ let
         dest_dir="$(dirname "$dest")"
         base_name="$(basename "$dest")"
         mkdir -p "$dest_dir"
-        tmp="$template_workdir/.''${base_name}.tmp"
-        cat "$template_workdir/rendered" > "$tmp"
-        chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp"
-        chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+        tmp="$dest_dir/.''${base_name}.proxnix-${sanitizeUnitName opId}.$$"
+        rm -f "$tmp"
+        if ! {
+          cat "$template_workdir/rendered" > "$tmp" &&
+          chown ${lib.escapeShellArg templateCfg.owner}:${lib.escapeShellArg templateCfg.group} "$tmp" &&
+          chmod ${lib.escapeShellArg templateCfg.mode} "$tmp"
+        }; then
+          rm -f "$tmp"
+          exit 1
+        fi
         mv "$tmp" "$dest"
       fi
     '';

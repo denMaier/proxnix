@@ -20,9 +20,9 @@
     proxnix_template_install_lock_wait_seconds: 7200
     proxnix_template_install_lock_ttl_seconds: 7200
     # Valid values:
-    # - determinate: install Nix with the Determinate Systems installer if absent
     # - require-existing: fail if Nix is absent
-    proxnix_nix_install_mode: determinate
+    # - determinate: convenience bootstrap with the Determinate Systems installer if absent
+    proxnix_nix_install_mode: require-existing
     proxnix_determinate_nix_install_url: https://install.determinate.systems/nix
 
   pre_tasks:

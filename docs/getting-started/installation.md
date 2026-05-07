@@ -53,14 +53,28 @@ These live on the local node under `/var/lib/proxnix/`. They are no longer the s
 ## Step 1: Install on the Proxmox host
 
 Host-side reconciliation makes Nix a required Proxmox-node runtime dependency.
-The playbook checks whether Nix is installed, installs Nix with the Determinate
-Systems installer when missing, enables `nix-command flakes`, installs or upgrades the
-`/nix/var/nix/profiles/proxnix-host` profile, runs `proxnix-host-activate`, and
+The playbook checks whether Nix is installed, enables `nix-command flakes`,
+installs or upgrades the `/nix/var/nix/profiles/proxnix-host` profile, runs `proxnix-host-activate`, and
 verifies the installed commands. Activation links the proxnix files from the Nix
 profile into the mutable Proxmox paths that LXC and systemd expect. Run the
 playbook from your workstation or another Ansible control machine, not from the
 target node itself. By default it installs `github:denMaier/proxnix#proxnix-host`;
 pin a release or branch by overriding `proxnix_host_flake_ref`.
+
+The default install path assumes Nix is already installed. If you want the
+playbook to bootstrap Nix as a convenience, pass
+`-e proxnix_nix_install_mode=determinate`; this uses the Determinate Systems
+installer when Nix is absent.
+
+The installer builds the requested host package first, switches the Nix profile,
+then activates the profile idempotently. Activation overwrites proxnix-managed
+links in place and preserves deployment GC roots under
+`/var/lib/proxnix/gcroots/deploy`; prune them with `proxnix-host gc` instead of
+the installer. It does not wipe relay data or host secrets under
+`/var/lib/proxnix/authority`, `/var/lib/proxnix/containers`,
+`/var/lib/proxnix/private`, or `/etc/proxnix`. Use
+`-e proxnix_install_clean_slate=true` only as an explicit repair/reset path for
+stale pre-Nix or broken installs.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install.yml
@@ -74,7 +88,9 @@ ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/instal
 For development against the current checkout, use `install-local.yml`. It stages
 a small tar archive of the host-side flake inputs under
 `/var/lib/proxnix/install-source`, then calls the normal installer with that
-local flake ref.
+local flake ref. The development path resets that source directory before
+staging while keeping the freshly staged source available for inspection after
+activation.
 
 ```bash
 ansible-playbook -i host/deploy/inventory.proxmox.ini host/deploy/ansible/install-local.yml

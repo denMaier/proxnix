@@ -30,7 +30,7 @@
           Add the target node to the Ansible inventory and run this playbook from a control machine.
 
   tasks:
-    - name: Create local proxnix host package archive
+    - name: Create local proxnix host package archive # noqa: run-once[task]
       ansible.builtin.command:
         argv: "{{ ['tar', '-C', proxnix_repo_root, '-czf', proxnix_local_archive] + proxnix_install_source_paths }}"
       delegate_to: localhost
@@ -66,6 +66,8 @@
         owner: root
         group: root
 
-- import_playbook: install.yml
+- name: Install staged local proxnix host package
+  import_playbook: install.yml
   vars:
     proxnix_host_flake_ref: /var/lib/proxnix/install-source#proxnix-host
+    proxnix_reset_local_install_source: false

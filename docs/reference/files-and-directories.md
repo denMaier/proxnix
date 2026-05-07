@@ -103,38 +103,44 @@ lock can also be advanced on the host by `proxnix-host flake-update`.
 ├── common.nix                         shared operator module
 ├── security-policy.nix                host-enforced security policy
 ├── configuration.nix                  NixOS entrypoint
-├── flake.lock                         host-managed Nix input lock
-├── site.nix                           published site override
-├── authority/                         generated host authority flake wrapper
+├── flake.lock                         legacy mirror of the authority lock
+├── authority/                         host authority side repo
+│   ├── flake.nix                      host-completed wrapper
+│   ├── flake.lock                     Nix input lock
+│   ├── publish-revision.json          workstation publish source marker
+│   ├── site.nix                       optional site-wide module
+│   ├── node-manifest.nix              host-completed node manifest
+│   ├── modules/                       host-installed common modules
+│   └── containers/
+│       └── <vmid>/
+│           ├── modules.nix            import list for this CT
+│           ├── proxmox.nix            host-rendered PVE metadata module
+│           ├── dropins/               Nix drop-ins and support dirs
+│           ├── _template/             selected shared templates
+│           └── runtime-bin/           helper scripts copied to the guest
 ├── status/                            reconciler status JSON
 ├── state/
 │   └── flake-update.last-success      last successful flake update timestamp
 ├── gcroots/
 │   └── deploy/
 │       └── <vmid>-desired             host GC root for desired closure
-└── containers/
-    ├── _template/                     shared managed Nix template snippets
-    └── <vmid>/
-        ├── dropins/                   extra Nix, services, and scripts
-        ├── templates/                 `*.template` selectors for shared templates
+└── containers/                        legacy input fallback during migration
 
 /var/lib/proxnix/private/
 └── containers/
     └── <vmid>/
-        ├── age_identity.sops.yaml     host-relay-encrypted container guest identity
-        └── effective.sops.yaml        encrypted compiled container secret store
+        ├── age_identity.age           host-relay-encrypted guest identity
+        └── effective.secrets.json     encrypted compiled container secret bundle
 
 /etc/proxnix/
 └── host_relay_identity                shared host relay private key
 ```
 
-`authority/` is generated state. It is rebuilt from the published host inputs,
-container directories, and observed PVE LXC configs, then evaluated by Nix so
-the host can expose `nixosConfigurations.ct<vmid>` and
-`proxnix.nodes.<node>`. It is not a user-authored database; deleting it should
-only force regeneration.
+`authority/` is the host-side side repo. The workstation publishes it already
+partially rendered; the host completes Proxmox-derived modules, common module
+links, the flake wrapper, and the node manifest before evaluating it.
 
-The host relay identity and `shared_age_identity.sops.yaml` remain host-only.
+The host relay identity and encrypted guest identity stores remain host-only.
 Guests receive their own per-container identity at
 `/var/lib/proxnix/secrets/identity` when one is configured, plus the compiled
 runtime secret store.
@@ -173,7 +179,8 @@ install metadata.
 Created by the reconciler while rendering a CT payload. The reconciler copies
 the rendered build input from here into a guest debug snapshot, writes runtime
 markers and guest-visible helper files, copies secret files into the guest as
-root-owned regular files, and `proxnix-host gc` removes stale stage trees:
+root-owned regular files, and `proxnix-host gc` removes stale stage trees after
+taking the global reconcile lock:
 
 ```text
 /run/proxnix/<vmid>/
@@ -192,7 +199,7 @@ root-owned regular files, and `proxnix-host gc` removes stale stage trees:
 │   │   ├── current-config-hash
 │   │   └── vmid
 │   └── secrets/
-│       ├── effective.sops.yaml
+│       ├── effective.secrets.json
 │       └── identity
 └── copy/
     ├── runtime/
@@ -225,7 +232,7 @@ root-owned regular files, and `proxnix-host gc` removes stale stage trees:
 │   │   └── <user-defined scripts>
 │   └── manifests/
 └── secrets/
-    ├── effective.sops.yaml            encrypted compiled container secret store
+    ├── effective.secrets.json         encrypted compiled container secret bundle
     └── identity                       container SSH private key
 
 /etc/secrets/.ids/                     Podman secret ID→name mappings
@@ -245,7 +252,7 @@ root-owned regular files, and `proxnix-host gc` removes stale stage trees:
 │   └── <vmid>/
 │       └── secret-groups.list
 └── private/
-    ├── host_relay_identity.sops.yaml
+    ├── host_relay_identity.age
     ├── shared/
     ├── groups/
     └── containers/

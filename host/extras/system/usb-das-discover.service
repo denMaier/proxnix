@@ -1,5 +1,5 @@
 [Unit]
-Description=Discover USB-DAS members, mount them, and refresh layered VAULT mount
+Description=Discover USB-DAS members, mount them, and refresh layered mergerfs mount
 After=systemd-udevd.service
 Wants=systemd-udevd.service
 Requires=usb-das-mergerfs.service

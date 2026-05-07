@@ -322,15 +322,12 @@ PY
         NSPAWN_LOG="${{RUN_ROOT}}/nspawn.log"
         INSTALL_LOG="${{RUN_ROOT}}/install.log"
 
-        mkdir -p /usr/local/lib/proxnix /var/lib/proxnix/private /etc/proxnix
-        if ! command -v sops >/dev/null 2>&1; then
-          SOPS_PATH="$(nix-build '<nixpkgs>' -A sops --no-out-link)"
-          export PATH="${{SOPS_PATH}}/bin:$PATH"
-        fi
+        mkdir -p /usr/local/lib/proxnix /usr/local/sbin /var/lib/proxnix/private /etc/proxnix
+        HOST_CONTROLLER="$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths "${{REPO_ROOT}}#proxnix-host-controller")"
 
         install -m 0755 "${{PROXNIX_HOST_DIR}}/runtime/lib/pve-conf-to-nix.py" /usr/local/lib/proxnix/pve-conf-to-nix.py
         install -m 0644 "${{PROXNIX_HOST_DIR}}/runtime/lxc/hooks/nixos-proxnix-common.sh" /usr/local/lib/proxnix/nixos-proxnix-common.sh
-        install -m 0755 "${{PROXNIX_HOST_DIR}}/runtime/lib/proxnix-secrets-guest" /usr/local/lib/proxnix/proxnix-secrets-guest
+        install -m 0755 "${{HOST_CONTROLLER}}/bin/proxnix-secrets-guest" /usr/local/lib/proxnix/proxnix-secrets-guest
 
         local_nixos_container_reset_rootfs
         rm -rf /var/lib/proxnix /etc/proxnix "/run/proxnix/${{VMID}}"
@@ -340,9 +337,9 @@ PY
         install -m 0644 "${{PROXNIX_HOST_DIR}}/runtime/nix/common.nix" /var/lib/proxnix/common.nix
         install -m 0644 "${{PROXNIX_HOST_DIR}}/runtime/nix/security-policy.nix" /var/lib/proxnix/security-policy.nix
         install -m 0644 "${{PROXNIX_HOST_DIR}}/runtime/nix/configuration.nix" /var/lib/proxnix/configuration.nix
-        cp -a "${{RELAY_TREE}}/containers" /var/lib/proxnix/
-        if [ -f "${{RELAY_TREE}}/site.nix" ]; then
-          install -m 0644 "${{RELAY_TREE}}/site.nix" /var/lib/proxnix/site.nix
+        if [ -d "${{RELAY_TREE}}/authority" ]; then
+          mkdir -p /var/lib/proxnix/authority
+          cp -a "${{RELAY_TREE}}/authority/." /var/lib/proxnix/authority/
         fi
         if [ -d "${{RELAY_TREE}}/private" ]; then
           mkdir -p /var/lib/proxnix/private
@@ -351,7 +348,7 @@ PY
         if [ -f "${{RELAY_TREE}}/private/host_relay_identity" ]; then
           install -m 0600 "${{RELAY_TREE}}/private/host_relay_identity" /etc/proxnix/host_relay_identity
         fi
-        chmod 0755 /var/lib/proxnix /var/lib/proxnix/containers
+        chmod 0755 /var/lib/proxnix /var/lib/proxnix/authority /var/lib/proxnix/authority/containers
         chmod 0700 /var/lib/proxnix/private /var/lib/proxnix/private/containers /etc/proxnix
 
         mkdir -p "${{ROOTFS}}/etc/nixos"
@@ -537,7 +534,7 @@ def main(argv: list[str] | None = None, *, prog: str = "proxnix exercise orb-sit
     report_dir = work_root / "reports" / "latest"
 
     try:
-        ensure_commands(["orbctl", "sops", "ssh-keygen"])
+        ensure_commands(["orbctl", "age", "ssh-keygen"])
         source_config = load_workstation_config(args.config)
         source_site_dir = source_config.require_site_dir()
 

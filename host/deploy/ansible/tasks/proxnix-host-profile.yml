@@ -1,17 +1,39 @@
 ---
-- name: Build and set proxnix host profile
+- name: Build proxnix host profile target
   ansible.builtin.shell: |
-    set -eu
-    profile={{ proxnix_host_profile | quote }}
+    set -euo pipefail
     flake_ref={{ (proxnix_host_flake_ref | default(proxnix_host_flake_ref_default)) | quote }}
     built_path="$({{ proxnix_nix_bin | quote }} build --no-link --print-out-paths --no-write-lock-file "$flake_ref" | tail -n 1)"
     test -n "$built_path"
-
-    {{ proxnix_nix_env_bin | quote }} --profile "$profile" --set "$built_path"
+    printf '%s\n' "$built_path"
   args:
     executable: /bin/bash
-  register: proxnix_host_profile_install
-  changed_when: proxnix_host_profile_install.stdout != "" or proxnix_host_profile_install.stderr != ""
+  register: proxnix_host_profile_build
+  changed_when: false
+
+- name: Store built proxnix host profile target
+  ansible.builtin.set_fact:
+    proxnix_host_built_path: "{{ proxnix_host_profile_build.stdout | trim }}"
+
+- name: Assert proxnix host profile target was built
+  ansible.builtin.assert:
+    that:
+      - proxnix_host_built_path | length > 0
+    fail_msg: "nix build did not return a proxnix host profile target"
+
+- name: Run explicit proxnix host clean-slate repair before profile switch
+  ansible.builtin.import_tasks: proxnix-host-clean-slate.yml
+  when: (proxnix_install_clean_slate | default(false)) | bool
+
+- name: Set proxnix host profile
+  ansible.builtin.command:
+    argv:
+      - "{{ proxnix_nix_env_bin }}"
+      - --profile
+      - "{{ proxnix_host_profile }}"
+      - --set
+      - "{{ proxnix_host_built_path }}"
+  changed_when: true
 
 - name: Activate proxnix host runtime
   ansible.builtin.command: "{{ proxnix_host_profile }}/bin/proxnix-host-activate"
@@ -38,12 +60,3 @@
 - name: Verify proxnix host controller runs
   ansible.builtin.command: proxnix-host --help
   changed_when: false
-
-- name: Verify proxnix host tools are installed
-  ansible.builtin.command: "{{ item }} --version"
-  changed_when: false
-  loop:
-    - age
-    - jq
-    - sops
-

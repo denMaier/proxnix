@@ -167,7 +167,7 @@ fn take_update_lock(lock_dir: &Path) -> io::Result<Flock<File>> {
     let file = File::create(lock_dir.join("reconcile.lock"))?;
     Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|err| {
         io::Error::other(format!(
-            "another proxnix reconcile or flake update run is active: {err:?}"
+            "another proxnix reconcile, flake update, or gc run is active: {err:?}"
         ))
     })
 }

@@ -3,7 +3,7 @@ Description=MooseFS FUSE mount
 ConditionPathExists=/mnt/moosefs
 
 [Mount]
-What=mfsmaster:/
+What=mfsmaster.example.invalid:/
 Where=/mnt/moosefs
 Type=moosefs
 Options=nonempty,mfsdelayedinit,mfsattrcacheto=60,mfsentrycacheto=60,mfsdirentrycacheto=60,mfscachemode=YES

@@ -1,8 +1,11 @@
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use unix::errno::Errno;
+use unix::fcntl::{Flock, FlockArg};
 
 use crate::common::{
     env_path, find_in_path, remove_path_if_exists, valid_vmid, HostResult, DEFAULT_PROXNIX_DIR,
@@ -25,7 +28,8 @@ pub(crate) fn main(args: &[String]) -> HostResult<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| proxnix_dir.join("gcroots/deploy"));
 
-    run(&run_dir, &gcroot_dir, &options).map_err(|err| format!("gc command failed: {err}"))?;
+    run_under_lock(&run_dir, &gcroot_dir, &options)
+        .map_err(|err| format!("gc command failed: {err}"))?;
     Ok(())
 }
 
@@ -89,12 +93,34 @@ Options:
   --profile-generations SPEC      Generation spec passed to nix-env
                                   --delete-generations (default: old)
 
-Removes copied/staged pre-start config directories from /run/proxnix when the
-CT is not running, preserves the golden-template GC root, and removes stale
-per-CT desired closure GC roots. It also prunes old proxnix-host profile
-generations and runs a controlled Nix store GC after proxnix roots are clean.
+Takes /run/proxnix/reconcile.lock before pruning and exits successfully without
+cleanup when another host mutation is active. Removes copied/staged pre-start
+config directories from /run/proxnix when the CT is not running, preserves the
+golden-template GC root, and removes stale per-CT desired closure GC roots. It
+also prunes old proxnix-host profile generations and runs a controlled Nix
+store GC after proxnix roots are clean.
 "
     );
+}
+
+fn run_under_lock(run_dir: &Path, gcroot_dir: &Path, options: &Options) -> io::Result<()> {
+    let Some(_guard) = take_reconcile_lock(run_dir)? else {
+        log("skipped cleanup because another proxnix-host mutation is active");
+        return Ok(());
+    };
+    run(run_dir, gcroot_dir, options)
+}
+
+fn take_reconcile_lock(run_dir: &Path) -> io::Result<Option<Flock<File>>> {
+    fs::create_dir_all(run_dir)?;
+    let file = File::create(run_dir.join("reconcile.lock"))?;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(guard) => Ok(Some(guard)),
+        Err((_file, err)) if err == Errno::EAGAIN || err == Errno::EWOULDBLOCK => Ok(None),
+        Err((_file, err)) => Err(io::Error::other(format!(
+            "failed to lock /run/proxnix/reconcile.lock: {err:?}"
+        ))),
+    }
 }
 
 fn run(run_dir: &Path, gcroot_dir: &Path, options: &Options) -> io::Result<()> {
@@ -380,6 +406,30 @@ mod tests {
             &gcroot_dir,
             &Options {
                 dry_run: true,
+                host_profile: tmp.path().join("profile"),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        assert!(run_dir.join("202").is_dir());
+        assert!(gcroot_dir.join("202-desired").is_symlink());
+    }
+
+    #[test]
+    fn skips_cleanup_when_reconcile_lock_is_busy() {
+        let tmp = TestTemp::new();
+        let run_dir = tmp.path().join("run");
+        let gcroot_dir = tmp.path().join("gcroots/deploy");
+        fs::create_dir_all(run_dir.join("202")).unwrap();
+        fs::create_dir_all(&gcroot_dir).unwrap();
+        symlink("/nix/store/desired-202", gcroot_dir.join("202-desired")).unwrap();
+        let _lock = take_reconcile_lock(&run_dir).unwrap().unwrap();
+
+        run_under_lock(
+            &run_dir,
+            &gcroot_dir,
+            &Options {
                 host_profile: tmp.path().join("profile"),
                 ..Options::default()
             },

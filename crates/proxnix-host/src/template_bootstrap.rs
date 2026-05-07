@@ -2,7 +2,11 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::common::{find_in_path, take_arg, HostResult};
+use crate::common::{
+    active_storage_names, command_status as run_status, command_stdout as command_output,
+    normalize_template_volid, parse_pct_mount_rootfs, pick_bin, preferred_storage, rootfs_path,
+    take_arg, HostResult,
+};
 use crate::reconcile_phase;
 use unix::fcntl::{Flock, FlockArg};
 
@@ -182,21 +186,6 @@ impl Bins {
     }
 }
 
-fn pick_bin(candidates: &[&str]) -> Option<PathBuf> {
-    for candidate in candidates {
-        let path = if candidate.contains('/') {
-            let path = PathBuf::from(candidate);
-            path.exists().then_some(path)
-        } else {
-            find_in_path(candidate)
-        };
-        if let Some(path) = path {
-            return Some(path);
-        }
-    }
-    None
-}
-
 fn inspect_storage(bins: &Bins, storage: &str) -> Result<StorageInfo, String> {
     let storage_api_path = format!("/storage/{storage}");
     let output = command_output(Command::new(&bins.pvesh).args([
@@ -328,14 +317,6 @@ fn resolve_source_template(bins: &Bins, options: &Options) -> Result<String, Str
     detect_latest_nixos_template(bins, &options.template_storage)
 }
 
-fn normalize_template_volid(storage: &str, template_name: &str) -> String {
-    if template_name.contains(':') {
-        template_name.to_owned()
-    } else {
-        format!("{storage}:vztmpl/{template_name}")
-    }
-}
-
 fn verify_template_volid(bins: &Bins, volid: &str) -> Result<(), String> {
     command_output(Command::new(&bins.pvesm).args(["path", volid]))
         .map(|_| ())
@@ -372,21 +353,8 @@ fn resolve_rootfs_storage(bins: &Bins, options: &Options) -> Result<String, Stri
 fn detect_rootfs_storage(bins: &Bins) -> Result<String, String> {
     let output = command_output(Command::new(&bins.pvesm).args(["status", "--content", "rootdir"]))
         .map_err(|err| format!("failed to inspect rootfs storage: {err}"))?;
-    let storages = output
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            (fields.len() > 2 && fields[2] == "active").then(|| fields[0].to_owned())
-        })
-        .collect::<Vec<_>>();
-
-    for preferred in ["local-zfs", "local-lvm", "local"] {
-        if storages.iter().any(|storage| storage == preferred) {
-            return Ok(preferred.to_owned());
-        }
-    }
-    storages.into_iter().next().ok_or_else(|| {
+    let storages = active_storage_names(&output);
+    preferred_storage(&storages, &["local-zfs", "local-lvm", "local"]).ok_or_else(|| {
         "could not auto-detect active rootdir-capable storage; pass --rootfs-storage".to_owned()
     })
 }
@@ -536,13 +504,6 @@ impl Drop for TemporaryContainer {
     }
 }
 
-fn parse_pct_mount_rootfs(output: &str) -> Option<PathBuf> {
-    let quote_start = output.find('\'')?;
-    let rest = &output[quote_start + 1..];
-    let quote_end = rest.find('\'')?;
-    Some(PathBuf::from(&rest[..quote_end]))
-}
-
 fn rootfs_system_path(rootfs: &Path) -> Result<String, String> {
     resolve_rootfs_profile(rootfs, Path::new("/nix/var/nix/profiles/system"))
         .or_else(|| rootfs_registration_system(rootfs))
@@ -570,10 +531,6 @@ fn resolve_rootfs_profile(rootfs: &Path, profile: &Path) -> Option<String> {
         };
     }
     None
-}
-
-fn rootfs_path(rootfs: &Path, absolute_path: &Path) -> PathBuf {
-    rootfs.join(absolute_path.strip_prefix("/").unwrap_or(absolute_path))
 }
 
 fn rootfs_registration_system(rootfs: &Path) -> Option<String> {
@@ -633,35 +590,12 @@ fn load_rootfs_registration(bins: &Bins, rootfs: &Path) -> Result<(), String> {
     )
 }
 
-fn run_status(command: &mut Command, context: &str) -> Result<(), String> {
-    let output = command
-        .output()
-        .map_err(|err| format!("{context}: {err}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if stderr.is_empty() {
-        Err(context.to_owned())
-    } else {
-        Err(format!("{context}: {stderr}"))
-    }
-}
-
 fn decide_template_action(shared: bool, exists: bool, force: bool) -> TemplateAction {
     if shared && exists && !force {
         TemplateAction::ReuseSharedExisting
     } else {
         TemplateAction::CreateOrRefresh
     }
-}
-
-fn command_output(command: &mut Command) -> std::io::Result<String> {
-    let output = command.stderr(Stdio::null()).output()?;
-    if !output.status.success() {
-        return Err(std::io::Error::other("command failed"));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(test)]

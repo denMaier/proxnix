@@ -91,4 +91,3 @@
   register: proxnix_template_install_lock_result
   changed_when: true
   when: proxnix_template_storage_shared | bool
-

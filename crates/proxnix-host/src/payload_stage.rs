@@ -3,22 +3,20 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use sha2::{Digest, Sha256};
 use unix::fcntl::{AtFlags, AT_FDCWD};
 use unix::unistd::{fchownat, Uid};
 
-use crate::common::{
-    env_path, find_in_path, remove_file_if_exists, remove_path_if_exists, set_mode, valid_vmid,
-    DEFAULT_PROXNIX_DIR,
-};
+use crate::common::{env_path, remove_path_if_exists, set_mode, valid_vmid, DEFAULT_PROXNIX_DIR};
 use crate::pve_conf::{generate_proxmox_nix, parse_pve_conf, parse_pve_conf_raw_content};
+use crate::secret_bundle::{decrypt_age_text, BUNDLE_FILE};
 
 #[derive(Debug, Clone)]
 struct StagePaths {
     proxnix_dir: PathBuf,
     proxnix_priv_dir: PathBuf,
+    authority_dir: PathBuf,
     host_state_dir: PathBuf,
     run_dir: PathBuf,
     secrets_guest_bin: PathBuf,
@@ -51,6 +49,9 @@ impl StagePaths {
         let proxnix_priv_dir = env::var_os("PROXNIX_PRIV_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| proxnix_dir.join("private"));
+        let authority_dir = env::var_os("PROXNIX_AUTHORITY_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| proxnix_dir.join("authority"));
         let host_state_dir = env_path("PROXNIX_HOST_STATE_DIR", "/etc/proxnix");
         let run_dir = env_path("PROXNIX_RUN_DIR", "/run/proxnix");
         let lib_dir = env_path("PROXNIX_LIB_DIR", "/usr/local/lib/proxnix");
@@ -61,6 +62,7 @@ impl StagePaths {
         Self {
             proxnix_dir,
             proxnix_priv_dir,
+            authority_dir,
             host_state_dir,
             run_dir,
             secrets_guest_bin,
@@ -73,6 +75,14 @@ impl StagePaths {
 
     fn container_priv_dir(&self, vmid: &str) -> PathBuf {
         self.proxnix_priv_dir.join("containers").join(vmid)
+    }
+
+    fn rendered_container_dir(&self, vmid: &str) -> PathBuf {
+        self.authority_dir.join("containers").join(vmid)
+    }
+
+    fn rendered_site_nix(&self) -> PathBuf {
+        self.authority_dir.join("site.nix")
     }
 
     fn prepare_stage_base(&self) -> io::Result<()> {
@@ -115,6 +125,7 @@ fn stage_payload_run(
     let container_template_dir = paths.proxnix_dir.join("containers/_template");
     let container_dir = paths.container_dir(vmid);
     let container_priv_dir = paths.container_priv_dir(vmid);
+    let rendered_container_dir = paths.rendered_container_dir(vmid);
     let template_selector_dir = container_dir.join("templates");
     let dropin_dir = container_dir.join("dropins");
     let bind_stage_dir = stage_dir.join("bind");
@@ -165,16 +176,6 @@ fn stage_payload_run(
         return Err("proxnix-secrets-guest missing; rerun host install".to_owned());
     }
 
-    if !command_exists("sops") {
-        stage_log(
-            "proxnix-stage",
-            "stage",
-            vmid,
-            "ERROR: sops not found on the Proxmox host.",
-        );
-        return Err("sops not found on the Proxmox host".to_owned());
-    }
-
     stage_log(
         "proxnix-stage",
         "stage",
@@ -212,12 +213,13 @@ fn stage_payload_run(
         &managed_dir.join("security-policy.nix"),
         0o600,
     )?;
-    if paths.proxnix_dir.join("site.nix").is_file() {
-        copy_file(
-            &paths.proxnix_dir.join("site.nix"),
-            &managed_dir.join("site.nix"),
-            0o600,
-        )?;
+    let site_nix = if paths.rendered_site_nix().is_file() {
+        paths.rendered_site_nix()
+    } else {
+        paths.proxnix_dir.join("site.nix")
+    };
+    if site_nix.is_file() {
+        copy_file(&site_nix, &managed_dir.join("site.nix"), 0o600)?;
         stage_log(
             "proxnix-stage",
             "stage",
@@ -251,18 +253,33 @@ fn stage_payload_run(
         }
     }
 
-    let rendered = generate_proxmox_nix(
-        &parse_pve_conf(&pve_conf)
-            .map_err(|err| format!("failed to read {}: {err}", pve_conf.display()))?,
-    );
-    write_text_file(&managed_dir.join("proxmox.nix"), &rendered, 0o600)
-        .map_err(|err| format!("failed to render Proxmox CT config: {err}"))?;
-    stage_log(
-        "proxnix-stage",
-        "stage",
-        vmid,
-        "Rendered Proxmox CT config.",
-    );
+    let rendered_proxmox_nix = rendered_container_dir.join("proxmox.nix");
+    if rendered_proxmox_nix.is_file() {
+        copy_file(
+            &rendered_proxmox_nix,
+            &managed_dir.join("proxmox.nix"),
+            0o600,
+        )?;
+        stage_log(
+            "proxnix-stage",
+            "stage",
+            vmid,
+            "Staged host-rendered Proxmox CT config.",
+        );
+    } else {
+        let rendered = generate_proxmox_nix(
+            &parse_pve_conf(&pve_conf)
+                .map_err(|err| format!("failed to read {}: {err}", pve_conf.display()))?,
+        );
+        write_text_file(&managed_dir.join("proxmox.nix"), &rendered, 0o600)
+            .map_err(|err| format!("failed to render Proxmox CT config: {err}"))?;
+        stage_log(
+            "proxnix-stage",
+            "stage",
+            vmid,
+            "Rendered Proxmox CT config.",
+        );
+    }
 
     if dir_has_entries(&container_dir.join("quadlets"))? {
         stage_log(
@@ -277,18 +294,36 @@ fn stage_payload_run(
         return Err("raw quadlet passthrough is no longer supported".to_owned());
     }
 
-    stage_templates(
-        vmid,
-        &template_selector_dir,
-        &container_template_dir,
-        &managed_template_dir,
-    )?;
-    stage_dropins(
-        vmid,
-        &dropin_dir,
-        &managed_dropin_dir,
-        &copy_runtime_bin_dir,
-    )?;
+    let rendered_template_dir = rendered_container_dir.join("_template");
+    if rendered_template_dir.is_dir() {
+        stage_rendered_templates(vmid, &rendered_template_dir, &managed_template_dir)?;
+    } else {
+        stage_templates(
+            vmid,
+            &template_selector_dir,
+            &container_template_dir,
+            &managed_template_dir,
+        )?;
+    }
+
+    let rendered_dropin_dir = rendered_container_dir.join("dropins");
+    let rendered_runtime_bin_dir = rendered_container_dir.join("runtime-bin");
+    if rendered_dropin_dir.is_dir() || rendered_runtime_bin_dir.is_dir() {
+        stage_rendered_dropins(
+            vmid,
+            &rendered_dropin_dir,
+            &rendered_runtime_bin_dir,
+            &managed_dropin_dir,
+            &copy_runtime_bin_dir,
+        )?;
+    } else {
+        stage_dropins(
+            vmid,
+            &dropin_dir,
+            &managed_dropin_dir,
+            &copy_runtime_bin_dir,
+        )?;
+    }
 
     let desired_config_hash = hash_tree(&bind_config_dir)
         .map_err(|err| format!("failed to hash staged config tree: {err}"))?;
@@ -299,25 +334,25 @@ fn stage_payload_run(
         &format!("Computed desired config hash: {desired_config_hash}."),
     );
 
-    let effective_secrets = container_priv_dir.join("effective.sops.yaml");
+    let effective_secrets = container_priv_dir.join(BUNDLE_FILE);
     if effective_secrets.is_file() {
         copy_file(
             &effective_secrets,
-            &secrets_stage_dir.join("effective.sops.yaml"),
+            &secrets_stage_dir.join(BUNDLE_FILE),
             0o600,
         )?;
         stage_log(
             "proxnix-stage",
             "stage",
             vmid,
-            "Staged effective encrypted secrets store.",
+            "Staged effective encrypted secret bundle.",
         );
     } else {
         stage_log(
             "proxnix-stage",
             "stage",
             vmid,
-            "No effective encrypted secrets store found.",
+            "No effective encrypted secret bundle found.",
         );
     }
 
@@ -335,7 +370,7 @@ fn stage_payload_run(
         0o700,
     )?;
 
-    let identity_store = container_priv_dir.join("age_identity.sops.yaml");
+    let identity_store = container_priv_dir.join("age_identity.age");
     if identity_store.is_file() {
         stage_log(
             "proxnix-stage",
@@ -396,10 +431,6 @@ fn stage_log(logger_tag: &str, prefix: &str, vmid: &str, message: &str) {
     let _ = syslog::unix(formatter).and_then(|mut writer| writer.info(line));
 }
 
-fn command_exists(command: &str) -> bool {
-    find_in_path(command).is_some()
-}
-
 fn copy_file(source: &Path, dest: &Path, mode: u32) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
@@ -431,6 +462,23 @@ fn dir_has_entries(path: &Path) -> Result<bool, String> {
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?
         .next()
         .is_some())
+}
+
+fn stage_rendered_templates(
+    vmid: &str,
+    rendered_template_dir: &Path,
+    managed_template_dir: &Path,
+) -> Result<(), String> {
+    remove_path_if_exists(managed_template_dir)
+        .map_err(|err| format!("failed to replace rendered templates: {err}"))?;
+    copy_dir_recursive(rendered_template_dir, managed_template_dir)?;
+    stage_log(
+        "proxnix-stage",
+        "stage",
+        vmid,
+        "Staged host-rendered selected templates.",
+    );
+    Ok(())
 }
 
 fn stage_templates(
@@ -488,6 +536,80 @@ fn stage_templates(
         "stage",
         vmid,
         &format!("Processed {count} selected template(s)."),
+    );
+    Ok(())
+}
+
+fn stage_rendered_dropins(
+    vmid: &str,
+    rendered_dropin_dir: &Path,
+    rendered_runtime_bin_dir: &Path,
+    managed_dropin_dir: &Path,
+    copy_runtime_bin_dir: &Path,
+) -> Result<(), String> {
+    let mut nix_dropins = 0;
+    let mut runtime_files = 0;
+    let mut dir_dropins = 0;
+
+    if rendered_dropin_dir.is_dir() {
+        for entry in sorted_dir_entries(rendered_dropin_dir)? {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.is_file() {
+                match path.extension().and_then(|ext| ext.to_str()) {
+                    Some("nix") => {
+                        copy_file(&path, &managed_dropin_dir.join(&name), 0o600)?;
+                        nix_dropins += 1;
+                    }
+                    Some("service") => {
+                        return Err(format!(
+                            "host-side dropins/*.service are no longer supported: {}",
+                            path.display()
+                        ));
+                    }
+                    Some("container" | "volume" | "network" | "pod" | "image" | "build") => {
+                        return Err(format!(
+                            "raw Quadlet drop-ins are no longer supported: {}",
+                            path.display()
+                        ));
+                    }
+                    _ => {
+                        stage_log(
+                            "proxnix-stage",
+                            "stage",
+                            vmid,
+                            &format!("Ignored unknown rendered drop-in type: {name}"),
+                        );
+                    }
+                }
+            } else if path.is_dir() {
+                let dest = managed_dropin_dir.join(&name);
+                remove_path_if_exists(&dest)
+                    .map_err(|err| format!("failed to replace rendered drop-in dir: {err}"))?;
+                copy_dir_recursive(&path, &dest)?;
+                dir_dropins += 1;
+            }
+        }
+    }
+
+    if rendered_runtime_bin_dir.is_dir() {
+        for entry in sorted_dir_entries(rendered_runtime_bin_dir)? {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.is_file() {
+                copy_file(&path, &copy_runtime_bin_dir.join(&name), 0o700)?;
+                runtime_files += 1;
+            }
+        }
+    }
+
+    stage_log(
+        "proxnix-stage",
+        "stage",
+        vmid,
+        &format!(
+            "Processed host-rendered drop-ins: {nix_dropins} nix file(s), {runtime_files} runtime file(s), {dir_dropins} directory/directories."
+        ),
     );
     Ok(())
 }
@@ -660,26 +782,10 @@ fn decrypt_host_identity_store_to_file(
             format!("{} missing", relay_key.display()),
         ));
     }
-    let output = Command::new("sops")
-        .arg("decrypt")
-        .arg("--input-type")
-        .arg("yaml")
-        .arg("--output-type")
-        .arg("yaml")
-        .arg(store)
-        .env_remove("SOPS_AGE_KEY_FILE")
-        .env("SOPS_AGE_SSH_PRIVATE_KEY_FILE", relay_key)
-        .output()?;
-    if !output.status.success() {
-        let _ = remove_file_if_exists(out);
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
-    }
-    let rendered = parse_identity_payload(&String::from_utf8_lossy(&output.stdout))?;
-    write_text_file(out, &rendered, 0o600).inspect_err(|_| {
-        let _ = remove_file_if_exists(out);
-    })
+    let ciphertext = fs::read_to_string(store)?;
+    let relay_identity = fs::read_to_string(relay_key)?;
+    let rendered = decrypt_age_text(&ciphertext, &relay_identity).map_err(io::Error::other)?;
+    write_text_file(out, &rendered, 0o600)
 }
 
 pub(crate) fn parse_identity_payload(content: &str) -> io::Result<String> {

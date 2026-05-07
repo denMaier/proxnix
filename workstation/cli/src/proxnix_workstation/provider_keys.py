@@ -18,6 +18,9 @@ from .sops_ops import decrypt_identity_text, generate_identity_keypair, public_k
 INTERNAL_KEYS_GROUP = "_proxnix_keys"
 MASTER_KEY_NAME = "master"
 HOST_RELAY_KEY_NAME = "host-relay"
+AGE_MASTER_IDENTITY_ENV = "PROXNIX_AGE_MASTER_IDENTITY"
+LEGACY_SOPS_MASTER_IDENTITY_ENV = "PROXNIX_SOPS_MASTER_IDENTITY"
+LEGACY_MASTER_IDENTITY_ENV = "PROXNIX_MASTER_IDENTITY"
 
 
 def container_key_name(vmid: str) -> str:
@@ -44,10 +47,16 @@ def _provider_set_key(provider: SecretProvider, name: str, value: str) -> None:
     provider.set(_internal_keys_ref(), name, value)
 
 
-def sops_master_identity_path(config: WorkstationConfig) -> Path:
-    raw = config.provider_environment_map().get("PROXNIX_SOPS_MASTER_IDENTITY", "").strip()
+def age_master_identity_path(config: WorkstationConfig) -> Path:
+    provider_env = config.provider_environment_map()
+    raw = (
+        provider_env.get(AGE_MASTER_IDENTITY_ENV)
+        or provider_env.get(LEGACY_SOPS_MASTER_IDENTITY_ENV)
+        or provider_env.get(LEGACY_MASTER_IDENTITY_ENV)
+        or ""
+    ).strip()
     if not raw:
-        raise ConfigError("PROXNIX_SOPS_MASTER_IDENTITY is not configured")
+        raise ConfigError(f"{AGE_MASTER_IDENTITY_ENV} is not configured")
     return Path(raw).expanduser()
 
 
@@ -56,9 +65,9 @@ def master_private_key_text(config: WorkstationConfig, provider: SecretProvider)
         value = _provider_get_key(provider, MASTER_KEY_NAME)
         if value is not None:
             return value
-    identity_path = sops_master_identity_path(config)
+    identity_path = age_master_identity_path(config)
     if not identity_path.is_file():
-        raise ConfigError(f"SOPS master SSH identity not found: {identity_path}")
+        raise ConfigError(f"age master SSH identity not found: {identity_path}")
     return identity_path.read_text(encoding="utf-8")
 
 

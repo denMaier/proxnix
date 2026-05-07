@@ -48,7 +48,6 @@ FIND_BIN=""
 BASENAME_BIN=""
 SORT_BIN=""
 AWK_BIN=""
-SOPS_BIN=""
 NIX_BIN=""
 SYSTEMCTL_BIN=""
 DF_BIN=""
@@ -65,7 +64,6 @@ init_bins() {
   BASENAME_BIN="$(pick_bin /usr/bin/basename /bin/basename)" || die "basename not found"
   SORT_BIN="$(pick_bin /usr/bin/sort /bin/sort)" || die "sort not found"
   AWK_BIN="$(pick_bin /usr/bin/awk /bin/awk)" || die "awk not found"
-  SOPS_BIN="$(command -v sops 2>/dev/null || true)"
   NIX_BIN="$(command -v nix 2>/dev/null || true)"
   SYSTEMCTL_BIN="$(command -v systemctl 2>/dev/null || true)"
   DF_BIN="$(pick_bin /usr/bin/df /bin/df)" || die "df not found"
@@ -184,12 +182,6 @@ check_host_files() {
     fi
   done
 
-  if [[ -n "$SOPS_BIN" && -x "$SOPS_BIN" ]]; then
-    ok "sops present: $SOPS_BIN"
-  else
-    fail "sops not found on host; pre-start cannot decrypt relay-encrypted guest identities"
-  fi
-
   if [[ -n "$NIX_BIN" && -x "$NIX_BIN" ]]; then
     ok "nix present: $NIX_BIN"
     if "$NIX_BIN" --version >/dev/null 2>&1; then
@@ -234,6 +226,7 @@ check_host_files() {
 
   if [[ -d /nix ]]; then
     local nix_avail
+    # shellcheck disable=SC2016
     nix_avail="$("$DF_BIN" -Pk /nix | "$AWK_BIN" 'NR == 2 { print $4 }')"
     if [[ -n "$nix_avail" && "$nix_avail" -ge 1048576 ]]; then
       ok "/nix has at least 1 GiB available"
@@ -250,8 +243,8 @@ check_container() {
   local conf="/etc/pve/lxc/${vmid}.conf"
   local cdir="${NIXLXC_DIR}/containers/${vmid}"
   local priv_cdir="${NIXLXC_PRIV_DIR}/containers/${vmid}"
-  local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.sops.yaml"
-  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.sops.yaml"
+  local shared_store="${NIXLXC_PRIV_DIR}/shared/secrets.proxnix.json"
+  local shared_identity="${NIXLXC_PRIV_DIR}/shared_age_identity.age"
   local user_yaml="${cdir}/user.yaml"
   local proxmox_yaml="${cdir}/proxmox.yaml"
   local status_file="${PROXNIX_STATUS_DIR}/${vmid}.json"
@@ -310,6 +303,7 @@ check_container() {
     return
   fi
 
+  # shellcheck disable=SC2016
   state="$("$PCT_BIN" status "$vmid" 2>/dev/null | "$AWK_BIN" '{print $2}')"
   if [[ -z "$state" ]]; then
     fail "could not determine container state with pct status"
@@ -398,16 +392,16 @@ check_container() {
     info "legacy applied managed config hash differs from current hash; host reconciler status is authoritative"
   fi
 
-  if [[ -f "${priv_cdir}/secrets.sops.yaml" && ! -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
-    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.sops.yaml"
+  if [[ -f "${priv_cdir}/secrets.proxnix.json" && ! -f "${priv_cdir}/age_identity.age" ]]; then
+    fail "container secret store exists but host-relay-encrypted identity is missing: ${priv_cdir}/age_identity.age"
   fi
 
   if [[ -f "${shared_store}" && ! -f "${shared_identity}" ]]; then
     fail "shared secret store exists but host-relay-encrypted shared identity is missing: ${shared_identity}"
   fi
 
-  if [[ -f "${priv_cdir}/age_identity.sops.yaml" ]]; then
-    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.sops.yaml"
+  if [[ -f "${priv_cdir}/age_identity.age" ]]; then
+    ok "host relay encrypted container identity present: ${priv_cdir}/age_identity.age"
     if guest_test "$vmid" -f /var/lib/proxnix/secrets/identity >/dev/null 2>&1; then
       ok "guest container age identity present"
       if guest_is_symlink "$vmid" /var/lib/proxnix/secrets/identity >/dev/null 2>&1; then
@@ -422,15 +416,15 @@ check_container() {
     info "no host relay encrypted container identity configured"
   fi
 
-  if guest_test "$vmid" -f /var/lib/proxnix/secrets/effective.sops.yaml >/dev/null 2>&1; then
-    ok "guest compiled secret store present"
-    if guest_is_symlink "$vmid" /var/lib/proxnix/secrets/effective.sops.yaml >/dev/null 2>&1; then
-      fail "guest compiled secret store is a symlink; expected a copied regular file"
+  if guest_test "$vmid" -f /var/lib/proxnix/secrets/effective.secrets.json >/dev/null 2>&1; then
+    ok "guest compiled secret bundle present"
+    if guest_is_symlink "$vmid" /var/lib/proxnix/secrets/effective.secrets.json >/dev/null 2>&1; then
+      fail "guest compiled secret bundle is a symlink; expected a copied regular file"
     else
-      check_guest_secret_file_permissions "$vmid" /var/lib/proxnix/secrets/effective.sops.yaml "guest compiled secret store"
+      check_guest_secret_file_permissions "$vmid" /var/lib/proxnix/secrets/effective.secrets.json "guest compiled secret bundle"
     fi
-  elif [[ -f "${priv_cdir}/effective.sops.yaml" ]]; then
-    warn "host compiled secret store exists but the guest is missing it; restart the container"
+  elif [[ -f "${priv_cdir}/effective.secrets.json" ]]; then
+    warn "host compiled secret bundle exists but the guest is missing it; restart the container"
   fi
 
   if [[ -f "${shared_identity}" ]]; then

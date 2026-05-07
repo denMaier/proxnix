@@ -51,7 +51,7 @@ class TuiCoreTests(unittest.TestCase):
             app.config = tui.Config(
                 site_dir="/new/site",
                 hosts=["root@node1"],
-                secret_provider="embedded-sops",
+                secret_provider="embedded-age",
             )
 
             with patch.object(tui, "CONFIG_FILE", config):
@@ -72,7 +72,7 @@ class TuiCoreTests(unittest.TestCase):
             (container / "dropins" / "web.nix").write_text("{ ... }: {}\n", encoding="utf-8")
             (container / "secret-groups.list").write_text("db\n", encoding="utf-8")
             (site / "private" / "containers" / "120").mkdir(parents=True)
-            (site / "private" / "containers" / "120" / "age_identity.sops.yaml").write_text("x\n", encoding="utf-8")
+            (site / "private" / "containers" / "120" / "age_identity.age").write_text("x\n", encoding="utf-8")
             config = root / "config"
             config.write_text(f"PROXNIX_SITE_DIR='{site}'\n", encoding="utf-8")
 

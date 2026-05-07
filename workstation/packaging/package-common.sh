@@ -221,7 +221,7 @@ Runtime dependencies:
   - python 3.12 or newer
   - ssh
   - rsync
-  - sops
+  - age
 
 Bundled Python dependencies:
   - cryptography

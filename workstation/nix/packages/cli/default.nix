@@ -6,7 +6,7 @@
 , python3
 , python3Packages
 , rsync
-, sops
+, age
 }:
 
 let
@@ -20,7 +20,7 @@ let
     openssh
     pythonEnv
     rsync
-    sops
+    age
   ];
 
   installRawFiles = scripts: ''

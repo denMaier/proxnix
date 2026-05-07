@@ -1,0 +1,165 @@
+---
+- name: Remove stale proxnix host deployment artifacts
+  ansible.builtin.shell: |
+    set -eu
+
+    lxc_config_dir="/usr/share/lxc/config"
+    lxc_hooks_dir="/usr/share/lxc/hooks"
+    proxnix_lib_dir="/usr/local/lib/proxnix"
+    proxnix_sbin_dir="/usr/local/sbin"
+    proxnix_local_bin_dir="/usr/local/bin"
+    proxnix_data_dir="/var/lib/proxnix"
+    proxnix_host_profile={{ proxnix_host_profile | quote }}
+    proxnix_legacy_host_tools_profile="/nix/var/nix/profiles/proxnix-host-tools"
+    proxnix_profiles_dir="/nix/var/nix/profiles"
+    proxnix_install_source_dir={{ (proxnix_install_source_dir | default('/var/lib/proxnix/install-source')) | quote }}
+    reset_local_install_source={{ ((proxnix_reset_local_install_source | default(true)) | bool) | ternary('1', '0') }}
+    systemd_unit_dir="/etc/systemd/system"
+
+    remove_path() {
+      path="$1"
+      if [ -e "$path" ] || [ -L "$path" ]; then
+        if [ -d "$path" ] && [ ! -L "$path" ]; then
+          rm -rf "$path"
+        else
+          rm -f "$path"
+        fi
+        printf 'removed %s\n' "$path"
+      fi
+    }
+
+    remove_symlink() {
+      path="$1"
+      if [ -L "$path" ]; then
+        rm -f "$path"
+        printf 'removed %s\n' "$path"
+      fi
+    }
+
+    remove_tree() {
+      path="$1"
+      if [ -e "$path" ] || [ -L "$path" ]; then
+        rm -rf "$path"
+        printf 'removed %s\n' "$path"
+      fi
+    }
+
+    disable_unit() {
+      unit="$1"
+      changed=0
+      if systemctl is-active --quiet "$unit" 2>/dev/null; then
+        changed=1
+      fi
+      if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        changed=1
+      fi
+      systemctl disable --now "$unit" >/dev/null 2>&1 || true
+      if [ "$changed" -eq 1 ]; then
+        printf 'disabled %s\n' "$unit"
+      fi
+    }
+
+    for unit in \
+      proxnix-gc.timer \
+      proxnix-flake-update.timer \
+      proxnix-reconcile.timer \
+      proxnix-gc.service \
+      proxnix-flake-update.service \
+      proxnix-reconcile.service \
+      'proxnix-reconcile@.service'
+    do
+      disable_unit "$unit"
+    done
+
+    for path in \
+      "${lxc_config_dir}/nixos.common.conf" \
+      "${lxc_config_dir}/nixos.userns.conf" \
+      "${lxc_hooks_dir}/nixos-proxnix-start-host" \
+      "${lxc_hooks_dir}/nixos-proxnix-prestart" \
+      "${lxc_hooks_dir}/nixos-proxnix-mount" \
+      "${lxc_hooks_dir}/nixos-proxnix-poststop"
+    do
+      remove_path "$path"
+    done
+
+    for path in \
+      "${proxnix_lib_dir}/pve-conf-to-nix" \
+      "${proxnix_lib_dir}/pve-conf-to-nix.py" \
+      "${proxnix_lib_dir}/nixos-proxnix-common.sh" \
+      "${proxnix_lib_dir}/proxnix-secrets-guest" \
+      "${proxnix_lib_dir}/proxnix_authority_render.py" \
+      "${proxnix_lib_dir}/proxnix_reconciler_state.py" \
+      "${proxnix_lib_dir}/proxnix_reconcile_podman_secrets.py" \
+      "${proxnix_lib_dir}/install-manifest.txt" \
+      "${proxnix_lib_dir}/install-info.txt"
+    do
+      remove_path "$path"
+    done
+
+    for command in \
+      proxnix-doctor \
+      proxnix-host \
+      proxnix-host-activate \
+      proxnix-host-uninstall \
+      proxnix-create-lxc \
+      proxnix-authority-render \
+      proxnix-flake-update \
+      proxnix-gc \
+      proxnix-reconcile \
+      proxnix-reconcile-build-golden \
+      proxnix-reconcile-build \
+      proxnix-reconcile-seed \
+      proxnix-reconcile-seed-offline \
+      proxnix-reconcile-activate \
+      proxnix-reconciler-state \
+      proxnix-uninstall
+    do
+      remove_path "${proxnix_sbin_dir}/${command}"
+    done
+
+    for command in age jq rsync sops; do
+      remove_symlink "${proxnix_local_bin_dir}/${command}"
+    done
+
+    for unit in \
+      proxnix-gc.timer \
+      proxnix-gc.service \
+      proxnix-flake-update.timer \
+      proxnix-flake-update.service \
+      proxnix-reconcile.timer \
+      proxnix-reconcile.service \
+      'proxnix-reconcile@.service'
+    do
+      remove_path "${systemd_unit_dir}/${unit}"
+    done
+
+    for path in \
+      "${proxnix_data_dir}/base.nix" \
+      "${proxnix_data_dir}/common.nix" \
+      "${proxnix_data_dir}/security-policy.nix" \
+      "${proxnix_data_dir}/configuration.nix" \
+      "${proxnix_data_dir}/state/proxnix-reconciler.sqlite"
+    do
+      remove_path "$path"
+    done
+
+    for path in "$proxnix_host_profile" "$proxnix_legacy_host_tools_profile"; do
+      remove_path "$path"
+    done
+    for path in \
+      "${proxnix_profiles_dir}"/proxnix-host-*-link \
+      "${proxnix_profiles_dir}"/proxnix-host-tools-*-link
+    do
+      [ -e "$path" ] || [ -L "$path" ] || continue
+      remove_path "$path"
+    done
+
+    if [ "$reset_local_install_source" -eq 1 ]; then
+      remove_tree "$proxnix_install_source_dir"
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  args:
+    executable: /bin/bash
+  register: proxnix_host_clean_slate
+  changed_when: proxnix_host_clean_slate.stdout != ""

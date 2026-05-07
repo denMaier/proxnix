@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -55,7 +55,7 @@ pub(crate) fn render_main(args: &[String]) -> HostResult<()> {
     if print_manifest {
         print!(
             "{}",
-            fs::read_to_string(authority.join("generated/node-manifest.nix"))
+            fs::read_to_string(authority.join("node-manifest.nix"))
                 .map_err(|err| format!("failed to read node manifest: {err}"))?
         );
     } else {
@@ -75,15 +75,13 @@ pub(crate) fn render_authority(
     pve_lxc_dir: &Path,
     node_name: &str,
 ) -> io::Result<Vec<AuthorityContainerManifest>> {
-    let generated = authority.join("generated");
-    let legacy = generated.join("legacy");
     let modules = authority.join("modules");
-    let containers_dir = root.join("containers");
+    let authority_containers = authority.join("containers");
+    let legacy_containers = root.join("containers");
 
     fs::create_dir_all(authority)?;
-    fs::create_dir_all(&generated)?;
     fs::create_dir_all(&modules)?;
-    fs::create_dir_all(&legacy)?;
+    fs::create_dir_all(&authority_containers)?;
 
     for filename in ["base.nix", "common.nix", "security-policy.nix"] {
         let source = root.join(filename);
@@ -96,8 +94,22 @@ pub(crate) fn render_authority(
         copy_if_present(&source, &modules.join(filename))?;
     }
 
-    let has_site = copy_if_present(&root.join("site.nix"), &legacy.join("site.nix"))?;
-    copy_if_present(&root.join("flake.lock"), &authority.join("flake.lock"))?;
+    let using_authority_inputs = authority.join("publish-revision.json").is_file()
+        || (!legacy_containers.exists() && dir_has_entries(&authority_containers)?);
+    let authority_site = authority.join("site.nix");
+    let legacy_site = root.join("site.nix");
+    let has_site = if using_authority_inputs {
+        authority_site.exists()
+    } else if legacy_site.exists() {
+        copy_if_present(&legacy_site, &authority_site)?;
+        true
+    } else {
+        remove_file_if_present(&authority_site)?;
+        false
+    };
+    if !using_authority_inputs && !authority.join("flake.lock").exists() {
+        copy_if_present(&root.join("flake.lock"), &authority.join("flake.lock"))?;
+    }
     atomic_write(
         &modules.join("proxnix-guest-base.nix"),
         &[
@@ -117,8 +129,13 @@ pub(crate) fn render_authority(
     )?;
 
     let mut vmids = Vec::new();
-    if containers_dir.exists() {
-        for entry in fs::read_dir(&containers_dir)? {
+    let source_containers = if using_authority_inputs {
+        authority_containers.clone()
+    } else {
+        legacy_containers
+    };
+    if source_containers.exists() {
+        for entry in fs::read_dir(&source_containers)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if entry.file_type()?.is_dir() && name.chars().all(|ch| ch.is_ascii_digit()) {
@@ -129,33 +146,20 @@ pub(crate) fn render_authority(
     }
 
     let mut manifests = Vec::new();
-    for vmid in vmids {
+    for vmid in &vmids {
         let pve_conf = pve_lxc_dir.join(format!("{vmid}.conf"));
         let raw = if pve_conf.exists() {
             parse_pve_conf_raw(&pve_conf)?
         } else {
             HashMap::new()
         };
-        let container_out = generated.join("containers").join(&vmid);
-        let dropins_out = container_out.join("dropins");
-        fs::create_dir_all(&dropins_out)?;
-
-        let mut dropin_names = Vec::new();
-        let dropin_dir = containers_dir.join(&vmid).join("dropins");
-        if dropin_dir.exists() {
-            let mut dropins = fs::read_dir(&dropin_dir)?.collect::<io::Result<Vec<_>>>()?;
-            dropins.sort_by_key(|entry| entry.file_name());
-            for source in dropins {
-                let source_path = source.path();
-                if source.file_type()?.is_file()
-                    && source_path.extension().and_then(|ext| ext.to_str()) == Some("nix")
-                {
-                    let name = source.file_name().to_string_lossy().into_owned();
-                    copy_if_present(&source_path, &dropins_out.join(&name))?;
-                    dropin_names.push(name);
-                }
-            }
-        }
+        let container_source = source_containers.join(vmid);
+        let container_out = authority_containers.join(vmid);
+        let dropin_names = sync_container_authority_inputs(
+            &container_source,
+            &container_out,
+            &source_containers.join("_template"),
+        )?;
 
         atomic_write(
             &container_out.join("proxmox.nix"),
@@ -168,19 +172,33 @@ pub(crate) fn render_authority(
             0o644,
         )?;
 
+        let observed_pve_config = pve_conf.exists();
         let mut placement = Map::new();
-        placement.insert("local".to_owned(), Value::Bool(false));
-        placement.insert("node".to_owned(), Value::Null);
+        placement.insert("local".to_owned(), Value::Bool(true));
+        placement.insert(
+            "node".to_owned(),
+            if observed_pve_config {
+                Value::String(node_name.to_owned())
+            } else {
+                Value::Null
+            },
+        );
+        if !observed_pve_config {
+            placement.insert("targetNode".to_owned(), Value::String(node_name.to_owned()));
+        }
         placement.insert(
             "observedPveConfig".to_owned(),
-            Value::Bool(pve_conf.exists()),
+            Value::Bool(observed_pve_config),
         );
         manifests.push(AuthorityContainerManifest {
-            vmid,
+            vmid: vmid.clone(),
             hostname: raw.get("hostname").cloned(),
             pve: normalize_pve(&raw),
             placement,
         });
+    }
+    if source_containers != authority_containers {
+        prune_unlisted_dirs(&authority_containers, &vmids.iter().cloned().collect())?;
     }
 
     atomic_write(
@@ -189,11 +207,191 @@ pub(crate) fn render_authority(
         0o644,
     )?;
     atomic_write(
-        &generated.join("node-manifest.nix"),
-        &render_node_manifest(node_name, &manifests, load_source_revision(root)),
+        &authority.join("node-manifest.nix"),
+        &render_node_manifest(node_name, &manifests, load_source_revision(root, authority)),
         0o644,
     )?;
     Ok(manifests)
+}
+
+fn sync_container_authority_inputs(
+    source: &Path,
+    out: &Path,
+    template_root: &Path,
+) -> io::Result<Vec<String>> {
+    fs::create_dir_all(out)?;
+    if source != out {
+        sync_dropins(&source.join("dropins"), &out.join("dropins"))?;
+        sync_runtime_scripts(&source.join("dropins"), &out.join("runtime-bin"))?;
+        sync_selected_templates(
+            &source.join("templates"),
+            template_root,
+            &out.join("_template"),
+        )?;
+    }
+    list_module_dropins(&out.join("dropins"))
+}
+
+fn sync_dropins(source: &Path, dest: &Path) -> io::Result<()> {
+    replace_dir(dest)?;
+    if !source.is_dir() {
+        fs::create_dir_all(dest)?;
+        return Ok(());
+    }
+    fs::create_dir_all(dest)?;
+    for entry in sorted_entries(source)? {
+        let source_path = entry.path();
+        let name = entry.file_name();
+        if entry.file_type()?.is_file() {
+            match source_path.extension().and_then(|ext| ext.to_str()) {
+                Some("nix") => {
+                    fs::copy(&source_path, dest.join(&name))?;
+                }
+                Some("service") => {
+                    return Err(invalid_data(&format!(
+                        "host-side dropins/*.service are no longer supported: {}",
+                        source_path.display()
+                    )));
+                }
+                Some("sh") | Some("py") => {}
+                Some("container" | "volume" | "network" | "pod" | "image" | "build") => {
+                    return Err(invalid_data(&format!(
+                        "raw Quadlet drop-ins are no longer supported: {}",
+                        source_path.display()
+                    )));
+                }
+                _ => {}
+            }
+        } else if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&source_path, &dest.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_runtime_scripts(source_dropins: &Path, dest: &Path) -> io::Result<()> {
+    replace_dir(dest)?;
+    if !source_dropins.is_dir() {
+        return Ok(());
+    }
+    let mut copied = false;
+    for entry in sorted_entries(source_dropins)? {
+        let source_path = entry.path();
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        if matches!(
+            source_path.extension().and_then(|ext| ext.to_str()),
+            Some("sh" | "py")
+        ) {
+            fs::create_dir_all(dest)?;
+            fs::copy(&source_path, dest.join(entry.file_name()))?;
+            copied = true;
+        }
+    }
+    if !copied && dest.exists() {
+        fs::remove_dir_all(dest)?;
+    }
+    Ok(())
+}
+
+fn sync_selected_templates(
+    selector_dir: &Path,
+    template_root: &Path,
+    dest: &Path,
+) -> io::Result<()> {
+    replace_dir(dest)?;
+    if !selector_dir.is_dir() {
+        return Ok(());
+    }
+    for selector in sorted_entries(selector_dir)? {
+        let selector_path = selector.path();
+        if !selector.file_type()?.is_file()
+            || selector_path.extension().and_then(|ext| ext.to_str()) != Some("template")
+        {
+            continue;
+        }
+        let selector_name = selector.file_name().to_string_lossy().into_owned();
+        let template_name = selector_name.trim_end_matches(".template");
+        let source = template_root.join(template_name);
+        if !source.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("selected template not found: {}", source.display()),
+            ));
+        }
+        copy_dir_recursive(&source, &dest.join(template_name))?;
+    }
+    Ok(())
+}
+
+fn list_module_dropins(dropins: &Path) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    if !dropins.is_dir() {
+        return Ok(names);
+    }
+    for entry in sorted_entries(dropins)? {
+        let path = entry.path();
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("nix") => names.push(entry.file_name().to_string_lossy().into_owned()),
+            Some("service") => {
+                return Err(invalid_data(&format!(
+                    "host-side dropins/*.service are no longer supported: {}",
+                    path.display()
+                )));
+            }
+            Some("container" | "volume" | "network" | "pod" | "image" | "build") => {
+                return Err(invalid_data(&format!(
+                    "raw Quadlet drop-ins are no longer supported: {}",
+                    path.display()
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(names)
+}
+
+fn replace_dir(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, dest: &Path) -> io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in sorted_entries(source)? {
+        let source_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &dest_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn sorted_entries(path: &Path) -> io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)?.collect::<io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    Ok(entries)
+}
+
+fn dir_has_entries(path: &Path) -> io::Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    Ok(fs::read_dir(path)?.next().is_some())
+}
+
+fn invalid_data(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
 fn normalize_pve(raw: &HashMap<String, String>) -> Map<String, Value> {
@@ -250,11 +448,16 @@ fn authority_proxmox_module(raw: &HashMap<String, String>) -> String {
 fn render_modules_nix(has_site: bool, dropins: &[String]) -> String {
     let mut lines = vec![
         "# Generated by proxnix-host authority render; do not edit by hand.".to_owned(),
+        "let".to_owned(),
+        "  site = ../../site.nix;".to_owned(),
+        "in".to_owned(),
         "[".to_owned(),
-        "  ../../../modules/proxnix-guest-base.nix".to_owned(),
+        "  ../../modules/proxnix-guest-base.nix".to_owned(),
     ];
     if has_site {
-        lines.push("  ../../legacy/site.nix".to_owned());
+        lines.push("] ++ (if builtins.pathExists site then [ site ] else []) ++ [".to_owned());
+    } else {
+        lines.push("] ++ [".to_owned());
     }
     lines.push("  ./proxmox.nix".to_owned());
     for dropin in dropins {
@@ -411,14 +614,14 @@ pub(crate) fn render_authority_flake(node_name: &str) -> String {
         "      system = \"x86_64-linux\";".to_owned(),
         "      lib = nixpkgs.lib;".to_owned(),
         "      specialArgs = { inherit nixpkgs-unstable; };".to_owned(),
-        "      manifest = import ./generated/node-manifest.nix { inherit self lib; };".to_owned(),
+        "      manifest = import ./node-manifest.nix { inherit self lib; };".to_owned(),
         "      goldenTemplateModules =".to_owned(),
         "        [ ./modules/proxnix-guest-base.nix ]".to_owned(),
-        "        ++ lib.optional (builtins.pathExists ./generated/legacy/site.nix) ./generated/legacy/site.nix;".to_owned(),
+        "        ++ lib.optional (builtins.pathExists ./site.nix) ./site.nix;".to_owned(),
         "      mkCt = vmid: lib.nixosSystem {".to_owned(),
         "        inherit system;".to_owned(),
         "        inherit specialArgs;".to_owned(),
-        "        modules = import ./generated/containers/${vmid}/modules.nix;".to_owned(),
+        "        modules = import ./containers/${vmid}/modules.nix;".to_owned(),
         "      };".to_owned(),
         "    in {".to_owned(),
         "      nixosConfigurations = {".to_owned(),
@@ -433,7 +636,10 @@ pub(crate) fn render_authority_flake(node_name: &str) -> String {
         "      }) manifest.vmids);".to_owned(),
         String::new(),
         "      proxnix.containers = manifest.containers;".to_owned(),
-        format!("      proxnix.nodes.{} = manifest;", nix_attr_name(node_name)),
+        format!(
+            "      proxnix.nodes.{} = manifest;",
+            nix_attr_name(node_name)
+        ),
         "    };".to_owned(),
         "}".to_owned(),
         String::new(),
@@ -441,9 +647,15 @@ pub(crate) fn render_authority_flake(node_name: &str) -> String {
     lines.join("\n")
 }
 
-fn load_source_revision(root: &Path) -> Option<Value> {
-    let path = root.join("publish-revision.json");
-    let value = serde_json::from_str::<Value>(&fs::read_to_string(path).ok()?).ok()?;
+fn load_source_revision(root: &Path, authority: &Path) -> Option<Value> {
+    let path = authority.join("publish-revision.json");
+    let fallback = root.join("publish-revision.json");
+    let value = serde_json::from_str::<Value>(
+        &fs::read_to_string(&path)
+            .or_else(|_| fs::read_to_string(fallback))
+            .ok()?,
+    )
+    .ok()?;
     value.is_object().then_some(value)
 }
 
@@ -471,6 +683,30 @@ fn copy_if_present(source: &Path, dest: &Path) -> io::Result<bool> {
     }
     fs::copy(source, dest)?;
     Ok(true)
+}
+
+fn remove_file_if_present(path: &Path) -> io::Result<()> {
+    if path.exists() || path.is_symlink() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn prune_unlisted_dirs(dir: &Path, keep: &BTreeSet<String>) -> io::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if keep.contains(&name) {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn nix_attr_name(value: &str) -> String {

@@ -12,6 +12,7 @@ mod payload_stage;
 mod podman_secrets;
 mod pve_conf;
 mod reconcile_phase;
+mod secret_bundle;
 mod template_bootstrap;
 
 use crate::common::{HostError, HostResult};
@@ -32,6 +33,9 @@ fn run(args: Vec<String>) -> HostResult<()> {
         .and_then(|name| name.to_str());
     if argv0 == Some("nixos-proxnix-start-host") {
         return reconcile_phase::start_host_main(&args[1..]);
+    }
+    if argv0 == Some("proxnix-secrets") {
+        return secret_bundle::guest_main(&args[1..]);
     }
     match args.get(1).map(String::as_str) {
         Some("pve-conf-to-nix") => pve_conf::main(&args[2..]),
@@ -177,13 +181,25 @@ mod tests {
         }
     }
 
-    fn setup_podman_test(tmp: &Path, sops_yaml: Option<&str>) -> (PathBuf, PathBuf) {
+    fn setup_podman_test(tmp: &Path, secret_names: &[&str]) -> (PathBuf, PathBuf) {
         let rootfs = tmp.join("rootfs");
         let secrets_dir = tmp.join("secrets");
         fs::create_dir_all(rootfs.join("etc/secrets")).unwrap();
         fs::create_dir_all(&secrets_dir).unwrap();
-        if let Some(sops_yaml) = sops_yaml {
-            fs::write(secrets_dir.join("effective.sops.yaml"), sops_yaml).unwrap();
+        if !secret_names.is_empty() {
+            let secrets = secret_names
+                .iter()
+                .map(|name| ((*name).to_owned(), json!({ "age": "ciphertext" })))
+                .collect::<serde_json::Map<_, _>>();
+            fs::write(
+                secrets_dir.join("effective.secrets.json"),
+                serde_json::to_string(&json!({
+                    "schema": "proxnix.secrets.v1",
+                    "secrets": secrets,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         }
         (rootfs, secrets_dir)
     }
@@ -330,19 +346,15 @@ memory: 2048
             "{\"nodes\":{\"nixpkgs\":{}}}\n"
         );
         assert!(authority.join("modules/proxnix-guest-base.nix").is_file());
-        assert!(authority.join("generated/legacy/site.nix").is_file());
-        assert!(authority
-            .join("generated/containers/101/proxmox.nix")
-            .is_file());
+        assert!(authority.join("site.nix").is_file());
+        assert!(authority.join("containers/101/proxmox.nix").is_file());
 
-        let modules_nix =
-            fs::read_to_string(authority.join("generated/containers/101/modules.nix")).unwrap();
-        assert!(modules_nix.contains("../../../modules/proxnix-guest-base.nix"));
-        assert!(modules_nix.contains("../../legacy/site.nix"));
+        let modules_nix = fs::read_to_string(authority.join("containers/101/modules.nix")).unwrap();
+        assert!(modules_nix.contains("../../modules/proxnix-guest-base.nix"));
+        assert!(modules_nix.contains("site = ../../site.nix;"));
         assert!(modules_nix.contains("./dropins/workload.nix"));
 
-        let manifest_nix =
-            fs::read_to_string(authority.join("generated/node-manifest.nix")).unwrap();
+        let manifest_nix = fs::read_to_string(authority.join("node-manifest.nix")).unwrap();
         assert!(manifest_nix.contains("nodeName = \"pve1\";"));
         assert!(manifest_nix.contains("\"101\" = {"));
         assert!(manifest_nix
@@ -351,7 +363,9 @@ memory: 2048
         assert!(manifest_nix.contains("memory = 2048;"));
         assert!(manifest_nix.contains("unprivileged = true;"));
         assert!(manifest_nix.contains("localVmids = ["));
-        assert!(manifest_nix.contains("local = false;"));
+        assert!(manifest_nix.contains("\"101\""));
+        assert!(manifest_nix.contains("local = true;"));
+        assert!(manifest_nix.contains("node = \"pve1\";"));
         assert!(manifest_nix.contains("observedPveConfig = true;"));
 
         let flake_nix = fs::read_to_string(authority.join("flake.nix")).unwrap();
@@ -361,7 +375,41 @@ memory: 2048
     }
 
     #[test]
-    fn keeps_cluster_container_without_matching_local_pve_config() {
+    fn authority_render_removes_stale_generated_files() {
+        let tmp = TestTemp::new();
+        let root = tmp.path().join("proxnix");
+        let authority = root.join("authority");
+        let old_dropin = root.join("containers/101/dropins/old.nix");
+        let new_dropin = root.join("containers/101/dropins/new.nix");
+        fs::create_dir_all(root.join("containers/101/dropins")).unwrap();
+        fs::create_dir_all(root.join("containers/102")).unwrap();
+        for name in ["base.nix", "common.nix", "security-policy.nix"] {
+            fs::write(root.join(name), "{ ... }: {}\n").unwrap();
+        }
+        fs::write(root.join("site.nix"), "{ ... }: {}\n").unwrap();
+        fs::write(&old_dropin, "{ ... }: {}\n").unwrap();
+
+        render_authority(&root, &authority, &tmp.path().join("missing-pve"), "pve1").unwrap();
+
+        assert!(authority.join("site.nix").is_file());
+        assert!(authority.join("containers/101/dropins/old.nix").is_file());
+        assert!(authority.join("containers/102").is_dir());
+
+        fs::remove_file(root.join("site.nix")).unwrap();
+        fs::remove_file(old_dropin).unwrap();
+        fs::write(new_dropin, "{ ... }: {}\n").unwrap();
+        fs::remove_dir_all(root.join("containers/102")).unwrap();
+
+        render_authority(&root, &authority, &tmp.path().join("missing-pve"), "pve1").unwrap();
+
+        assert!(!authority.join("site.nix").exists());
+        assert!(!authority.join("containers/101/dropins/old.nix").exists());
+        assert!(authority.join("containers/101/dropins/new.nix").is_file());
+        assert!(!authority.join("containers/102").exists());
+    }
+
+    #[test]
+    fn marks_planned_node_container_local_without_pve_config() {
         let tmp = TestTemp::new();
         let root = tmp.path().join("proxnix");
         let authority = root.join("authority");
@@ -380,13 +428,15 @@ memory: 2048
                 .collect::<Vec<_>>(),
             vec!["101"]
         );
-        let manifest_nix =
-            fs::read_to_string(authority.join("generated/node-manifest.nix")).unwrap();
+        let manifest_nix = fs::read_to_string(authority.join("node-manifest.nix")).unwrap();
         assert!(manifest_nix.contains("vmids = ["));
+        assert!(manifest_nix.contains("localVmids = ["));
         assert!(manifest_nix.contains("containers = {"));
         assert!(manifest_nix.contains("\"101\" = {"));
-        assert!(manifest_nix.contains("local = false;"));
+        assert!(manifest_nix.contains("local = true;"));
+        assert!(manifest_nix.contains("node = null;"));
         assert!(manifest_nix.contains("observedPveConfig = false;"));
+        assert!(manifest_nix.contains("targetNode = \"pve1\";"));
     }
 
     #[test]
@@ -412,10 +462,7 @@ memory: 2048
     #[test]
     fn reconciles_podman_secrets_json_for_live_keys() {
         let tmp = TestTemp::new();
-        let (rootfs, secrets_dir) = setup_podman_test(
-            tmp.path(),
-            Some("alpha: ENC[a]\nbeta: ENC[b]\nsops:\n    version: 3\n"),
-        );
+        let (rootfs, secrets_dir) = setup_podman_test(tmp.path(), &["alpha", "beta"]);
 
         reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
 
@@ -448,13 +495,18 @@ memory: 2048
     #[test]
     fn reconciles_podman_secrets_json_by_removing_stale_managed_entries() {
         let tmp = TestTemp::new();
-        let (rootfs, secrets_dir) =
-            setup_podman_test(tmp.path(), Some("alpha: ENC[a]\nsops:\n    version: 3\n"));
+        let (rootfs, secrets_dir) = setup_podman_test(tmp.path(), &["alpha"]);
 
         reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
         fs::write(
-            secrets_dir.join("effective.sops.yaml"),
-            "beta: ENC[b]\nsops:\n    version: 3\n",
+            secrets_dir.join("effective.secrets.json"),
+            serde_json::to_string(&json!({
+                "schema": "proxnix.secrets.v1",
+                "secrets": {
+                    "beta": { "age": "ciphertext" }
+                },
+            }))
+            .unwrap(),
         )
         .unwrap();
         reconcile_podman_secrets(&rootfs, "101", &secrets_dir).unwrap();
@@ -482,8 +534,7 @@ memory: 2048
     #[test]
     fn reconciles_podman_secrets_json_without_touching_unmanaged_entries() {
         let tmp = TestTemp::new();
-        let (rootfs, secrets_dir) =
-            setup_podman_test(tmp.path(), Some("alpha: ENC[a]\nsops:\n    version: 3\n"));
+        let (rootfs, secrets_dir) = setup_podman_test(tmp.path(), &["alpha"]);
         let secrets_json = rootfs.join("var/lib/containers/storage/secrets/secrets.json");
         fs::create_dir_all(secrets_json.parent().unwrap()).unwrap();
         fs::write(
